@@ -1,0 +1,232 @@
+package collector
+
+import (
+	"context"
+	"strings"
+	"unicode/utf8"
+)
+
+// ListRadarTargets 返回当前用户的全部赛道词与同行监控目标。
+func (s *Service) ListRadarTargets(ctx context.Context, userID int64) ([]RadarWatchTarget, error) {
+	if userID <= 0 {
+		return nil, invalid("用户会话无效")
+	}
+	if s.radarRepo == nil {
+		return []RadarWatchTarget{}, nil
+	}
+	return s.radarRepo.ListTargets(ctx, userID)
+}
+
+// AddRadarTargets 批量校验并添加监控目标（支持一键导入虚拟资料种子词包）。
+func (s *Service) AddRadarTargets(ctx context.Context, userID int64, inputs []RadarTargetInput, importVirtualSeedPack bool) ([]RadarWatchTarget, error) {
+	if userID <= 0 {
+		return nil, invalid("用户会话无效")
+	}
+	if s.radarRepo == nil {
+		return nil, invalid("爆品监控仓储未启用")
+	}
+	// combined 汇总显式输入与可选内置种子词包。
+	combined := make([]RadarTargetInput, 0, len(inputs)+8)
+	if importVirtualSeedPack {
+		combined = append(combined, DefaultVirtualGoodsSeedKeywords()...)
+	}
+	combined = append(combined, inputs...)
+	if len(combined) == 0 {
+		return nil, invalid("请提供至少一条需要添加的关键词或同行主页链接")
+	}
+	if len(combined) > 30 {
+		return nil, invalid("单次最多添加 30 条监控目标")
+	}
+
+	// existingList、listErr 检查当前用户累计目标上限（最多 50 条以保障慢速巡检节奏）。
+	existingList, listErr := s.radarRepo.ListTargets(ctx, userID)
+	if listErr != nil {
+		return nil, listErr
+	}
+	if len(existingList) >= 50 {
+		return nil, invalid("监控池最多保存 50 条目标，请先清理不再关注的词或同行")
+	}
+
+	// saved 收集写入成功的目标记录。
+	saved := make([]RadarWatchTarget, 0, len(combined))
+	// raw 逐条归一化校验后幂等落库。
+	for _, raw := range combined {
+		// normalized、normErr 校验并转换单条监控项。
+		normalized, normErr := normalizeRadarTargetInput(raw)
+		if normErr != nil {
+			return nil, normErr
+		}
+		// upserted、upsertErr 写入数据库。
+		upserted, upsertErr := s.radarRepo.UpsertTarget(ctx, userID, normalized)
+		if upsertErr != nil {
+			return nil, upsertErr
+		}
+		saved = append(saved, upserted)
+	}
+	return saved, nil
+}
+
+// ToggleRadarTarget 启用或暂停单条监控目标。
+func (s *Service) ToggleRadarTarget(ctx context.Context, userID, targetID int64, enabled bool) error {
+	if userID <= 0 || targetID <= 0 {
+		return invalid("监控目标参数无效")
+	}
+	if s.radarRepo == nil {
+		return invalid("爆品监控仓储未启用")
+	}
+	return s.radarRepo.ToggleTarget(ctx, userID, targetID, enabled)
+}
+
+// DeleteRadarTarget 删除单条监控目标。
+func (s *Service) DeleteRadarTarget(ctx context.Context, userID, targetID int64) error {
+	if userID <= 0 || targetID <= 0 {
+		return invalid("监控目标参数无效")
+	}
+	if s.radarRepo == nil {
+		return invalid("爆品监控仓储未启用")
+	}
+	return s.radarRepo.DeleteTarget(ctx, userID, targetID)
+}
+
+// SuggestRadarKeywords 调用系统配置的 AI 大模型结合当前月份与用户赛道推荐潜爆搜索热词。
+func (s *Service) SuggestRadarKeywords(ctx context.Context, userID int64, niche string) ([]string, error) {
+	if userID <= 0 {
+		return nil, invalid("用户会话无效")
+	}
+	if s.keywordGenerator == nil {
+		return nil, ErrAIUnavailable
+	}
+	// cleanNiche 清理赛道描述文本，留空默认聚焦虚拟电子资料。
+	cleanNiche := strings.TrimSpace(niche)
+	if cleanNiche == "" {
+		cleanNiche = "虚拟资源、电子学习资料、职场办公模板与效率工具"
+	}
+	if utf8.RuneCountInString(cleanNiche) > 120 {
+		cleanNiche = string([]rune(cleanNiche)[:120])
+	}
+	return s.keywordGenerator.SuggestKeywords(ctx, userID, cleanNiche, 8)
+}
+
+// ListRadarItems 按黑马得分、Δ想要暴涨量、新发飙升速率或同行上新筛选商品榜单。
+func (s *Service) ListRadarItems(ctx context.Context, userID int64, query RadarListQuery) ([]RadarItemSnapshot, error) {
+	if userID <= 0 {
+		return nil, invalid("用户会话无效")
+	}
+	if s.radarRepo == nil {
+		return []RadarItemSnapshot{}, nil
+	}
+	// list、err 从仓储读取快照行。
+	list, err := s.radarRepo.ListSnapshots(ctx, userID, query)
+	if err != nil {
+		return nil, err
+	}
+	// idx 为每条记录补齐浮点日均增速与标准闲鱼网页链接。
+	for idx := range list {
+		list[idx].DailyVelocity = float64(list[idx].DailyVelocityX100) / 100.0
+		if list[idx].WebURL == "" {
+			list[idx].WebURL = "https://www.goofish.com/item?id=" + list[idx].ItemID
+		}
+	}
+	return list, nil
+}
+
+// ClearRadarItems 清空当前用户的历史爆品快照数据。
+func (s *Service) ClearRadarItems(ctx context.Context, userID int64) error {
+	if userID <= 0 {
+		return invalid("用户会话无效")
+	}
+	if s.radarRepo == nil {
+		return nil
+	}
+	return s.radarRepo.ClearSnapshots(ctx, userID)
+}
+
+// UpdateRadarSchedule 更新用户的低频后台定时巡检开关、采集账号与间隔小时数。
+func (s *Service) UpdateRadarSchedule(ctx context.Context, userID int64, cfg RadarScheduleConfig) (RadarScheduleConfig, error) {
+	if userID <= 0 {
+		return RadarScheduleConfig{}, invalid("用户会话无效")
+	}
+	if s.radarRepo == nil {
+		return RadarScheduleConfig{}, invalid("爆品监控仓储未启用")
+	}
+	// normalized 规范化定时配置。
+	normalized := RadarScheduleConfig{
+		Enabled:       cfg.Enabled,
+		CookieID:      strings.TrimSpace(cfg.CookieID),
+		IntervalHours: cfg.IntervalHours,
+	}
+	if normalized.IntervalHours != 6 && normalized.IntervalHours != 12 && normalized.IntervalHours != 24 {
+		normalized.IntervalHours = 12
+	}
+	if normalized.Enabled {
+		if normalized.CookieID == "" {
+			return RadarScheduleConfig{}, invalid("开启后台自动巡检前请先选择执行采集的闲鱼账号")
+		}
+		// ownErr 校验定时巡检绑定的账号归属权限。
+		if ownErr := s.requireOwnedAccount(ctx, userID, normalized.CookieID); ownErr != nil {
+			return RadarScheduleConfig{}, ownErr
+		}
+	}
+	// prev、_ 保留此前记录的最近一次自动运行时间戳。
+	prev, _ := s.radarRepo.GetSchedule(ctx, userID)
+	normalized.LastAutoRunUnix = prev.LastAutoRunUnix
+	// saveErr 保存用户定时巡检设置。
+	if saveErr := s.radarRepo.SaveSchedule(ctx, userID, normalized); saveErr != nil {
+		return RadarScheduleConfig{}, saveErr
+	}
+	return normalized, nil
+}
+
+// normalizeRadarTargetInput 校验并规范化单条监控目标输入。
+func normalizeRadarTargetInput(input RadarTargetInput) (RadarWatchTarget, error) {
+	// targetType 规范目标类别。
+	targetType := strings.ToLower(strings.TrimSpace(input.TargetType))
+	if targetType == "" {
+		targetType = "keyword"
+	}
+	// label 是清理空白后的可选备注。
+	label := strings.TrimSpace(input.Label)
+	switch targetType {
+	case "keyword":
+		// kw 是去空白后的搜索关键词。
+		kw := strings.TrimSpace(input.RawValue)
+		if kw == "" || utf8.RuneCountInString(kw) > 50 {
+			return RadarWatchTarget{}, invalid("请输入 1–50 个字符的监控关键词")
+		}
+		// pubDays 限制为合法新发窗口（0/1/3/7/14）。
+		pubDays := input.PublishDays
+		switch pubDays {
+		case 0, 1, 3, 7, 14:
+		default:
+			pubDays = 3
+		}
+		if label == "" {
+			label = kw
+		}
+		return RadarWatchTarget{
+			TargetType:  "keyword",
+			TargetValue: kw,
+			Label:       truncateRunes(label, 60),
+			PublishDays: pubDays,
+			Enabled:     true,
+		}, nil
+	case "seller":
+		// sellerID、err 从主页链接或纯数字文本提取卖家 userId。
+		sellerID, err := ExtractSellerID(input.RawValue)
+		if err != nil {
+			return RadarWatchTarget{}, err
+		}
+		if label == "" {
+			label = "同行店铺 " + sellerID
+		}
+		return RadarWatchTarget{
+			TargetType:  "seller",
+			TargetValue: sellerID,
+			Label:       truncateRunes(label, 60),
+			PublishDays: 0,
+			Enabled:     true,
+		}, nil
+	default:
+		return RadarWatchTarget{}, invalid("不支持的监控目标类型")
+	}
+}

@@ -47,6 +47,12 @@ const ChatItemSearchAPI = "https://h5api.m.goofish.com/h5/mtop.taobao.idlemessag
 // SoldOrdersAPI 是闲鱼卖家工作台的已售订单列表端点。
 const SoldOrdersAPI = "https://h5api.m.goofish.com/h5/mtop.taobao.idle.trade.merchant.sold.get/1.0/"
 
+// MarketSearchAPI 是闲鱼 PC 站全站商品搜索端点。
+const MarketSearchAPI = "https://h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search/1.0/"
+
+// ItemDetailAPI 是闲鱼 PC 站公开商品详情查询端点。
+const ItemDetailAPI = "https://h5api.m.goofish.com/h5/mtop.taobao.idle.pc.detail/1.0/"
+
 // MTopRetryGap 用于本次流程后续判断的MTop重试Gap
 const (
 	MTopRetryGap         = time.Second
@@ -91,6 +97,12 @@ type ClientImpl struct {
 	ChatUserQueryURL    string
 	// ChatItemSearchURL 允许测试将聊天商品查询指向本地 HTTP 服务；生产空值使用官方端点。
 	ChatItemSearchURL string
+	// MarketSearchURL 允许测试将全站商品搜索指向本地 HTTP 服务；生产空值使用官方端点。
+	MarketSearchURL string
+	// ItemDetailURL 允许测试将商品详情查询指向本地 HTTP 服务；生产空值使用官方端点。
+	ItemDetailURL string
+	// SellerItemListURL 允许测试将对标卖家店铺商品列表指向本地 HTTP 服务；生产空值使用官方端点。
+	SellerItemListURL string
 	// Pacer 是账号级请求节拍器；为空时使用进程共享的默认节拍器，测试可注入确定性实现。
 	Pacer *Pacer
 }

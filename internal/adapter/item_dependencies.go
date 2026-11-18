@@ -102,3 +102,35 @@ func (d *ItemDependencies) NewItemSyncRepository(client func() MTOPClient, logge
 	}
 	return NewItemSyncRepository(d.store, client, logger, update, recover)
 }
+
+// NewCollectorPlatformPort 创建全站商品采集专用的平台访问适配器。
+func (d *ItemDependencies) NewCollectorPlatformPort(client func() MTOPClient, logger *slog.Logger, update func(context.Context, string, string), recover func(context.Context, string, error)) *CollectorPlatformPort {
+	if d == nil {
+		return nil
+	}
+	return NewCollectorPlatformPort(d.store, client, logger, update, recover)
+}
+
+// NewCollectorAIRewriter 创建商品采集标题与文案 AI 改写适配器。
+func (d *ItemDependencies) NewCollectorAIRewriter() *CollectorAIRewriter {
+	if d == nil {
+		return nil
+	}
+	return NewCollectorAIRewriter(d.store)
+}
+
+// NewCollectorManualVerifyAdapter 创建一键弹出桌面验证窗口并自动同步 Cookie 的适配器。
+func (d *ItemDependencies) NewCollectorManualVerifyAdapter(driver BrowserManualVerifyDriver, update func(context.Context, string, string)) *CollectorManualVerifyAdapter {
+	if d == nil {
+		return nil
+	}
+	return NewCollectorManualVerifyAdapter(d.store, driver, update)
+}
+
+// NewCollectorRadarRepository 创建黑马爆品雷达监控目标与热度快照仓储适配器。
+func (d *ItemDependencies) NewCollectorRadarRepository() *CollectorRadarRepository {
+	if d == nil {
+		return nil
+	}
+	return NewCollectorRadarRepository(d.store)
+}

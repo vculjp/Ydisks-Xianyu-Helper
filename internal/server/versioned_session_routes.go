@@ -18,6 +18,7 @@ func (s *Server) mountHealthAndVersionedRoutes(r chi.Router) {
 	s.mountVersionedChatTaskRoutes(r)
 	s.mountVersionedReplyRoutes(r)
 	s.mountVersionedLibraryRoutes(r)
+	s.mountVersionedCollectorRoutes(r)
 	s.mountVersionedAdminAnalyticsRoutes(r)
 	s.mountVersionedQRLoginRoutes(r)
 	s.mountVersionedPasswordLoginRoutes(r)

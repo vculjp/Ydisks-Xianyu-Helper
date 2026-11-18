@@ -1,6 +1,7 @@
 package composition
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"xianyu-go/internal/adapter"
+	collectorapp "xianyu-go/internal/application/collector"
 	itemapp "xianyu-go/internal/application/items"
 	libraryapp "xianyu-go/internal/application/library"
 	"xianyu-go/internal/uploadroot"
@@ -75,17 +77,44 @@ func newLibraryBatchID() string {
 	return "batch_" + hex.EncodeToString(buf)
 }
 
-// buildCatalogAndLibrary 构造商品目录服务集合和本地资源库服务；资源库的发布预检复用目录服务的预检落库，因此两者一起构造。
-func buildCatalogAndLibrary(dependencies Dependencies, sessionRecovery adapter.SessionRecoveryHandler, batchPreview *itemapp.BatchPreviewService) (itemCatalogServices, *libraryapp.Service, error) {
+// buildCatalogAndLibrary 构造商品目录服务集合、本地资源库服务与全站商品采集服务；资源库的发布预检复用目录服务的预检落库，采集转存直接复用资源库的图片与模板能力。
+func buildCatalogAndLibrary(dependencies Dependencies, sessionRecovery adapter.SessionRecoveryHandler, batchPreview *itemapp.BatchPreviewService) (itemCatalogServices, *libraryapp.Service, *collectorapp.Service, error) {
 	// catalogServices、catalogErr 是商品目录服务集合及其构造错误。
 	catalogServices, catalogErr := buildItemCatalogServices(dependencies, sessionRecovery)
 	if catalogErr != nil {
-		return itemCatalogServices{}, nil, catalogErr
+		return itemCatalogServices{}, nil, nil, catalogErr
 	}
 	// libraryService、libraryErr 是本地资源库应用服务及其构造错误。
 	libraryService, libraryErr := buildLibraryService(dependencies, batchPreview, catalogServices.previewPersistence)
 	if libraryErr != nil {
-		return itemCatalogServices{}, nil, libraryErr
+		return itemCatalogServices{}, nil, nil, libraryErr
 	}
-	return catalogServices, libraryService, nil
+	// collectorPlatform 将采集平台端口连接到账号凭证锁、共享 MTOP 节流器与会话过期恢复回调。
+	collectorPlatform := dependencies.ItemDependencies.NewCollectorPlatformPort(
+		dependencies.MTopClient,
+		dependencies.Logger,
+		dependencies.UpdateRunningCookie,
+		func(ctx context.Context, cookieID string, err error) {
+			if sessionRecovery != nil {
+				sessionRecovery(ctx, cookieID, err)
+			}
+		},
+	)
+	// aiAdapter 复用于标题文案改写与爆品雷达当季热词裂变。
+	aiAdapter := dependencies.ItemDependencies.NewCollectorAIRewriter()
+	// collectorService、collectorErr 构造全站商品采集、爆品雷达与转存模板库应用服务。
+	collectorService, collectorErr := collectorapp.NewService(collectorapp.Dependencies{
+		Platform:         collectorPlatform,
+		Rewriter:         aiAdapter,
+		KeywordGenerator: aiAdapter,
+		ImageDownloader:  adapter.NewLibraryRemoteImageFetcher(),
+		ImageUploader:    libraryService,
+		TemplateCreator:  libraryService,
+		ManualVerifier:   dependencies.ItemDependencies.NewCollectorManualVerifyAdapter(dependencies.ManualVerifyDriver, dependencies.UpdateRunningCookie),
+		RadarRepository:  dependencies.ItemDependencies.NewCollectorRadarRepository(),
+	})
+	if collectorErr != nil {
+		return itemCatalogServices{}, nil, nil, fmt.Errorf("构造商品采集服务失败: %w", collectorErr)
+	}
+	return catalogServices, libraryService, collectorService, nil
 }

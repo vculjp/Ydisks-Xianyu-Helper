@@ -34,6 +34,8 @@ type Store struct {
 	LibraryImages *LibraryImages
 	// ProductTemplates 保存可批量铺货的商品模板。
 	ProductTemplates *ProductTemplates
+	// ViralRadar 保存全站黑马爆品监控目标与商品热度增量快照。
+	ViralRadar       *ViralRadarStore
 	AIReply          *AIReply
 	// AgentReply 保存账号外部 Agent 回复配置，访问令牌加密落库。
 	AgentReply *AgentReply
@@ -104,6 +106,7 @@ func NewStore(db *sql.DB, dialect Dialect) *Store {
 		ItemGreetings:     &ItemGreetings{DB: db, Dialect: dialect},
 		LibraryImages:     &LibraryImages{DB: db, Dialect: dialect},
 		ProductTemplates:  &ProductTemplates{DB: db, Dialect: dialect},
+		ViralRadar:        &ViralRadarStore{DB: db, Dialect: dialect},
 		AIReply:           &AIReply{DB: db, Dialect: dialect, codec: codec},
 		AgentReply:        &AgentReply{DB: db, Dialect: dialect, codec: codec},
 		ItemAISettings:    &ItemAISettings{DB: db, Dialect: dialect},

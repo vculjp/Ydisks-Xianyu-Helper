@@ -8738,6 +8738,544 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthDegradedResponse'
+  "/api/v1/collector/search":
+    post:
+      operationId: postApiV1CollectorSearch
+      summary: 全站闲鱼关键词商品搜索采集
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorSearchRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorSearchResponse'
+        '400':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  "/api/v1/collector/item-detail":
+    post:
+      operationId: postApiV1CollectorItemDetail
+      summary: 按商品链接或商品ID精准采集完整详情与多图
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorDetailRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorDetailResponse'
+        '400':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  "/api/v1/collector/seller-items":
+    post:
+      operationId: postApiV1CollectorSellerItems
+      summary: 采集对标同行店铺在售商品列表
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorSellerRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorSearchResponse'
+        '400':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  "/api/v1/collector/ai-rewrite":
+    post:
+      operationId: postApiV1CollectorAiRewrite
+      summary: 调用系统AI对商品标题与文案进行防同质化改写
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorAIRewriteRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorAIRewriteResponse'
+        '400':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  "/api/v1/collector/save-templates":
+    post:
+      operationId: postApiV1CollectorSaveTemplates
+      summary: 批量下载采集商品主图并保存为本地资源库商品模板
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorSaveTemplatesRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorSaveTemplatesResponse'
+        '400':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 统一错误响应
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  "/api/v1/collector/manual-verify/open":
+    post:
+      operationId: postApiV1CollectorManualVerifyOpen
+      summary: 弹出桌面可见闲鱼窗口供用户手动完成滑块安全验证
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorManualVerifyOpenRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorManualVerifyOpenResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/collector/manual-verify/complete":
+    post:
+      operationId: postApiV1CollectorManualVerifyComplete
+      summary: 确认用户已在桌面验证窗口滑完验证并自动同步完整Cookie快照
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorManualVerifyCookieRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorManualVerifyCompleteResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/collector/manual-verify/cancel":
+    post:
+      operationId: postApiV1CollectorManualVerifyCancel
+      summary: 关闭打开中的桌面验证窗口
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorManualVerifyCookieRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorManualVerifyCancelResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/collector/radar/targets":
+    get:
+      operationId: getApiV1CollectorRadarTargets
+      summary: 查询黑马爆品雷达监控目标列表
+      security: [{cookieAuth: []}]
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarTargetsResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      operationId: postApiV1CollectorRadarTargets
+      summary: 批量添加爆品雷达监控目标或导入种子词包
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorRadarAddTargetsRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarTargetsResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/collector/radar/targets/{id}":
+    patch:
+      operationId: patchApiV1CollectorRadarTargetsByid
+      summary: 切换单条爆品雷达监控目标的启停状态
+      security: [{cookieAuth: []}]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorRadarToggleTargetRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarMutationResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      operationId: deleteApiV1CollectorRadarTargetsByid
+      summary: 删除单条爆品雷达监控目标
+      security: [{cookieAuth: []}]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, format: int64}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarMutationResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/collector/radar/ai-keywords":
+    post:
+      operationId: postApiV1CollectorRadarAiKeywords
+      summary: 调用系统AI生成当季易爆搜索热词
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorRadarAIKeywordsRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarAIKeywordsResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/collector/radar/scan/start":
+    post:
+      operationId: postApiV1CollectorRadarScanStart
+      summary: 启动全池慢速爆品巡检任务
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorRadarStartScanRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarScanStatusResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/collector/radar/scan/stop":
+    post:
+      operationId: postApiV1CollectorRadarScanStop
+      summary: 手动停止正在执行的爆品巡检任务
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmptyRequest'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarScanStatusResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/collector/radar/scan/status":
+    get:
+      operationId: getApiV1CollectorRadarScanStatus
+      summary: 查询当前爆品巡检实时进度与定时配置
+      security: [{cookieAuth: []}]
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarScanStatusResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/collector/radar/schedule":
+    put:
+      operationId: putApiV1CollectorRadarSchedule
+      summary: 更新低频后台自动爆品巡检配置
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectorRadarSchedule'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarSchedule'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/collector/radar/items":
+    get:
+      operationId: getApiV1CollectorRadarItems
+      summary: 查询黑马爆品快照榜单列表
+      security: [{cookieAuth: []}]
+      parameters:
+        - name: sort_by
+          in: query
+          required: false
+          schema: {type: string}
+        - name: source_type
+          in: query
+          required: false
+          schema: {type: string}
+        - name: min_want_count
+          in: query
+          required: false
+          schema: {type: integer}
+        - name: min_delta_want
+          in: query
+          required: false
+          schema: {type: integer}
+        - name: max_age_hours
+          in: query
+          required: false
+          schema: {type: integer}
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer}
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarItemsResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      operationId: deleteApiV1CollectorRadarItems
+      summary: 清空历史爆品快照列表
+      security: [{cookieAuth: []}]
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectorRadarMutationResponse'
+        '400': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 统一错误响应, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
 components:
   securitySchemes:
     cookieAuth:
@@ -11033,6 +11571,355 @@ components:
           items: {type: string}
         location: {$ref: '#/components/schemas/LibraryTemplateLocation'}
         publish_interval_seconds: {type: integer, minimum: 0, maximum: 3600}
+    CollectedItem:
+      type: object
+      required:
+        - item_id
+        - title
+        - description
+        - price
+        - original_price
+        - pic_url
+        - image_urls
+        - area
+        - seller_id
+        - seller_nick
+        - want_count
+        - browse_count
+        - category_id
+        - is_free_shipping
+        - is_multi_spec
+        - has_full_detail
+        - publish_time_unix
+        - web_url
+      properties:
+        item_id: {type: string}
+        title: {type: string}
+        description: {type: string}
+        price: {type: string}
+        original_price: {type: string}
+        pic_url: {type: string}
+        image_urls:
+          type: array
+          items: {type: string}
+        area: {type: string}
+        seller_id: {type: string}
+        seller_nick: {type: string}
+        want_count: {type: integer}
+        browse_count: {type: integer}
+        category_id: {type: string}
+        is_free_shipping: {type: boolean}
+        is_multi_spec: {type: boolean}
+        has_full_detail: {type: boolean}
+        publish_time_unix: {type: integer, format: int64}
+        web_url: {type: string}
+    CollectorSearchRequest:
+      type: object
+      required: [cookie_id, keyword]
+      properties:
+        cookie_id: {type: string}
+        keyword: {type: string}
+        page_number: {type: integer}
+        rows_per_page: {type: integer}
+        sort_mode: {type: string}
+        min_price: {type: string}
+        max_price: {type: string}
+        publish_days: {type: integer}
+        min_want_count: {type: integer}
+    CollectorSearchResponse:
+      type: object
+      required: [items, page_number, has_more, total_count, aborted_by_risk, warning]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/CollectedItem'}
+        page_number: {type: integer}
+        has_more: {type: boolean}
+        total_count: {type: integer}
+        aborted_by_risk: {type: boolean}
+        warning: {type: string}
+    CollectorDetailRequest:
+      type: object
+      required: [cookie_id, inputs]
+      properties:
+        cookie_id: {type: string}
+        inputs:
+          type: array
+          items: {type: string}
+    CollectorDetailError:
+      type: object
+      required: [item_id, message]
+      properties:
+        item_id: {type: string}
+        message: {type: string}
+    CollectorDetailResponse:
+      type: object
+      required: [items, errors, aborted_by_risk]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/CollectedItem'}
+        errors:
+          type: array
+          items: {$ref: '#/components/schemas/CollectorDetailError'}
+        aborted_by_risk: {type: boolean}
+    CollectorSellerRequest:
+      type: object
+      required: [cookie_id, seller_input]
+      properties:
+        cookie_id: {type: string}
+        seller_input: {type: string}
+        max_pages: {type: integer}
+    CollectorAIRewriteRequest:
+      type: object
+      required: [title, description]
+      properties:
+        title: {type: string}
+        description: {type: string}
+        custom_instruction: {type: string}
+    CollectorAIRewriteResponse:
+      type: object
+      required: [title, description]
+      properties:
+        title: {type: string}
+        description: {type: string}
+    CollectorSaveTemplateItem:
+      type: object
+      required: [item_id, title, description, price, image_urls, has_full_detail]
+      properties:
+        item_id: {type: string}
+        name: {type: string}
+        title: {type: string}
+        description: {type: string}
+        price: {type: string}
+        original_price: {type: string}
+        image_urls:
+          type: array
+          items: {type: string}
+        has_full_detail: {type: boolean}
+    CollectorSaveTemplatesRequest:
+      type: object
+      required: [items]
+      properties:
+        cookie_id: {type: string}
+        fetch_detail_if_missing: {type: boolean}
+        enable_ai_rewrite: {type: boolean}
+        custom_instruction: {type: string}
+        price_mode: {type: string}
+        price_value: {type: string}
+        quantity: {type: integer}
+        postage_mode: {type: string}
+        delivery_template_id: {type: integer, format: int64}
+        custom_variables:
+          type: object
+          additionalProperties: {type: string}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/CollectorSaveTemplateItem'}
+    CollectorSavedTemplateOutcome:
+      type: object
+      required: [item_id, title, success, template_id, image_count, error]
+      properties:
+        item_id: {type: string}
+        title: {type: string}
+        success: {type: boolean}
+        template_id: {type: integer, format: int64}
+        image_count: {type: integer}
+        error: {type: string}
+    CollectorSaveTemplatesResponse:
+      type: object
+      required: [total, succeeded, failed, aborted_by_risk, results]
+      properties:
+        total: {type: integer}
+        succeeded: {type: integer}
+        failed: {type: integer}
+        aborted_by_risk: {type: boolean}
+        results:
+          type: array
+          items: {$ref: '#/components/schemas/CollectorSavedTemplateOutcome'}
+    CollectorManualVerifyOpenRequest:
+      type: object
+      required: [cookie_id]
+      properties:
+        cookie_id: {type: string}
+        scene: {type: string}
+        keyword: {type: string}
+        target_id: {type: string}
+    CollectorManualVerifyOpenResponse:
+      type: object
+      required: [target_url]
+      properties:
+        target_url: {type: string}
+    CollectorManualVerifyCookieRequest:
+      type: object
+      required: [cookie_id]
+      properties:
+        cookie_id: {type: string}
+    CollectorManualVerifyCompleteResponse:
+      type: object
+      required: [cookie_id, synced_count]
+      properties:
+        cookie_id: {type: string}
+        synced_count: {type: integer}
+    CollectorManualVerifyCancelResponse:
+      type: object
+      required: [canceled]
+      properties:
+        canceled: {type: boolean}
+    CollectorRadarTarget:
+      type: object
+      required: [id, target_type, target_value, label, publish_days, enabled, last_scanned_at, last_hit_count, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        target_type: {type: string}
+        target_value: {type: string}
+        label: {type: string}
+        publish_days: {type: integer}
+        enabled: {type: boolean}
+        last_scanned_at: {type: integer, format: int64}
+        last_hit_count: {type: integer}
+        created_at: {type: integer, format: int64}
+    CollectorRadarTargetsResponse:
+      type: object
+      required: [targets]
+      properties:
+        targets:
+          type: array
+          items: {$ref: '#/components/schemas/CollectorRadarTarget'}
+    CollectorRadarTargetInput:
+      type: object
+      required: [raw_value]
+      properties:
+        target_type: {type: string}
+        raw_value: {type: string}
+        label: {type: string}
+        publish_days: {type: integer}
+    CollectorRadarAddTargetsRequest:
+      type: object
+      properties:
+        targets:
+          type: array
+          items: {$ref: '#/components/schemas/CollectorRadarTargetInput'}
+        import_virtual_seed_pack: {type: boolean}
+    CollectorRadarToggleTargetRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
+    CollectorRadarMutationResponse:
+      type: object
+      required: [success]
+      properties:
+        success: {type: boolean}
+    CollectorRadarAIKeywordsRequest:
+      type: object
+      properties:
+        niche: {type: string}
+    CollectorRadarAIKeywordsResponse:
+      type: object
+      required: [keywords]
+      properties:
+        keywords:
+          type: array
+          items: {type: string}
+    CollectorRadarStartScanRequest:
+      type: object
+      required: [cookie_id]
+      properties:
+        cookie_id: {type: string}
+    CollectorRadarSchedule:
+      type: object
+      required: [enabled, cookie_id, interval_hours]
+      properties:
+        enabled: {type: boolean}
+        cookie_id: {type: string}
+        interval_hours: {type: integer}
+        last_auto_run_unix: {type: integer, format: int64}
+    CollectorRadarScanStatusResponse:
+      type: object
+      required:
+        - running
+        - cookie_id
+        - total_targets
+        - completed_targets
+        - current_target
+        - updated_items
+        - rising_items
+        - aborted_by_risk
+        - last_error
+        - started_at
+        - finished_at
+        - schedule
+      properties:
+        running: {type: boolean}
+        cookie_id: {type: string}
+        total_targets: {type: integer}
+        completed_targets: {type: integer}
+        current_target: {type: string}
+        updated_items: {type: integer}
+        rising_items: {type: integer}
+        aborted_by_risk: {type: boolean}
+        last_error: {type: string}
+        started_at: {type: integer, format: int64}
+        finished_at: {type: integer, format: int64}
+        schedule: {$ref: '#/components/schemas/CollectorRadarSchedule'}
+    CollectorRadarItem:
+      type: object
+      required:
+        - item_id
+        - title
+        - price
+        - original_price
+        - pic_url
+        - area
+        - seller_id
+        - seller_nick
+        - is_free_shipping
+        - source_type
+        - source_label
+        - publish_time_unix
+        - first_seen_at
+        - first_want_count
+        - prev_seen_at
+        - prev_want_count
+        - latest_seen_at
+        - latest_want_count
+        - delta_want
+        - daily_velocity
+        - viral_score
+        - scan_count
+        - web_url
+      properties:
+        item_id: {type: string}
+        title: {type: string}
+        price: {type: string}
+        original_price: {type: string}
+        pic_url: {type: string}
+        area: {type: string}
+        seller_id: {type: string}
+        seller_nick: {type: string}
+        is_free_shipping: {type: boolean}
+        source_type: {type: string}
+        source_label: {type: string}
+        publish_time_unix: {type: integer, format: int64}
+        first_seen_at: {type: integer, format: int64}
+        first_want_count: {type: integer}
+        prev_seen_at: {type: integer, format: int64}
+        prev_want_count: {type: integer}
+        latest_seen_at: {type: integer, format: int64}
+        latest_want_count: {type: integer}
+        delta_want: {type: integer}
+        daily_velocity: {type: number}
+        viral_score: {type: integer}
+        scan_count: {type: integer}
+        web_url: {type: string}
+    CollectorRadarItemsResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/CollectorRadarItem'}
     ErrorResponse:
       type: object
       required: [code, message]

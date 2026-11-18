@@ -61,3 +61,29 @@ func (s *UserSettings) SetForUser(ctx context.Context, userID int64, key, value 
 			}), userID, key, value)
 	return err
 }
+
+// ListByKey 查询所有配置了指定设置键的用户值映射（供后台低频定时任务枚举启用用户）。
+func (s *UserSettings) ListByKey(ctx context.Context, key string) (map[int64]string, error) {
+	// keyColumn 是当前 SQL 方言中安全引用的 key 列名。
+	keyColumn := dialectQuote(s.Dialect, "key")
+	// rows、err 查询所有匹配 key 的用户记录。
+	rows, err := s.DB.QueryContext(ctx, `SELECT user_id, value FROM user_settings WHERE `+keyColumn+` = ?`, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	// out 保存 userID 到设置 JSON 文本的映射。
+	out := make(map[int64]string)
+	for rows.Next() {
+		// uid、val 读取单行用户主键与设置值。
+		var uid int64
+		// val 保存设置文本。
+		var val string
+		// scanErr 扫描结果行。
+		if scanErr := rows.Scan(&uid, &val); scanErr != nil {
+			return nil, scanErr
+		}
+		out[uid] = val
+	}
+	return out, rows.Err()
+}

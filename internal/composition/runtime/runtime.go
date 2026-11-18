@@ -73,11 +73,10 @@ func BuildRuntime(options RuntimeOptions, infrastructure RuntimeInfrastructure) 
 	}
 	// lifecycleCoordinator 由 cmd 最终拥有，用于按顺序启动并逆序关闭后台组件。
 	lifecycleCoordinator := lifecycle.NewCoordinator()
-	if browserManager != nil {
-		// addErr 是浏览器组件登记失败原因，失败时运行时不得继续暴露。
-		if addErr := lifecycleCoordinator.Add(lifecycle.NamedComponent{Name: "browser", Component: lifecycle.FuncComponent{StartFunc: browserManager.InitializeContext, CloseFunc: browserManager.CloseContext}}); addErr != nil {
-			return Runtime{}, fmt.Errorf("登记浏览器生命周期组件失败: %w", addErr)
-		}
+	// collectorManualVerifier、manualVerifyErr 构造并按顺序登记在 browser 之后的可见人工验证窗口管理器。
+	collectorManualVerifier, manualVerifyErr := registerBrowserLifecycle(browserManager, lifecycleCoordinator)
+	if manualVerifyErr != nil {
+		return Runtime{}, manualVerifyErr
 	}
 	// automationScheduler、renewalScheduler 分别负责自动化延迟任务和凭证续期扫描。
 	automationScheduler := automation.NewScheduler(runtimeBundle.Automation)
@@ -185,7 +184,7 @@ func BuildRuntime(options RuntimeOptions, infrastructure RuntimeInfrastructure) 
 		OrderReconciliationRecovery: orderReconciliationRecovery, Manager: runtimeBundle.Manager, Automation: runtimeBundle.Automation, OrderDetails: runtimeBundle.OrderDetails,
 		Notifier: runtimeBundle.Notifier, Chat: runtimeBundle.Chat, ChatApplication: runtimeBundle.ChatApplication, Logger: infrastructure.Logger,
 		MTopClient: platformDependencies.MTOPClient, LongLoginClient: platformDependencies.LongLoginClient, QRLogin: platformDependencies.QRLoginService(),
-		UpdateRunningCookie: updateRunningCookie, SessionRecovery: sessionRecovery, LifecycleContext: lifecycleCoordinator.Context,
+		ManualVerifyDriver: collectorManualVerifier, UpdateRunningCookie: updateRunningCookie, SessionRecovery: sessionRecovery, LifecycleContext: lifecycleCoordinator.Context,
 	})
 	if buildErr != nil {
 		return Runtime{}, fmt.Errorf("构造应用服务集合失败: %w", buildErr)
@@ -211,4 +210,28 @@ func BuildRuntime(options RuntimeOptions, infrastructure RuntimeInfrastructure) 
 		}
 	}
 	return Runtime{HTTPServer: httpServer, Lifecycle: lifecycleCoordinator}, nil
+}
+
+// registerBrowserLifecycle 按逆序关闭要求先登记 browser、再登记依赖它的可见人工验证窗口管理器。
+func registerBrowserLifecycle(browserManager *browser.Manager, coordinator *lifecycle.Coordinator) (adapter.BrowserManualVerifyDriver, error) {
+	if browserManager == nil {
+		return nil, nil
+	}
+	// addErr 是底层浏览器组件登记失败原因。
+	if addErr := coordinator.Add(lifecycle.NamedComponent{
+		Name:      "browser",
+		Component: lifecycle.FuncComponent{StartFunc: browserManager.InitializeContext, CloseFunc: browserManager.CloseContext},
+	}); addErr != nil {
+		return nil, fmt.Errorf("登记浏览器生命周期组件失败: %w", addErr)
+	}
+	// manualVerifier 管理用户桌面手动过滑块的可见浏览器会话，在退出时先于 browser 关闭。
+	manualVerifier := browser.NewCollectorManualVerifier(browserManager)
+	// addErr 是人工验证窗口组件登记失败原因。
+	if addErr := coordinator.Add(lifecycle.NamedComponent{
+		Name:      "collector-manual-verify",
+		Component: lifecycle.FuncComponent{StartFunc: manualVerifier.Start, CloseFunc: manualVerifier.CloseContext},
+	}); addErr != nil {
+		return nil, fmt.Errorf("登记人工验证窗口生命周期组件失败: %w", addErr)
+	}
+	return manualVerifier, nil
 }

@@ -68,6 +68,8 @@ const LibraryImageChooser = lazy(/* 图片库单选器随使用它的页面按�
 const PublishLocationField = lazy(/* 发货地字段随资源库发布弹窗按需加载。 */ () => import('../features/items/components/PublishLocationField'));
 // PublishCategoryField 是按需加载的类目字段。
 const PublishCategoryField = lazy(/* 类目字段随资源库模板编辑器按需加载。 */ () => import('../features/items/components/PublishCategoryField'));
+// ProductCollector 是按需加载的全站商品采集工作台页面。
+const ProductCollector = lazy(/* ProductCollector 页面按路由激活时加载。 */ () => import('../features/collector/pages/ProductCollector'));
 const ResourceLibrary = lazy(/* ResourceLibrary 页面按路由激活时加载。 */ () => import('../features/library/pages/ResourceLibrary'));
 // Settings 是按需加载的系统设置页面，仅在管理员访问时加载。
 const Settings = lazy(/* Settings 页面按路由激活时加载。 */ () => import('../features/settings/pages/Settings'));
@@ -105,6 +107,8 @@ export interface AppContentProps {
   onDeliveryTargetHandled: () => void;
   // onNavigateToItems 在模板批次启动后跳转到商品页查看批量铺货进度。
   onNavigateToItems?: () => void;
+  // onNavigateToLibrary 在采集转存完成后跳转到本地资源库页面。
+  onNavigateToLibrary?: () => void;
 }
 
 // AppContent 按当前导航标识选择业务页面，并隔离页面代码的动态加载边界。
@@ -115,6 +119,7 @@ export const AppContent: React.FC<AppContentProps> = ({
   onConfigureDelivery,
   onDeliveryTargetHandled,
   onNavigateToItems,
+  onNavigateToLibrary,
 }) => {
   // handleConfigureDelivery 将商品页面对象转换成路由壳使用的最小联动载荷。
   const handleConfigureDelivery = (item /* item 表示用户选择的商品。 */: Item) => {
@@ -142,6 +147,7 @@ export const AppContent: React.FC<AppContentProps> = ({
         libraryImageChooser={LibraryImageChooser}
       />;
       case 'delivery-templates': return <DeliveryTemplates libraryImageChooser={LibraryImageChooser} />;
+      case 'collector': return <ProductCollector onNavigateToLibrary={onNavigateToLibrary} />;
       case 'library': return <ResourceLibrary onBatchStarted={onNavigateToItems} locationField={PublishLocationField} categoryField={PublishCategoryField} />;
       case 'notifications': return <Notifications isAdmin={isAdmin} />;
       case 'logs': return isAdmin ? <RuntimeLogs /> : <Dashboard />;
@@ -213,6 +219,7 @@ const AuthenticatedShell: React.FC<AuthenticatedShellProps> = ({
           onConfigureDelivery={onConfigureDelivery}
           onDeliveryTargetHandled={onDeliveryTargetHandled}
           onNavigateToItems={/* 批次启动后进入商品页查看进度。 */ () => onNavigate('items')}
+          onNavigateToLibrary={/* 转存模板完成后进入本地资源库准备多店上架。 */ () => onNavigate('library')}
         />
       </div>
     </main>

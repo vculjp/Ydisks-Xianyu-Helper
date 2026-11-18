@@ -508,6 +508,8 @@ type ApplicationPorts struct {
 	agentReplies AgentReplyPort
 	// library 是本地资源库用例。
 	library LibraryPort
+	// collector 是全站商品采集用例。
+	collector CollectorPort
 	// keywords 是关键词回复用例。
 	keywords KeywordsPort
 	// settings 是系统设置用例。
@@ -564,7 +566,8 @@ type ApplicationPortsInput struct {
 	ItemGreetings          ItemGreetingsPort
 	// AgentReplies 是账号外部 Agent 回复配置与连接测试用例。
 	AgentReplies AgentReplyPort
-	Library      LibraryPort
+	Library   LibraryPort
+	Collector CollectorPort
 	Keywords     KeywordsPort
 	Settings     SettingsPort
 	Admin        AdminPort
@@ -585,7 +588,7 @@ func NewApplicationPorts(input ApplicationPortsInput) *ApplicationPorts {
 		accountSummaries: input.AccountSummaries, accountTasks: input.AccountTasks, chat: input.Chat,
 		uncertainNotifications: input.UncertainNotifications, notificationChannels: input.NotificationChannels,
 		analytics: input.Analytics, automationIssues: input.AutomationIssues, automationAudit: input.AutomationAudit, automationRules: input.AutomationRules,
-		cards: input.Cards, deliveryTemplates: input.DeliveryTemplates, apiRequestTester: input.APIRequestTester, publishAutomationRules: input.PublishAutomationRules, defaultReplies: input.DefaultReplies, itemGreetings: input.ItemGreetings, agentReplies: input.AgentReplies, library: input.Library,
+		cards: input.Cards, deliveryTemplates: input.DeliveryTemplates, apiRequestTester: input.APIRequestTester, publishAutomationRules: input.PublishAutomationRules, defaultReplies: input.DefaultReplies, itemGreetings: input.ItemGreetings, agentReplies: input.AgentReplies, library: input.Library, collector: input.Collector,
 		keywords: input.Keywords, settings: input.Settings, admin: input.Admin, runtimeLogs: input.RuntimeLogs,
 	}
 }
@@ -614,7 +617,7 @@ func (ports *ApplicationPorts) validate() error {
 		{"account_tasks", ports.accountTasks}, {"chat", ports.chat}, {"uncertain_notifications", ports.uncertainNotifications},
 		{"notification_channels", ports.notificationChannels}, {"analytics", ports.analytics}, {"automation_issues", ports.automationIssues}, {"automation_audit", ports.automationAudit},
 		{"automation_rules", ports.automationRules}, {"cards", ports.cards}, {"publish_automation_rules", ports.publishAutomationRules},
-		{"default_replies", ports.defaultReplies}, {"item_greetings", ports.itemGreetings}, {"agent_replies", ports.agentReplies}, {"library", ports.library}, {"keywords", ports.keywords}, {"settings", ports.settings}, {"admin", ports.admin},
+		{"default_replies", ports.defaultReplies}, {"item_greetings", ports.itemGreetings}, {"agent_replies", ports.agentReplies}, {"library", ports.library}, {"collector", ports.collector}, {"keywords", ports.keywords}, {"settings", ports.settings}, {"admin", ports.admin},
 		{"runtime_logs", ports.runtimeLogs},
 	}
 	// requiredPort 是当前必须在 Server 构造前绑定的应用 Port 名称。

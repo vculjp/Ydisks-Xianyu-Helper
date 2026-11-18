@@ -22,6 +22,7 @@ import (
 	automationapp "xianyu-go/internal/application/automation"
 	cardsapp "xianyu-go/internal/application/cards"
 	chatapp "xianyu-go/internal/application/chat"
+	collectorapp "xianyu-go/internal/application/collector"
 	defaultreplyapp "xianyu-go/internal/application/defaultreply"
 	deliveryapp "xianyu-go/internal/application/deliverytemplate"
 	itemgreetingapp "xianyu-go/internal/application/itemgreeting"
@@ -137,6 +138,8 @@ type Services struct {
 	agentReplies *agentreplyapp.Service
 	// library 是本地资源库（图片库、商品模板、模板发布预检）应用服务。
 	library *libraryapp.Service
+	// collector 是全站闲鱼商品采集、AI 防重改写及转入模板库应用服务。
+	collector *collectorapp.Service
 	// keywords 是关键词规则与指定商品回复应用服务。
 	keywords *keywordsapp.Service
 	// settings 是系统、用户和账号 AI 设置应用服务。
@@ -192,6 +195,8 @@ type Dependencies struct {
 	LongLoginClient func() adapter.LongLoginClient
 	// QRLogin 提供二维码生成、轮询和风控完成的底层平台能力。
 	QRLogin adapter.QRLoginService
+	// ManualVerifyDriver 提供可选的桌面可见浏览器人工验证窗口驱动。
+	ManualVerifyDriver adapter.BrowserManualVerifyDriver
 	// UpdateRunningCookie 同步平台响应 Cookie 到账号运行时。
 	UpdateRunningCookie func(context.Context, string, string)
 	// SessionRecovery 处理平台会话失效后的账号恢复。
@@ -277,6 +282,17 @@ func (services *Services) LifecycleComponents() []lifecycleapp.NamedComponent {
 			},
 		})
 	}
+	if services.collector != nil {
+		// collectorSvc 保存全站爆品慢速巡检与低频定时调度组件。
+		collectorSvc := services.collector
+		components = append(components, lifecycleapp.NamedComponent{
+			Name: "collector-viral-radar",
+			Component: lifecycleapp.FuncComponent{
+				StartFunc: collectorSvc.StartRadar,
+				CloseFunc: collectorSvc.CloseRadar,
+			},
+		})
+	}
 	return components
 }
 
@@ -358,7 +374,9 @@ type TransportPorts struct {
 	// AgentReplies 是账号外部 Agent 回复配置与连接测试应用服务。
 	AgentReplies *agentreplyapp.Service
 	// Library 是本地资源库应用服务。
-	Library  *libraryapp.Service
+	Library *libraryapp.Service
+	// Collector 是全站商品采集应用服务。
+	Collector *collectorapp.Service
 	Keywords *keywordsapp.Service
 	Settings *settingsapp.Service
 	Admin    *adminapp.Service
@@ -383,7 +401,7 @@ func (services *Services) TransportPorts() TransportPorts {
 		AccountSummaries: services.accountSummaries, AccountTasks: services.accountTasks, Chat: services.chat,
 		UncertainNotifications: services.uncertainNotifications, NotificationChannels: services.notificationChannels,
 		Analytics: services.analytics, AutomationIssues: services.automationIssues, AutomationAudit: services.automationAudit, AutomationRules: services.automationRules, DeliveryTemplates: services.deliveryTemplates,
-		Cards: services.cards, APICardTester: services.apiCardTester, PublishAutomationRules: services.publishAutomationRules, DefaultReplies: services.defaultReplies, ItemGreetings: services.itemGreetings, AgentReplies: services.agentReplies, Library: services.library,
+		Cards: services.cards, APICardTester: services.apiCardTester, PublishAutomationRules: services.publishAutomationRules, DefaultReplies: services.defaultReplies, ItemGreetings: services.itemGreetings, AgentReplies: services.agentReplies, Library: services.library, Collector: services.collector,
 		Keywords: services.keywords, Settings: services.settings, Admin: services.admin, RuntimeLogs: services.runtimeLogs,
 	}
 }
@@ -502,16 +520,14 @@ func New(dependencies Dependencies) (*Services, error) {
 	}
 	// qrSessionRegistry 将扫码会话所有权、过期回收和幂等结果放在应用边界内。
 	qrSessionRegistry := accountapp.NewQRLoginSessionRegistry()
-	// catalogServices、libraryService、catalogErr 分别是商品目录服务集合、本地资源库服务及其组合期错误。
-	catalogServices, libraryService, catalogErr := buildCatalogAndLibrary(dependencies, sessionRecovery, batchServices.preview)
+	// catalogServices、libraryService、collectorService、catalogErr 分别是商品目录服务集合、本地资源库服务、全站商品采集服务及其组合期错误。
+	catalogServices, libraryService, collectorService, catalogErr := buildCatalogAndLibrary(dependencies, sessionRecovery, batchServices.preview)
 	if catalogErr != nil {
 		return nil, catalogErr
 	}
 	// services 是完成构造后只读注入 Server 的应用服务集合。
 	services := &Services{
-		library:                     libraryService,
-		lifecycleContext:            dependencies.LifecycleContext,
-		qrLogin:                     dependencies.QRLogin,
+		library: libraryService, collector: collectorService, lifecycleContext: dependencies.LifecycleContext, qrLogin: dependencies.QRLogin,
 		platformCredentials:         platformCredentials,
 		orders:                      orderServices,
 		orderRefreshJobs:            orderRefreshJobs,

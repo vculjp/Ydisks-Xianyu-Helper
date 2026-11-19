@@ -58,7 +58,7 @@ type CollectedItem struct {
 	SellerID string
 	// SellerNick 是卖家昵称。
 	SellerNick string
-	// WantCount 是“想要”人数。
+	// WantCount 是“想要”人数，-1 表示平台未提供可验证的指标。
 	WantCount int
 	// BrowseCount 是浏览量（详情采集返回）。
 	BrowseCount int
@@ -246,6 +246,8 @@ type SaveTemplatesResult struct {
 
 // PlatformSearchParams 是应用层向平台采集端口传递的标准化搜索参数。
 type PlatformSearchParams struct {
+	// Background 标记雷达后台请求，适配器必须使用更严格的后台节流。
+	Background bool
 	// Keyword 是非空搜索词。
 	Keyword string
 	// PageNumber 是页码。

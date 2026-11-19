@@ -29,6 +29,7 @@ import {
 } from '../api';
 import { CollectorItemModal } from '../components/CollectorItemModal';
 import { SaveTemplatesModal } from '../components/SaveTemplatesModal';
+import { RadarPanel } from '../components/RadarPanel';
 import { exportLibraryImportCsv, exportSelectionCsv } from '../csvExport';
 import type {
   CollectedProduct,
@@ -98,6 +99,36 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
   const [verifyBusy, setVerifyBusy] = useState(false);
   // requestSeqRef 隔离连续点击或切页产生的过期响应。
   const requestSeqRef = useRef(0);
+  // requestAbortRef 持有普通采集的当前请求，切换账号、模式或卸载时取消。
+  const requestAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(/* collectUnmountEffect 使卸载前发起的采集请求失效并释放网络请求。 */ () => () => {
+    ++requestSeqRef.current;
+    requestAbortRef.current?.abort();
+  }, []);
+
+  /** beginRequest 取消旧请求并返回新一轮采集的代次及信号。 */
+  const beginRequest = () => {
+    requestAbortRef.current?.abort();
+    // controller 拥有此次采集的取消信号。
+    const controller = new AbortController();
+    requestAbortRef.current = controller;
+    return { seq: ++requestSeqRef.current, signal: controller.signal };
+  };
+
+  /** resetResults 在切换用户选中的账号或采集类型时阻止旧响应污染新的结果。 */
+  const resetResults = (): void => {
+    ++requestSeqRef.current;
+    requestAbortRef.current?.abort();
+    setLoading(false);
+    setItems([]);
+    setSelectedIds(new Set());
+    setPageNumber(1);
+    setHasMore(false);
+    setBanner(null);
+    setEditingItem(null);
+    setSaveModalItems([]);
+  };
 
   /** effect 在进入采集工作台时并行加载可选采集账号与发货模板列表。 */
   useEffect(/* initCollectorOptionsEffect 初始化账号与发货模板下拉数据并在卸载时取消请求。 */ () => {
@@ -133,8 +164,8 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       setBanner({ tone: 'err', text: '请输入要搜索采集的商品关键词（如：电子资料、简历模板、Excel表格）' });
       return;
     }
-    // seq 标记本次请求代次以丢弃陈旧响应。
-    const seq = ++requestSeqRef.current;
+    // seq、signal 分别隔离过期响应和取消旧采集请求。
+    const { seq, signal } = beginRequest();
     setLoading(true);
     setBanner(null);
     try {
@@ -149,7 +180,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
         maxPrice: maxPrice.trim(),
         publishDays,
         minWantCount,
-      });
+      }, { signal });
       if (seq !== requestSeqRef.current) return;
       setItems(res.items);
       setPageNumber(res.pageNumber);
@@ -178,12 +209,12 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       return;
     }
     // seq 标记请求代次。
-    const seq = ++requestSeqRef.current;
+    const { seq, signal } = beginRequest();
     setLoading(true);
     setBanner(null);
     try {
       // res 是精准详情批量采集结果。
-      const res = await collectProductDetails(selectedCookieId, [detailInputText]);
+      const res = await collectProductDetails(selectedCookieId, [detailInputText], { signal });
       if (seq !== requestSeqRef.current) return;
       setItems(res.items);
       setHasMore(false);
@@ -216,12 +247,12 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       return;
     }
     // seq 标记请求代次。
-    const seq = ++requestSeqRef.current;
+    const { seq, signal } = beginRequest();
     setLoading(true);
     setBanner(null);
     try {
       // res 是同行店铺分页采集结果。
-      const res = await collectSellerProducts(selectedCookieId, targetSeller, sellerMaxPages);
+      const res = await collectSellerProducts(selectedCookieId, targetSeller, sellerMaxPages, { signal });
       if (seq !== requestSeqRef.current) return;
       setItems(res.items);
       setHasMore(res.hasMore);
@@ -241,6 +272,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
 
   /** handleJumpCollectSeller 从结果卡片一键切入同行店铺采集模式并立即拉取该卖家全店商品。 */
   const handleJumpCollectSeller = (sellerId: string): void => {
+    resetResults();
     setActiveTab('seller');
     setSellerInput(sellerId);
     void runSellerCollect(sellerId);
@@ -363,6 +395,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
                 { id: 'search', label: '全站关键词挖爆款', icon: Search },
                 { id: 'detail', label: '单品链接 / ID 精准提取', icon: Link2 },
                 { id: 'seller', label: '对标同行整店采集', icon: Store },
+                { id: 'radar', label: '爆款雷达', icon: Radar },
               ] as const
             ).map(/* tabItem 描述单个采集入口页签。 */ tabItem => {
               // TabIcon 渲染页签图标组件。
@@ -373,7 +406,8 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
                 <button
                   key={tabItem.id}
                   type="button"
-                  onClick={/* 切换当前采集模式页签。 */ () => setActiveTab(tabItem.id)}
+                  disabled={verifyBusy || verifyWindowOpen}
+                  onClick={/* 切换当前采集模式并清除旧结果。 */ () => { if (activeTab !== tabItem.id) { resetResults(); setActiveTab(tabItem.id); } }}
                   className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-extrabold transition-colors ${
                     active ? 'bg-brand text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200/70 hover:text-slate-900'
                   }`}
@@ -389,7 +423,9 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
             <span className="text-xs font-bold text-slate-600">执行采集账号：</span>
             <select
               value={selectedCookieId}
+              disabled={verifyBusy || verifyWindowOpen}
               onChange={/* event 切换指定执行采集的闲鱼账号并重置旧验证窗口标记。 */ event => {
+                resetResults();
                 setSelectedCookieId(event.target.value);
                 setVerifyWindowOpen(false);
               }}
@@ -407,7 +443,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
             {!verifyWindowOpen ? (
               <button
                 type="button"
-                disabled={!selectedCookieId || verifyBusy}
+                disabled={!selectedCookieId || verifyBusy || activeTab === 'radar'}
                 onClick={/* 在桌面弹出闲鱼网页窗口供用户手动滑过滑块。 */ () => void handleOpenManualVerify()}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-extrabold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
                 title="遇到 RGV587 滑块时无需按 F12 抓包：点此弹出闲鱼窗口手动滑一下，再点一键同步即可"
@@ -593,6 +629,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
         </div>
       </div>
 
+      {activeTab === 'radar' ? <RadarPanel cookieId={selectedCookieId} onInspect={/* id 是待用户确认采集的商品 ID。 */ id => { resetResults(); setDetailInputText(id); setActiveTab('detail'); }} /> : <>
       {banner && (
         <div
           className={`flex flex-col justify-between gap-3 rounded-2xl px-4 py-3.5 text-xs font-bold sm:flex-row sm:items-center ${
@@ -749,7 +786,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
                       <span className="text-base font-black text-rose-600">¥{item.price}</span>
                       {item.originalPrice && <span className="text-slate-400 line-through">¥{item.originalPrice}</span>}
                       <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2.5 py-0.5 font-bold text-orange-600">
-                        <Flame className="h-3.5 w-3.5" /> {item.wantCount} 人想要
+                        <Flame className="h-3.5 w-3.5" /> {item.wantCount < 0 ? '想要人数未知' : `${item.wantCount} 人想要`}
                       </span>
                       {item.area && <span>📍 {item.area}</span>}
                       <span>👤 {item.sellerNick || item.sellerId || '匿名卖家'}</span>
@@ -790,7 +827,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
           </div>
         )}
 
-        {activeTab === 'search' && items.length > 0 && (
+        {activeTab === 'search' && (items.length > 0 || hasMore || pageNumber > 1) && (
           <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
             <span className="text-xs font-bold text-slate-500">当前第 {pageNumber} 页</span>
             <div className="flex items-center gap-2">
@@ -814,6 +851,8 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
           </div>
         )}
       </div>
+
+      </>}
 
       <CollectorItemModal
         item={editingItem}

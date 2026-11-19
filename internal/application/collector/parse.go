@@ -143,15 +143,40 @@ func ParsePriceCents(raw string, allowNegative bool) (int64, error) {
 	if cleaned == "" {
 		return 0, invalid("金额不能为空")
 	}
-	// val、err 解析十进制浮点数。
-	val, err := strconv.ParseFloat(cleaned, 64)
-	if err != nil || math.IsNaN(val) || math.IsInf(val, 0) {
+	// negative 标记加减价的负号，金额本身按十进制整数分值解析以避免浮点误差。
+	negative := strings.HasPrefix(cleaned, "-")
+	if negative && !allowNegative {
+		return 0, invalid("金额不能为负数")
+	}
+	cleaned = strings.TrimPrefix(strings.TrimPrefix(cleaned, "-"), "+")
+	// parts 保存元整数部分以及最多两位小数部分。
+	parts := strings.Split(cleaned, ".")
+	if len(parts) > 2 || parts[0] == "" || len(parts[0]) > 19 {
 		return 0, invalid(fmt.Sprintf("金额格式无效: %s", raw))
 	}
-	// cents 四舍五入换算为分。
-	cents := int64(math.Round(val * 100))
-	if !allowNegative && cents < 0 {
-		return 0, invalid("金额不能为负数")
+	// fraction 统一补足两位小数以拼接成分值文本。
+	fraction := "00"
+	if len(parts) == 2 {
+		if len(parts[1]) == 0 || len(parts[1]) > 2 {
+			return 0, invalid("金额最多保留两位小数")
+		}
+		fraction = (parts[1] + "00")[:2]
+	}
+	// digits 是未带符号的整数分值文本。
+	digits := parts[0] + fraction
+	// r 遍历每个金额字符，只允许十进制数字。
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return 0, invalid("金额格式无效")
+		}
+	}
+	if negative {
+		digits = "-" + digits
+	}
+	// cents、err 是精确的分值及整数范围溢出错误。
+	cents, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil {
+		return 0, invalid("金额超出允许范围")
 	}
 	return cents, nil
 }
@@ -165,10 +190,10 @@ func ComputeTargetPriceCents(sourcePriceText, mode, modeValue string) (int64, er
 	}
 	switch normalizedMode {
 	case "keep":
-		// srcCents、err 解析源商品价格，缺失或为 0 时保底 1.00 元。
+		// srcCents、err 解析源商品价格；未知或零价必须由用户显式选择固定价格。
 		srcCents, err := ParsePriceCents(sourcePriceText, false)
 		if err != nil || srcCents <= 0 {
-			return 100, nil
+			return 0, invalid("源商品价格缺失或无效，请设置固定售价")
 		}
 		return srcCents, nil
 	case "fixed":
@@ -182,12 +207,15 @@ func ComputeTargetPriceCents(sourcePriceText, mode, modeValue string) (int64, er
 		// srcCents、srcErr 解析源商品售价。
 		srcCents, srcErr := ParsePriceCents(sourcePriceText, false)
 		if srcErr != nil || srcCents <= 0 {
-			srcCents = 100
+			return 0, invalid("源商品价格缺失或无效，请设置固定售价")
 		}
 		// deltaCents、deltaErr 解析加减价差额（支持负数降价，如 -0.50）。
 		deltaCents, deltaErr := ParsePriceCents(modeValue, true)
 		if deltaErr != nil {
 			return 0, invalid("加减价幅度格式无效，请填写如 1.00 或 -0.50")
+		}
+		if deltaCents > 0 && srcCents > math.MaxInt64-deltaCents {
+			return 0, invalid("目标售价超出允许范围")
 		}
 		// target 计算最终分值并保证不低于 0.01 元（1 分）。
 		target := srcCents + deltaCents

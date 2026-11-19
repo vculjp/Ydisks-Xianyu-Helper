@@ -13,6 +13,8 @@ type ProductTemplate struct {
 	ID int64
 	// UserID 是模板所属用户。
 	UserID int64
+	// CollectorKey 是仅供采集创建请求复用结果的 SHA-256 摘要，普通模板无需设置。
+	CollectorKey string
 	// Name 是模板在资源库中的备注名。
 	Name string
 	// Title 是发布时使用的商品标题。
@@ -120,6 +122,21 @@ func (p *ProductTemplates) Get(ctx context.Context, userID, id int64) (*ProductT
 // Create 写入新模板并返回主键。
 func (p *ProductTemplates) Create(ctx context.Context, t ProductTemplate) (int64, error) {
 	normalizeProductTemplateJSON(&t)
+	if t.CollectorKey != "" {
+		// query 使用用户与请求摘要的数据库唯一约束，重试命中既有记录时不覆盖用户已编辑的模板。
+		query := `INSERT INTO product_templates (user_id,name,title,description,price_cents,original_price_cents,quantity,postage_mode,postage_cents,category_json,image_ids_json,specs_json,automation_json,collector_key)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)` + dialectUpsert(p.Dialect, []string{"user_id", "collector_key"}, map[string]string{"collector_key": "EXCLUDED.collector_key"})
+		// err 表示首次创建或幂等复用数据库记录时的执行异常。
+		_, err := p.DB.ExecContext(ctx, query, t.UserID, t.Name, t.Title, t.Description, t.PriceCents, t.OriginalPriceCents, t.Quantity, t.PostageMode, t.PostageCents,
+			t.CategoryJSON, t.ImageIDsJSON, t.SpecsJSON, t.AutomationJSON, t.CollectorKey)
+		if err != nil {
+			return 0, err
+		}
+		// id 保存已创建或此前已完成的模板主键。
+		var id int64
+		err = p.DB.QueryRowContext(ctx, `SELECT id FROM product_templates WHERE user_id=? AND collector_key=?`, t.UserID, t.CollectorKey).Scan(&id)
+		return id, err
+	}
 	return insertReturningID(ctx, p.DB, p.Dialect,
 		`INSERT INTO product_templates (user_id,name,title,description,price_cents,original_price_cents,quantity,postage_mode,postage_cents,category_json,image_ids_json,specs_json,automation_json)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,

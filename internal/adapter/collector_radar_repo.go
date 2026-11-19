@@ -123,6 +123,8 @@ func (r *CollectorRadarRepository) SaveSnapshot(ctx context.Context, userID int6
 	// prev、prevErr 读取已有记录主键以决定 INSERT 或 UPDATE。
 	if prev, prevErr := r.store.ViralRadar.GetItemSnapshot(ctx, userID, snap.ItemID); prevErr == nil {
 		existingID = prev.ID
+	} else if !errors.Is(prevErr, db.ErrNotFound) {
+		return prevErr
 	}
 	return r.store.ViralRadar.SaveItemSnapshot(ctx, db.ViralItemSnapshot{
 		ID:                existingID,

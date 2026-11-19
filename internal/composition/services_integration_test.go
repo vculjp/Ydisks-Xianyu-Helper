@@ -108,7 +108,7 @@ func buildTestServices(t *testing.T, provideChat bool) builtServices {
 	return builtServices{services: services, dependencies: dependencies, store: store}
 }
 
-// TestNewAssemblesServicesAndExposesTransportPorts 验证完整装配后每个 transport 端口都已就绪，生命周期组件登记三项且顺序稳定。
+// TestNewAssemblesServicesAndExposesTransportPorts 验证完整装配后每个 transport 端口都已就绪，生命周期组件登记四项且顺序稳定。
 func TestNewAssemblesServicesAndExposesTransportPorts(t *testing.T) {
 	// withChat 沿用运行时预装配的聊天应用。
 	withChat := buildTestServices(t, true)
@@ -116,7 +116,7 @@ func TestNewAssemblesServicesAndExposesTransportPorts(t *testing.T) {
 	ports := withChat.services.TransportPorts()
 	if ports.Orders == nil || ports.OrderRefreshJobs == nil || ports.ItemSinglePublish == nil || ports.ItemBatchPreview == nil ||
 		ports.ItemBatchManagement == nil || ports.ItemSync == nil || ports.ItemCatalog == nil || ports.AccountLogin == nil ||
-		ports.Authentication == nil || ports.AccountSettings == nil || ports.Chat == nil || ports.Cards == nil || ports.Settings == nil || ports.Admin == nil {
+		ports.Authentication == nil || ports.AccountSettings == nil || ports.Chat == nil || ports.Cards == nil || ports.Settings == nil || ports.Admin == nil || ports.Collector == nil {
 		t.Fatalf("端口未全部装配: %+v", ports)
 	}
 	// components 是登记的生命周期组件。
@@ -127,7 +127,7 @@ func TestNewAssemblesServicesAndExposesTransportPorts(t *testing.T) {
 	for _, component := range components {
 		names = append(names, component.Name)
 	}
-	if strings.Join(names, ",") != "order-refresh-recovery,publish-batch-workers,order-reconciliation-recovery" {
+	if strings.Join(names, ",") != "order-refresh-recovery,publish-batch-workers,order-reconciliation-recovery,collector-viral-radar" {
 		t.Fatalf("names=%v", names)
 	}
 	// withoutChat 覆盖组合根现场创建聊天应用的兼容分支。

@@ -129,7 +129,7 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
           <div>
             <h3 className="text-lg font-extrabold text-slate-900">商品详情预览与 AI 防重改写</h3>
             <p className="mt-0.5 text-xs text-slate-500">
-              商品 ID：{item.itemId} · 卖家：{item.sellerNick || item.sellerId || '未知'} · {item.wantCount} 人想要
+              商品 ID：{item.itemId} · 卖家：{item.sellerNick || item.sellerId || '未知'} · {item.wantCount < 0 ? '想要人数未知' : `${item.wantCount} 人想要`}
             </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="关闭弹窗">

@@ -37,25 +37,40 @@ func (s *Service) AddRadarTargets(ctx context.Context, userID int64, inputs []Ra
 	if len(combined) > 30 {
 		return nil, invalid("单次最多添加 30 条监控目标")
 	}
+	// 同一服务内串行校验和写入监控目标，防止并发添加突破总量上限。
+	s.radar.targetMu.Lock()
+	defer s.radar.targetMu.Unlock()
 
 	// existingList、listErr 检查当前用户累计目标上限（最多 50 条以保障慢速巡检节奏）。
 	existingList, listErr := s.radarRepo.ListTargets(ctx, userID)
 	if listErr != nil {
 		return nil, listErr
 	}
-	if len(existingList) >= 50 {
-		return nil, invalid("监控池最多保存 50 条目标，请先清理不再关注的词或同行")
+	// keys 汇总现有与本次新增的唯一监控目标，重复更新不消耗新名额。
+	keys := make(map[string]struct{}, len(existingList)+len(combined))
+	// target 是数据库已保存的监控项。
+	for _, target := range existingList {
+		keys[target.TargetType+"\x00"+target.TargetValue] = struct{}{}
 	}
-
-	// saved 收集写入成功的目标记录。
-	saved := make([]RadarWatchTarget, 0, len(combined))
-	// raw 逐条归一化校验后幂等落库。
+	// normalizedTargets 保存全部通过校验的输入；有非法项时在任何写入之前终止。
+	normalizedTargets := make([]RadarWatchTarget, 0, len(combined))
+	// raw 是当前待校验的用户输入。
 	for _, raw := range combined {
 		// normalized、normErr 校验并转换单条监控项。
 		normalized, normErr := normalizeRadarTargetInput(raw)
 		if normErr != nil {
 			return nil, normErr
 		}
+		keys[normalized.TargetType+"\x00"+normalized.TargetValue] = struct{}{}
+		normalizedTargets = append(normalizedTargets, normalized)
+	}
+	if len(keys) > 50 {
+		return nil, invalid("监控池最多保存 50 条目标，请先清理不再关注的词或同行")
+	}
+	// saved 收集写入成功的目标记录。
+	saved := make([]RadarWatchTarget, 0, len(normalizedTargets))
+	// normalized 是经整批校验后待幂等写入的目标。
+	for _, normalized := range normalizedTargets {
 		// upserted、upsertErr 写入数据库。
 		upserted, upsertErr := s.radarRepo.UpsertTarget(ctx, userID, normalized)
 		if upsertErr != nil {
@@ -138,6 +153,21 @@ func (s *Service) ClearRadarItems(ctx context.Context, userID int64) error {
 	if s.radarRepo == nil {
 		return nil
 	}
+	s.radar.mu.Lock()
+	// run 是用户当前巡检状态，运行期间不得清理快照。
+	run := s.radar.runs[userID]
+	if s.radar.clearing[userID] || (run != nil && run.status.Running) {
+		s.radar.mu.Unlock()
+		return invalid("请先停止当前巡检并等待任务结束，再清空榜单")
+	}
+	s.radar.clearing[userID] = true
+	s.radar.mu.Unlock()
+	// 清理完成或失败均释放启动阻塞标记，不在锁内执行数据库删除。
+	defer func() {
+		s.radar.mu.Lock()
+		delete(s.radar.clearing, userID)
+		s.radar.mu.Unlock()
+	}()
 	return s.radarRepo.ClearSnapshots(ctx, userID)
 }
 
@@ -167,8 +197,13 @@ func (s *Service) UpdateRadarSchedule(ctx context.Context, userID int64, cfg Rad
 			return RadarScheduleConfig{}, ownErr
 		}
 	}
-	// prev、_ 保留此前记录的最近一次自动运行时间戳。
-	prev, _ := s.radarRepo.GetSchedule(ctx, userID)
+	s.radar.scheduleMu.Lock()
+	defer s.radar.scheduleMu.Unlock()
+	// prev、readErr 读取此前自动运行时间，读取失败时不覆盖已有配置。
+	prev, readErr := s.radarRepo.GetSchedule(ctx, userID)
+	if readErr != nil {
+		return RadarScheduleConfig{}, readErr
+	}
 	normalized.LastAutoRunUnix = prev.LastAutoRunUnix
 	// saveErr 保存用户定时巡检设置。
 	if saveErr := s.radarRepo.SaveSchedule(ctx, userID, normalized); saveErr != nil {

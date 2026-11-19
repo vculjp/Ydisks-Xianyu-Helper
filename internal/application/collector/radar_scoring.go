@@ -26,8 +26,6 @@ func buildUpdatedRadarSnapshot(
 	existing RadarItemSnapshot,
 	hasExisting bool,
 ) RadarItemSnapshot {
-	// targetHadBaseline 判断该监控目标此前是否已经完成过至少一轮基线扫描。
-	targetHadBaseline := target.LastScannedAt > 0
 	// pubUnix 优先采用卡片真实发布时间戳，次选历史已记录发布时间，最后按新发过滤窗口保守估算。
 	pubUnix := item.PublishTimeUnix
 	if pubUnix <= 0 && hasExisting && existing.PublishTimeUnix > 0 {
@@ -55,28 +53,12 @@ func buildUpdatedRadarSnapshot(
 		firstSeenAt = existing.FirstSeenAt
 		firstWant = existing.FirstWantCount
 		scanCount = existing.ScanCount + 1
-		// 间隔不足 60 秒的同轮重复命中（例如两个监控词同时扫到同一爆品）累加而不清零已算出的增量。
-		if nowUnix-existing.LatestSeenAt < 60 {
-			prevSeenAt = existing.PrevSeenAt
-			prevWant = existing.PrevWantCount
-			// diff 是同轮内可能刚涨的微增。
-			diff := item.WantCount - existing.LatestWantCount
-			if diff > 0 {
-				deltaWant = existing.DeltaWant + diff
-			} else {
-				deltaWant = existing.DeltaWant
-			}
-		} else {
-			prevSeenAt = existing.LatestSeenAt
-			prevWant = existing.LatestWantCount
-			if item.WantCount > existing.LatestWantCount {
-				deltaWant = item.WantCount - existing.LatestWantCount
-			}
+		// 同轮重复命中由巡检协调器去重，此处只计算本次有效观测与上一轮的增量。
+		prevSeenAt = existing.LatestSeenAt
+		prevWant = existing.LatestWantCount
+		if item.WantCount > existing.LatestWantCount {
+			deltaWant = item.WantCount - existing.LatestWantCount
 		}
-	} else if targetHadBaseline && item.WantCount > 0 {
-		// 对已经建立过基线的同行店铺或新发词池，本轮新冒出来且已有想要的商品直接计为新上榜起量增量。
-		prevWant = 0
-		deltaWant = item.WantCount
 	}
 
 	// ageHours 估算商品已上架小时数（保底按 2 小时计算以避免刚发几分钟出现极端除零高分）。
@@ -106,7 +88,7 @@ func buildUpdatedRadarSnapshot(
 		}
 	}
 	// viralScore 综合：Δ想要增量权重最高（×18） + 日均飙升速率（×0.35） + 基础想要验证（×2） + 新发加权。
-	viralScore := deltaWant*18 + (velocityX100*35)/100 + cappedWant*2 + freshnessBonus
+	viralScore := deltaWant*18 + (velocityX100*35)/10000 + cappedWant*2 + freshnessBonus
 
 	// sourceLabel 记录可读来源名称。
 	sourceLabel := target.Label

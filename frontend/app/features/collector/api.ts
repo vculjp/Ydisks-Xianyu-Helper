@@ -47,6 +47,7 @@ const toCollectedProduct = (dto: CollectedItemTransport): CollectedProduct => ({
   isFreeShipping: dto.is_free_shipping,
   isMultiSpec: dto.is_multi_spec,
   hasFullDetail: dto.has_full_detail,
+  publishTimeUnix: dto.publish_time_unix,
   webUrl: dto.web_url,
 });
 
@@ -200,7 +201,7 @@ export const saveProductsToTemplates = async (
         items: params.items.map(/* item 转换为后端接收的待保存条目。 */ item => ({
           item_id: item.itemId,
           title: item.title,
-          description: item.description || item.title,
+          description: item.description,
           price: item.price,
           original_price: item.originalPrice,
           image_urls: item.imageUrls.length > 0 ? item.imageUrls : (item.picUrl ? [item.picUrl] : []),

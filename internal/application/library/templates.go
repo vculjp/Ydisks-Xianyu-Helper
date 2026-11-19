@@ -35,6 +35,8 @@ type Template struct {
 	ID int64
 	// UserID 是模板所属用户。
 	UserID int64
+	// CollectorKey 是采集转存请求的内部幂等摘要，仅创建时使用；普通模板留空。
+	CollectorKey string
 	// Name 是资源库中的备注名。
 	Name string
 	// Title 是发布时的商品标题。

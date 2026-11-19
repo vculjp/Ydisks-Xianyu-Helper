@@ -226,8 +226,11 @@ func (c *ClientImpl) searchMarketItemsOnce(ctx context.Context, cookiesStr strin
 	if err != nil || decoded == nil {
 		return nil, ret, updatedCookies, err
 	}
-	// items、hasMore、totalCount 是从 data.resultList 提取出的商品摘要与分页状态。
-	items, hasMore, totalCount := parseMarketSearchData(decoded, req.RowsPerPage)
+	// items、hasMore、totalCount、parseErr 分别是商品摘要、分页状态、总数以及协议结构异常。
+	items, hasMore, totalCount, parseErr := parseMarketSearchData(decoded, req.RowsPerPage)
+	if parseErr != nil {
+		return nil, ret, updatedCookies, parseErr
+	}
 	return &MarketSearchResult{
 		Items:          items,
 		PageNumber:     req.PageNumber,
@@ -364,7 +367,7 @@ func (c *ClientImpl) doSignedMTopPost(
 		Data map[string]any `json:"data"`
 	}
 	// unmarshalErr 表示响应不是合法的 MTOP JSON 对象（例如被网关拦截返回 HTML）。
-	if unmarshalErr := json.Unmarshal(raw, &envelope); unmarshalErr != nil {
+	if unmarshalErr := decodeMarketJSON(raw, &envelope); unmarshalErr != nil {
 		return nil, nil, updated, c.mtopResponseFailureWithCause(apiLabel, resp.StatusCode, nil, "JSON 解析失败", unmarshalErr)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {

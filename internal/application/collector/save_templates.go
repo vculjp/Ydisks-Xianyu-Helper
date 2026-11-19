@@ -2,10 +2,13 @@ package collector
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
-	"path"
 	"net/url"
+	"path"
 	"strings"
+	"time"
 
 	itemapp "xianyu-go/internal/application/items"
 	libraryapp "xianyu-go/internal/application/library"
@@ -61,14 +64,19 @@ func (s *Service) SaveToTemplates(ctx context.Context, userID int64, input SaveT
 	}
 	// riskAborted 一旦在补抓详情时命中平台风控，后续条目不再发起任何平台详情请求。
 	riskAborted := false
+	// batchCtx、cancel 为同步转存保留 HTTP 写响应时间；超时后返回已有结果而非要求用户盲目重试。
+	batchCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
+	defer cancel()
 
 	// idx、item 按顺序逐件处理转存任务。
 	for idx, item := range input.Items {
-		if ctx.Err() != nil {
-			return result, ctx.Err()
+		if batchCtx.Err() != nil {
+			result.Failed++
+			result.Results = append(result.Results, SavedTemplateOutcome{ItemID: item.ItemID, Title: item.Title, Error: "批次已取消或达到时间预算，本商品尚未执行"})
+			continue
 		}
 		// outcome、aborted 处理单件商品的补详情、AI 改写、下图与模板创建。
-		outcome, aborted := s.saveSingleTemplateItem(ctx, userID, cookieID, idx, item, input, postageMode, quantity, automation, riskAborted)
+		outcome, aborted := s.saveSingleTemplateItem(batchCtx, userID, cookieID, idx, item, input, postageMode, quantity, automation, riskAborted)
 		if aborted {
 			riskAborted = true
 			result.AbortedByRisk = true
@@ -110,6 +118,17 @@ func (s *Service) saveSingleTemplateItem(
 	imageURLs := filterNonEmptyURLs(item.ImageURLs)
 	// triggeredAbort 记录本条是否新触发了风控熔断。
 	triggeredAbort := false
+	// keyInput 是单商品的原始转存请求，排除批次其他商品和账号选择以保证等价重试的摘要稳定。
+	keyInput := input
+	keyInput.Items = []SaveTemplateItem{item}
+	keyInput.CookieID = ""
+	// encoded、encodeErr 保存幂等摘要的输入及编码异常，原始内容不得记录日志。
+	encoded, encodeErr := json.Marshal(keyInput)
+	if encodeErr != nil {
+		return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: "生成转存幂等标识失败"}, false
+	}
+	// collectorKey 是持久化唯一约束使用的单商品 SHA-256 摘要。
+	collectorKey := fmt.Sprintf("%x", sha256.Sum256(encoded))
 
 	// needDetail 判断是否需要向平台补抓多图和详情文案。
 	needDetail := input.FetchDetailIfMissing && !skipRemoteDetail && cookieID != "" && itemID != "" && (!item.HasFullDetail || description == "" || len(imageURLs) == 0)
@@ -132,10 +151,10 @@ func (s *Service) saveSingleTemplateItem(
 			if title == "" {
 				title = detail.Title
 			}
-			if description == "" {
+			if description == "" || (!item.HasFullDetail && description == item.Title) {
 				description = detail.Description
 			}
-			if priceText == "" {
+			if priceText == "" || priceText == "0.00" || priceText == "0" {
 				priceText = detail.Price
 			}
 			if origPriceText == "" {
@@ -206,6 +225,7 @@ func (s *Service) saveSingleTemplateItem(
 	// created、createErr 调用资源库模板服务完成完整校验（含发货模板变量校验）与落库。
 	created, createErr := s.templateCreator.CreateTemplate(ctx, libraryapp.Template{
 		UserID:             userID,
+		CollectorKey:       collectorKey,
 		Name:               templateName,
 		Title:              truncateRunes(title, 255),
 		Description:        description,
@@ -255,8 +275,14 @@ func (s *Service) downloadAndStoreImages(ctx context.Context, userID int64, item
 	}
 	// ids 提取保持主图顺序的图片主键。
 	ids := make([]int64, 0, len(stored))
-	// res 是单张图片的入库结果。
-	for _, res := range stored {
+	// idx、res 分别对应主图或副图顺序及单张上传结果；不允许无效图 ID 进入模板。
+	for idx, res := range stored {
+		if res.Error != "" || res.Image.ID <= 0 {
+			if idx == 0 {
+				return nil, fmt.Errorf("主图写入图片库失败：%s", res.Error)
+			}
+			continue
+		}
 		ids = append(ids, res.Image.ID)
 	}
 	if len(ids) == 0 {

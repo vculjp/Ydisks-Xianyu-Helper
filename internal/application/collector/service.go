@@ -178,18 +178,21 @@ func (s *Service) CollectItemDetails(ctx context.Context, userID int64, input De
 		Items:  make([]CollectedItem, 0, len(itemIDs)),
 		Errors: make([]DetailItemError, 0),
 	}
+	// batchCtx、cancel 限制同步批次预算，确保可在 HTTP 写超时前返回已完成条目。
+	batchCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
+	defer cancel()
 	// itemID 是当前顺序抓取的目标商品 ID。
 	for _, itemID := range itemIDs {
-		if ctx.Err() != nil {
-			break
+		if batchCtx.Err() != nil || out.AbortedByRisk {
+			out.Errors = append(out.Errors, DetailItemError{ItemID: itemID, Message: "批次已停止，本商品尚未请求"})
+			continue
 		}
 		// detail、err 请求单个商品完整详情。
-		detail, err := s.platform.FetchItemDetail(ctx, cookieID, itemID, useBackground)
+		detail, err := s.platform.FetchItemDetail(batchCtx, cookieID, itemID, useBackground)
 		if err != nil {
 			out.Errors = append(out.Errors, DetailItemError{ItemID: itemID, Message: err.Error()})
 			if s.platform.IsAbortError(err) {
 				out.AbortedByRisk = true
-				break
 			}
 			continue
 		}
@@ -238,14 +241,20 @@ func (s *Service) CollectSellerItems(ctx context.Context, userID int64, input Se
 	var reportedTotal int
 	// lastPage 记录最后成功完成的页码。
 	lastPage := 1
+	// batchCtx、cancel 为多页采集保留响应写入时间，时间到达后交付已完成的页。
+	batchCtx, cancel := context.WithTimeout(ctx, 100*time.Second)
+	defer cancel()
 
 	// page 从第 1 页顺序翻页至 maxPages。
 	for page := 1; page <= maxPages; page++ {
-		if ctx.Err() != nil {
-			return SearchResult{}, ctx.Err()
+		if batchCtx.Err() != nil {
+			if page == 1 {
+				return SearchResult{}, batchCtx.Err()
+			}
+			return SearchResult{Items: allItems, PageNumber: lastPage, HasMore: true, TotalCount: maxInt(reportedTotal, len(allItems)), Warning: "采集批次时间预算已耗尽，已保留成功分页"}, nil
 		}
 		// pageItems、hasMore、total、err 请求当前页店铺在售列表。
-		pageItems, hasMore, total, err := s.platform.FetchSellerPage(ctx, cookieID, sellerID, page, 20, useBackground)
+		pageItems, hasMore, total, err := s.platform.FetchSellerPage(batchCtx, cookieID, sellerID, page, 20, useBackground)
 		if err != nil {
 			if page == 1 {
 				return SearchResult{}, err
@@ -265,6 +274,8 @@ func (s *Service) CollectSellerItems(ctx context.Context, userID int64, input Se
 		if total > reportedTotal {
 			reportedTotal = total
 		}
+		// beforeCount 记录本页前累计有效商品数，用于识别平台重复返回的分页。
+		beforeCount := len(allItems)
 		// item 遍历本页商品并去重追加。
 		for _, item := range pageItems {
 			// exists 判断商品 ID 是否已在前序分页出现。
@@ -273,6 +284,13 @@ func (s *Service) CollectSellerItems(ctx context.Context, userID int64, input Se
 			}
 			seen[item.ItemID] = struct{}{}
 			allItems = append(allItems, item)
+		}
+		if hasMore && len(allItems) == beforeCount {
+			return SearchResult{
+				Items: allItems, PageNumber: lastPage, HasMore: false,
+				TotalCount: maxInt(reportedTotal, len(allItems)),
+				Warning:    fmt.Sprintf("第 %d 页未出现新商品，已停止继续翻页", page),
+			}, nil
 		}
 		if !hasMore || len(pageItems) == 0 {
 			break

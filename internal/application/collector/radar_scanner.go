@@ -19,8 +19,14 @@ type radarUserRun struct {
 
 // radarCoordinator 管理按用户串行、8~14 秒随机抖动限速的爆品巡检 worker 与可选低频自动调度。
 type radarCoordinator struct {
-	// mu 保护 rootCtx、closed 与 runs。
+	// mu 保护 rootCtx、closed、runs 与 clearing，不在持锁时执行网络或仓储操作。
 	mu sync.Mutex
+	// targetMu 串行化本进程监控项新增的总量校验和写入，仓储调用受请求上下文约束。
+	targetMu sync.Mutex
+	// scheduleMu 保护定时配置的读改写，不能在持有 mu 时获取。
+	scheduleMu sync.Mutex
+	// clearing 记录正在清理榜单的用户，防止清理期间启动新巡检。
+	clearing map[int64]bool
 	// rootCtx 是由生命周期协调器注入的进程根 Context。
 	rootCtx context.Context
 	// rootCancel 在进程退出时取消内部定时巡检循环。
@@ -44,6 +50,7 @@ func newRadarCoordinator(customDelay func() time.Duration) *radarCoordinator {
 	}
 	return &radarCoordinator{
 		runs:      make(map[int64]*radarUserRun),
+		clearing:  make(map[int64]bool),
 		stepDelay: delayFn,
 	}
 }
@@ -201,18 +208,22 @@ func (s *Service) enabledRadarTargets(ctx context.Context, userID int64) ([]Rada
 
 // launchUserRadarScan 在进程生命周期 Context 下启动单用户异步巡检协程。
 func (s *Service) launchUserRadarScan(userID int64, cookieID string, targets []RadarWatchTarget, schedule RadarScheduleConfig) (RadarScanStatus, error) {
+	if len(targets) == 0 {
+		return RadarScanStatus{}, invalid("没有启用的监控目标")
+	}
 	s.radar.mu.Lock()
 	if s.radar.closed {
 		s.radar.mu.Unlock()
 		return RadarScanStatus{}, invalid("服务正在关闭，无法启动新巡检")
 	}
-	// existing 若已在运行则直接返回当前运行状态而不重复叠加任务。
-	if existing := s.radar.runs[userID]; existing != nil && existing.status.Running {
-		// snap 复制运行中状态。
-		snap := existing.status
-		snap.Schedule = schedule
+	if s.radar.clearing[userID] {
 		s.radar.mu.Unlock()
-		return snap, nil
+		return RadarScanStatus{}, invalid("榜单正在清理，请稍后启动巡检")
+	}
+	// existing 表示已有任务执行权，不再错误地登记新的自动运行时间。
+	if existing := s.radar.runs[userID]; existing != nil && existing.status.Running {
+		s.radar.mu.Unlock()
+		return RadarScanStatus{}, invalid("巡检已在运行，请等待完成或先停止")
 	}
 	// parentCtx 使用进程根 Context（测试未调用 StartRadar 时回退到 Background）。
 	parentCtx := s.radar.rootCtx
@@ -249,13 +260,17 @@ func (s *Service) executeRadarScan(ctx context.Context, userID int64, cookieID s
 			run.status.Running = false
 			run.status.CurrentTarget = ""
 			run.status.AbortedByRisk = aborted
-			run.status.LastError = errMsg
+			if errMsg != "" {
+				run.status.LastError = errMsg
+			}
 			run.status.FinishedAt = time.Now().Unix()
 			run.cancel = nil
 		}
 		s.radar.mu.Unlock()
 	}
 
+	// seen 记录本轮已成功保存的商品，跨目标重复命中不再次统计增量或覆盖来源。
+	seen := make(map[string]struct{})
 	// idx、target 顺序巡检每个监控项，相邻两项之间严格插入 8~14 秒随机休眠。
 	for idx, target := range targets {
 		if ctx.Err() != nil {
@@ -305,34 +320,66 @@ func (s *Service) executeRadarScan(ctx context.Context, userID int64, cookieID s
 
 		// nowUnix 统一本目标内全部商品的观测时间戳。
 		nowUnix := time.Now().Unix()
+		// updated 只统计真正落库成功的商品，失败数不计入成功进度。
+		updated := 0
+		// lastWriteError 保存本目标的最近一次数据库失败，结束时保留供用户排查。
+		lastWriteError := ""
 		// risingAdded 统计本目标内出现 Δ想要 > 0 或日均想要 >= 10 的黑马数。
 		risingAdded := 0
 		// item 逐件对比历史快照并更新数据库。
 		for _, item := range items {
+			if ctx.Err() != nil {
+				break
+			}
+			if item.WantCount < 0 {
+				lastWriteError = "部分商品未提供有效想要人数，未覆盖既有热度快照"
+				continue
+			}
+			// exists 标记该商品已在本轮其他目标成功持久化。
+			if _, exists := seen[item.ItemID]; exists {
+				continue
+			}
 			// prevSnap、found、getErr 查询该商品是否已有历史记录。
 			prevSnap, found, getErr := s.radarRepo.GetSnapshot(ctx, userID, item.ItemID)
 			if getErr != nil {
+				lastWriteError = "读取商品快照失败：" + getErr.Error()
 				continue
 			}
 			// nextSnap 计算最新 Δ想要增量、日均飙升速率与黑马得分。
 			nextSnap := buildUpdatedRadarSnapshot(nowUnix, target, item, prevSnap, found)
 			// saveErr 写入更新后的商品热度快照。
 			if saveErr := s.radarRepo.SaveSnapshot(ctx, userID, nextSnap); saveErr == nil {
+				seen[item.ItemID] = struct{}{}
+				updated++
 				if nextSnap.DeltaWant > 0 || nextSnap.DailyVelocityX100 >= 1000 {
 					risingAdded++
 				}
+			} else {
+				lastWriteError = "保存商品快照失败：" + saveErr.Error()
 			}
 		}
-		_ = s.radarRepo.MarkTargetScanned(ctx, userID, target.ID, nowUnix, len(items))
+		if ctx.Err() == nil && lastWriteError == "" {
+			// markErr 表示本目标观测统计的数据库写入异常。
+			if markErr := s.radarRepo.MarkTargetScanned(ctx, userID, target.ID, nowUnix, len(items)); markErr != nil {
+				lastWriteError = "保存目标扫描统计失败：" + markErr.Error()
+			}
+		}
 
 		s.radar.mu.Lock()
 		// run 累加本目标完成数与异动商品数。
 		if run := s.radar.runs[userID]; run != nil {
 			run.status.CompletedTargets = idx + 1
-			run.status.UpdatedItems += len(items)
+			run.status.UpdatedItems += updated
 			run.status.RisingItems += risingAdded
+			if lastWriteError != "" {
+				run.status.LastError = lastWriteError
+			}
 		}
 		s.radar.mu.Unlock()
+		if ctx.Err() != nil {
+			finish(false, "已停止本轮爆品巡检")
+			return
+		}
 	}
 	finish(false, "")
 }
@@ -350,6 +397,7 @@ func (s *Service) fetchSingleRadarTarget(ctx context.Context, cookieID string, t
 		PageNumber:  1,
 		RowsPerPage: 30,
 		PublishDays: target.PublishDays,
+		Background:  true,
 	})
 	return items, err
 }
@@ -406,8 +454,22 @@ func (s *Service) triggerDueScheduledScans(ctx context.Context) {
 		if tErr != nil || len(targets) == 0 {
 			continue
 		}
-		cfg.LastAutoRunUnix = nowUnix
-		_ = s.radarRepo.SaveSchedule(ctx, entry.UserID, cfg)
-		_, _ = s.launchUserRadarScan(entry.UserID, cfg.CookieID, targets, cfg)
+		s.radar.scheduleMu.Lock()
+		// latest、readErr 在获得定时配置写锁后重新读取，避免覆盖刚关闭或改动的计划。
+		latest, readErr := s.radarRepo.GetSchedule(ctx, entry.UserID)
+		if readErr != nil || !latest.Enabled || latest.CookieID != cfg.CookieID || latest.IntervalHours != cfg.IntervalHours ||
+			nowUnix-latest.LastAutoRunUnix < int64(latest.IntervalHours)*3600 {
+			s.radar.scheduleMu.Unlock()
+			continue
+		}
+		// launchErr 仅在本轮真正获得执行权时为 nil。
+		if _, launchErr := s.launchUserRadarScan(entry.UserID, latest.CookieID, targets, latest); launchErr == nil {
+			latest.LastAutoRunUnix = nowUnix
+			// saveErr 表示定时运行时间持久化失败，停止当前任务以免调度状态与执行事实失配。
+			if saveErr := s.radarRepo.SaveSchedule(ctx, entry.UserID, latest); saveErr != nil {
+				_, _ = s.StopRadarScan(ctx, entry.UserID)
+			}
+		}
+		s.radar.scheduleMu.Unlock()
 	}
 }

@@ -255,7 +255,7 @@ func libraryTemplateRow(template libraryapp.Template) (db.ProductTemplate, error
 			return db.ProductTemplate{}, err
 		}
 	}
-	return db.ProductTemplate{ID: template.ID, UserID: template.UserID, Name: template.Name, Title: template.Title, Description: template.Description,
+	return db.ProductTemplate{ID: template.ID, UserID: template.UserID, CollectorKey: template.CollectorKey, Name: template.Name, Title: template.Title, Description: template.Description,
 		PriceCents: template.PriceCents, OriginalPriceCents: template.OriginalPriceCents, Quantity: template.Quantity, PostageMode: template.PostageMode,
 		PostageCents: template.PostageCents, CategoryJSON: string(category), ImageIDsJSON: string(images), SpecsJSON: string(specs), AutomationJSON: string(automation)}, nil
 }

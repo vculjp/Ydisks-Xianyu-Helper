@@ -445,6 +445,10 @@ func mtopBool(value any) bool {
 		return typed
 	case float64:
 		return typed != 0
+	case json.Number:
+		// n、err 是保留精度解码后的数值和转换错误，兼容平台以 0/1 返回布尔值。
+		n, err := typed.Float64()
+		return err == nil && n != 0
 	case int:
 		return typed != 0
 	case string:

@@ -641,7 +641,7 @@ func mtopString(v any) string {
 	case string:
 		return x
 	case float64:
-		return strconv.FormatInt(int64(x), 10)
+		return strconv.FormatFloat(x, 'f', -1, 64)
 	case int:
 		return strconv.Itoa(x)
 	case json.Number:

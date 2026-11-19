@@ -14,7 +14,7 @@ export const buildSelectionAnalysisRows = (items: ReadonlyArray<CollectedProduct
     item.title,
     item.price,
     item.originalPrice,
-    String(item.wantCount),
+    item.wantCount < 0 ? '' : String(item.wantCount),
     String(item.browseCount),
     item.isFreeShipping ? '是' : '否',
     item.isMultiSpec ? '是' : '否',

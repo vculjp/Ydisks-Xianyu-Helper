@@ -59,6 +59,35 @@ func TestLibraryImagesLifecycle(t *testing.T) {
 	}
 }
 
+// TestCollectorTemplateIdempotentCreate 验证真实 SQLite 唯一约束在重复转存时复用主键且不修改旧模板。
+func TestCollectorTemplateIdempotentCreate(t *testing.T) {
+	// store、cleanup 提供真实迁移数据库与清理函数。
+	store, cleanup := newTestDB(t)
+	defer cleanup()
+	// userID 表示模板所属用户。
+	userID, _ := seedAccount(t, store)
+	// ctx 是两次写入共用的测试上下文。
+	ctx := context.Background()
+	// input 是相同来源及配置的模板请求。
+	input := ProductTemplate{UserID: userID, CollectorKey: "same-request", Name: "模板", Title: "原始标题", PriceCents: 99, Quantity: 1}
+	// id、err 是首次保存的主键与错误。
+	id, err := store.ProductTemplates.Create(ctx, input)
+	if err != nil || id == 0 {
+		t.Fatalf("首次保存失败: %d %v", id, err)
+	}
+	input.Title = "重试不应覆盖"
+	// duplicate、retryErr 是幂等重试的主键与异常。
+	duplicate, retryErr := store.ProductTemplates.Create(ctx, input)
+	if retryErr != nil || duplicate != id {
+		t.Fatalf("幂等重试失败: %d %v", duplicate, retryErr)
+	}
+	// rows、listErr 验证最终仅有一条模板记录。
+	rows, listErr := store.ProductTemplates.List(ctx, userID)
+	if listErr != nil || len(rows) != 1 || rows[0].Title != "原始标题" {
+		t.Fatalf("重复写入或覆盖旧数据: %+v %v", rows, listErr)
+	}
+}
+
 // TestProductTemplatesLifecycle 覆盖模板的创建、默认值补齐、更新、隔离读取和删除。
 func TestProductTemplatesLifecycle(t *testing.T) {
 	// store、cleanup 提供迁移后的 SQLite 测试数据库。

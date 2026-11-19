@@ -91,7 +91,7 @@ func (p *CollectorPlatformPort) SearchMarket(ctx context.Context, cookieID strin
 	defer cancel()
 
 	// snapshot、cookieVal、callCtx、session、beginErr 准备非持锁的平台调用会话。
-	snapshot, cookieVal, callCtx, session, beginErr := p.beginSession(requestCtx, cookieID, false)
+	snapshot, cookieVal, callCtx, session, beginErr := p.beginSession(requestCtx, cookieID, params.Background)
 	if beginErr != nil {
 		return nil, false, 0, beginErr
 	}
@@ -298,20 +298,20 @@ func toAppCollectedItems(items []mtop.MarketCollectedItem) []collectorapp.Collec
 // toAppCollectedItem 将单条 MTOP 采集商品映射为应用层模型。
 func toAppCollectedItem(item mtop.MarketCollectedItem) collectorapp.CollectedItem {
 	return collectorapp.CollectedItem{
-		ItemID:         item.ItemID,
-		Title:          item.Title,
-		Description:    item.Description,
-		Price:          item.Price,
-		OriginalPrice:  item.OriginalPrice,
-		PicURL:         item.PicURL,
-		ImageURLs:      append([]string(nil), item.ImageURLs...),
-		Area:           item.Area,
-		SellerID:       item.SellerID,
-		SellerNick:     item.SellerNick,
-		WantCount:      item.WantCount,
-		BrowseCount:    item.BrowseCount,
-		CategoryID:     item.CategoryID,
-		IsFreeShipping: item.IsFreeShipping,
+		ItemID:          item.ItemID,
+		Title:           item.Title,
+		Description:     item.Description,
+		Price:           item.Price,
+		OriginalPrice:   item.OriginalPrice,
+		PicURL:          item.PicURL,
+		ImageURLs:       append([]string(nil), item.ImageURLs...),
+		Area:            item.Area,
+		SellerID:        item.SellerID,
+		SellerNick:      item.SellerNick,
+		WantCount:       item.WantCount,
+		BrowseCount:     item.BrowseCount,
+		CategoryID:      item.CategoryID,
+		IsFreeShipping:  item.IsFreeShipping,
 		IsMultiSpec:     item.IsMultiSpec,
 		HasFullDetail:   item.HasFullDetail,
 		PublishTimeUnix: item.PublishTimeUnix,

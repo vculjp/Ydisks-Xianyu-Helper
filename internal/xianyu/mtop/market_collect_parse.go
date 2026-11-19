@@ -63,9 +63,12 @@ func buildMarketSearchPayload(req MarketSearchRequest) map[string]any {
 }
 
 // parseMarketSearchData 从全站搜索响应 data 中提取商品列表、是否有下一页及估算总量。
-func parseMarketSearchData(data map[string]any, rowsPerPage int) ([]MarketCollectedItem, bool, int) {
-	// rawList 保存平台返回的 resultList 数组；缺失时视为空结果。
-	rawList, _ := data["resultList"].([]any)
+func parseMarketSearchData(data map[string]any, rowsPerPage int) ([]MarketCollectedItem, bool, int, error) {
+	// rawList、ok 校验平台搜索列表的真实结构，避免协议异常被当成没有商品。
+	rawList, ok := data["resultList"].([]any)
+	if !ok {
+		return nil, false, 0, fmt.Errorf("搜索结果缺少有效 resultList 数组")
+	}
 	// seen 防止同一页内偶发推荐混排产生重复商品 ID。
 	seen := make(map[string]struct{}, len(rawList))
 	// items 保存本页解析成功的有效商品摘要。
@@ -91,7 +94,10 @@ func parseMarketSearchData(data map[string]any, rowsPerPage int) ([]MarketCollec
 	if totalCount < len(items) {
 		totalCount = len(items)
 	}
-	return items, hasMore, totalCount
+	if len(rawList) > 0 && len(items) == 0 {
+		return nil, false, 0, fmt.Errorf("搜索返回非空列表但无法解析有效商品")
+	}
+	return items, hasMore, totalCount, nil
 }
 
 // parseMarketSearchCard 兼容闲鱼 PC 搜索卡片的多层嵌套与序列化字符串形态，提取单件商品字段。
@@ -194,18 +200,18 @@ func parseMarketSearchCard(rawEntry any) (MarketCollectedItem, bool) {
 	freeShipping := extractFreeShippingFlag(exContent, detailParams)
 
 	return MarketCollectedItem{
-		ItemID:         itemID,
-		Title:          title,
-		Price:          price,
-		OriginalPrice:  originalPrice,
-		PicURL:         picURL,
-		ImageURLs:      images,
-		Area:           area,
-		SellerID:       sellerID,
-		SellerNick:     sellerNick,
-		WantCount:      wantCount,
-		CategoryID:     firstNonEmptyString(mtopString(clickArgs["cat_id"]), mtopString(exContent["catId"])),
-		IsFreeShipping: freeShipping,
+		ItemID:          itemID,
+		Title:           title,
+		Price:           price,
+		OriginalPrice:   originalPrice,
+		PicURL:          picURL,
+		ImageURLs:       images,
+		Area:            area,
+		SellerID:        sellerID,
+		SellerNick:      sellerNick,
+		WantCount:       wantCount,
+		CategoryID:      firstNonEmptyString(mtopString(clickArgs["cat_id"]), mtopString(exContent["catId"])),
+		IsFreeShipping:  freeShipping,
 		IsMultiSpec:     mtopBool(detailParams["isSKU"]),
 		HasFullDetail:   false,
 		PublishTimeUnix: extractPublishTimeUnix(exContent, detailParams, clickArgs),
@@ -259,23 +265,24 @@ func parseMarketItemDetailData(data map[string]any, fallbackItemID string) (*Mar
 	transportFee := strings.TrimSpace(mtopString(itemDO["transportFee"]))
 
 	return &MarketCollectedItem{
-		ItemID:         itemID,
-		Title:          title,
-		Description:    description,
-		Price:          price,
-		OriginalPrice:  originalPrice,
-		PicURL:         picURL,
-		ImageURLs:      images,
-		Area:           strings.TrimSpace(firstNonEmptyString(mtopString(sellerDO["city"]), mtopString(itemDO["city"]))),
-		SellerID:       firstNonEmptyString(mtopString(sellerDO["sellerId"]), mtopString(itemDO["userId"])),
-		SellerNick:     firstNonEmptyString(mtopString(sellerDO["nick"]), mtopString(sellerDO["uniqueName"])),
-		WantCount:      firstPositiveInt(mtopInt(itemDO["wantCnt"]), mtopInt(itemDO["favorCnt"])),
-		BrowseCount:    mtopInt(itemDO["browseCnt"]),
-		CategoryID:     firstNonEmptyString(mtopString(itemDO["categoryId"]), mtopString(itemDO["catId"])),
-		IsFreeShipping: transportFee == "" || transportFee == "0" || transportFee == "0.00",
-		IsMultiSpec:    len(skuList) > 0,
-		HasFullDetail:  true,
-		WebURL:         "https://www.goofish.com/item?id=" + itemID,
+		ItemID:          itemID,
+		Title:           title,
+		Description:     description,
+		Price:           price,
+		OriginalPrice:   originalPrice,
+		PicURL:          picURL,
+		ImageURLs:       images,
+		Area:            strings.TrimSpace(firstNonEmptyString(mtopString(sellerDO["city"]), mtopString(itemDO["city"]))),
+		SellerID:        firstNonEmptyString(mtopString(sellerDO["sellerId"]), mtopString(itemDO["userId"])),
+		SellerNick:      firstNonEmptyString(mtopString(sellerDO["nick"]), mtopString(sellerDO["uniqueName"])),
+		WantCount:       extractWantCount(itemDO, nil, nil),
+		BrowseCount:     mtopInt(itemDO["browseCnt"]),
+		CategoryID:      firstNonEmptyString(mtopString(itemDO["categoryId"]), mtopString(itemDO["catId"])),
+		IsFreeShipping:  transportFee == "0" || transportFee == "0.00",
+		IsMultiSpec:     len(skuList) > 0,
+		HasFullDetail:   true,
+		PublishTimeUnix: extractPublishTimeUnix(itemDO, nil, nil),
+		WebURL:          "https://www.goofish.com/item?id=" + itemID,
 	}, nil
 }
 
@@ -325,8 +332,12 @@ func parseSellerShopData(data map[string]any, sellerUserID string, pageNumber, p
 	}
 	// totalCount、totalPages 计算分页元数据。
 	totalCount, totalPages := itemListPagination(data, pageNumber, pageSize)
-	// hasMore 判断是否仍有下一页可读：优先读 nextPage 布尔字段，其次对比总页数和当前卡片数。
-	hasMore := mtopBool(data["nextPage"]) || (totalPages > 0 && pageNumber < totalPages) || (totalPages == 0 && len(cards) >= pageSize)
+	// hasMore 优先遵循明确的分页终止标志，仅在缺少标志时依据总页数和当前卡片数估计。
+	hasMore := (totalPages > 0 && pageNumber < totalPages) || (totalPages == 0 && len(cards) >= pageSize)
+	// next、exists 表示平台明确报告的下一页状态及是否存在该字段。
+	if next, exists := data["nextPage"]; exists {
+		hasMore = mtopBool(next)
+	}
 	if totalCount < len(out) {
 		totalCount = len(out)
 	}
@@ -475,21 +486,25 @@ func extractMarketCardPrice(exContent, detailParams, clickArgs map[string]any) s
 
 // extractWantCount 从卡片字段、埋点参数及 fishTags 标签树中提取“想要”人数。
 func extractWantCount(exContent, detailParams, args map[string]any) int {
-	// direct 先检查明确的数值字段。
-	direct := firstPositiveInt(
-		mtopInt(args["wantNum"]),
-		mtopInt(args["wantCnt"]),
-		mtopInt(exContent["wantCnt"]),
-		mtopInt(detailParams["wantCnt"]),
-	)
-	if direct > 0 {
-		return direct
+	// candidates 保存明确的想要人数字段，真实零值不允许被其他统计指标覆盖。
+	candidates := []any{args["wantNum"], args["wantCnt"], exContent["wantCnt"], exContent["wantNum"], detailParams["wantCnt"]}
+	// candidate 是当前可能提供的想要数原始值。
+	for _, candidate := range candidates {
+		// n、err 保存非负整数人数及解析失败。
+		n, err := strconv.Atoi(strings.TrimSpace(mtopString(candidate)))
+		if err == nil && n >= 0 {
+			return n
+		}
 	}
 	// textHit 在 fishTags 或 itemLabelDataVO 的嵌套文本中扫描“N人想要”。
 	if textHit := scanWantCountInAny(exContent["fishTags"]); textHit > 0 {
 		return textHit
 	}
-	return scanWantCountInAny(exContent["itemLabelDataVO"])
+	// textHit 是商品标签中的有效正整数人数。
+	if textHit := scanWantCountInAny(exContent["itemLabelDataVO"]); textHit > 0 {
+		return textHit
+	}
+	return -1
 }
 
 // scanWantCountInAny 递归扫描任意 JSON 结构中的“N人想要”文案并解析整数 N。
@@ -569,12 +584,20 @@ func decodeMapOrJSON(raw any) map[string]any {
 		if strings.HasPrefix(trimmed, "{") {
 			// parsed 保存反序列化后的字典。
 			var parsed map[string]any
-			if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+			if decodeMarketJSON([]byte(trimmed), &parsed) == nil {
 				return parsed
 			}
 		}
 	}
 	return nil
+}
+
+// decodeMarketJSON 将平台响应或嵌套对象解码至 dst，保留数字精度，避免金额小数和长商品标识被浮点转换破坏。
+func decodeMarketJSON(raw []byte, dst any) error {
+	// decoder 在解析 JSON 时将所有数字保留为十进制文本。
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	return decoder.Decode(dst)
 }
 
 // cleanSearchTitle 移除搜索结果标题中的高亮 HTML 标签并压缩首尾空白。

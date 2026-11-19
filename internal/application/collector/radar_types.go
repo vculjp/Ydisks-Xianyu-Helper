@@ -74,7 +74,7 @@ type RadarItemSnapshot struct {
 	LatestSeenAt int64
 	// LatestWantCount 是最新想要人数。
 	LatestWantCount int
-	// DeltaWant 是较上轮巡检真实新增的想要人数（同行新发破零同样计入）。
+	// DeltaWant 是较上轮实际观测新增的想要人数，首次观测没有可比较基准时为零。
 	DeltaWant int
 	// DailyVelocityX100 是日均想要增速乘以 100 的整数值。
 	DailyVelocityX100 int

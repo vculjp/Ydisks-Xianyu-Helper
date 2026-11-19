@@ -1,5 +1,5 @@
-/** CollectorTab 表示商品采集工作台的三种采集入口页签。 */
-export type CollectorTab = 'search' | 'detail' | 'seller';
+/** CollectorTab 表示普通采集和本地雷达工作台入口。 */
+export type CollectorTab = 'search' | 'detail' | 'seller' | 'radar';
 
 /** CollectorSortMode 表示全站搜索支持的热度、时间与价格排序枚举。 */
 export type CollectorSortMode = 'default' | 'want_desc' | 'newest' | 'price_asc' | 'price_desc';
@@ -49,7 +49,7 @@ export interface CollectedProduct {
   sellerId: string;
   /** sellerNick 是卖家展示昵称。 */
   sellerNick: string;
-  /** wantCount 是想要人数指标。 */
+  /** wantCount 是想要人数指标，-1 表示平台未返回有效数值。 */
   wantCount: number;
   /** browseCount 是浏览次数指标。 */
   browseCount: number;
@@ -61,6 +61,8 @@ export interface CollectedProduct {
   isMultiSpec: boolean;
   /** hasFullDetail 表示是否已拉取完整详情文案与多张原图。 */
   hasFullDetail: boolean;
+  /** publishTimeUnix 是后端观测到的商品发布时间（Unix 秒），未知时为 0。 */
+  publishTimeUnix?: number;
   /** webUrl 是闲鱼网页版商品链接。 */
   webUrl: string;
 }

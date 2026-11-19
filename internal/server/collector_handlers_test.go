@@ -115,6 +115,61 @@ func (fakeCollectorPort) CancelManualVerify(_ context.Context, _ int64, _ string
 	return nil
 }
 
+// ListRadarTargets 返回空监控池，用于验证列表契约的空数组语义。
+func (fakeCollectorPort) ListRadarTargets(_ context.Context, _ int64) ([]collectorapp.RadarWatchTarget, error) {
+	return []collectorapp.RadarWatchTarget{}, nil
+}
+
+// AddRadarTargets 返回已保存的测试监控项，避免 HTTP 契约测试调用真实平台。
+func (fakeCollectorPort) AddRadarTargets(_ context.Context, _ int64, _ []collectorapp.RadarTargetInput, _ bool) ([]collectorapp.RadarWatchTarget, error) {
+	return []collectorapp.RadarWatchTarget{{ID: 1, TargetType: "keyword", TargetValue: "资料", Label: "资料", Enabled: true}}, nil
+}
+
+// ToggleRadarTarget 模拟更新监控项启用状态。
+func (fakeCollectorPort) ToggleRadarTarget(_ context.Context, _ int64, _ int64, _ bool) error {
+	return nil
+}
+
+// DeleteRadarTarget 模拟移除监控项。
+func (fakeCollectorPort) DeleteRadarTarget(_ context.Context, _ int64, _ int64) error {
+	return nil
+}
+
+// SuggestRadarKeywords 返回固定测试词，不访问外部 AI。
+func (fakeCollectorPort) SuggestRadarKeywords(_ context.Context, _ int64, _ string) ([]string, error) {
+	return []string{"学习资料"}, nil
+}
+
+// StartRadarScan 返回已启动的测试任务状态。
+func (fakeCollectorPort) StartRadarScan(_ context.Context, _ int64, cookieID string) (collectorapp.RadarScanStatus, error) {
+	return collectorapp.RadarScanStatus{Running: true, CookieID: cookieID, TotalTargets: 1}, nil
+}
+
+// StopRadarScan 返回已停止的测试任务状态。
+func (fakeCollectorPort) StopRadarScan(_ context.Context, _ int64) (collectorapp.RadarScanStatus, error) {
+	return collectorapp.RadarScanStatus{}, nil
+}
+
+// GetRadarScanStatus 返回未启动任务时的默认状态。
+func (fakeCollectorPort) GetRadarScanStatus(_ context.Context, _ int64) (collectorapp.RadarScanStatus, error) {
+	return collectorapp.RadarScanStatus{}, nil
+}
+
+// UpdateRadarSchedule 回传测试请求的定时设置。
+func (fakeCollectorPort) UpdateRadarSchedule(_ context.Context, _ int64, cfg collectorapp.RadarScheduleConfig) (collectorapp.RadarScheduleConfig, error) {
+	return cfg, nil
+}
+
+// ListRadarItems 返回空榜单以验证无历史观测的响应结构。
+func (fakeCollectorPort) ListRadarItems(_ context.Context, _ int64, _ collectorapp.RadarListQuery) ([]collectorapp.RadarItemSnapshot, error) {
+	return []collectorapp.RadarItemSnapshot{}, nil
+}
+
+// ClearRadarItems 模拟清空测试榜单。
+func (fakeCollectorPort) ClearRadarItems(_ context.Context, _ int64) error {
+	return nil
+}
+
 // TestCollectorHandlersOpenAPIContract 覆盖商品采集全部 5 个 `/api/v1/collector/*` 操作的认证、200 成功契约与 400 参数错误校验。
 func TestCollectorHandlersOpenAPIContract(t *testing.T) {
 	// srv、_、cleanup 创建测试 Server。

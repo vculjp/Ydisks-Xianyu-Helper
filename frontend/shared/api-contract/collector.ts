@@ -29,3 +29,11 @@ export type CollectorManualVerifyOpenResponseTransport = components['schemas']['
 export type CollectorManualVerifyCompleteResponseTransport = components['schemas']['CollectorManualVerifyCompleteResponse'];
 /** CollectorManualVerifyCancelResponseTransport 表示生成的关闭验证窗口响应。 */
 export type CollectorManualVerifyCancelResponseTransport = components['schemas']['CollectorManualVerifyCancelResponse'];
+/** CollectorRadarTargetTransport 是雷达监控项契约。 */
+export type CollectorRadarTargetTransport = components['schemas']['CollectorRadarTarget'];
+/** CollectorRadarItemTransport 是雷达商品热度快照契约。 */
+export type CollectorRadarItemTransport = components['schemas']['CollectorRadarItem'];
+/** CollectorRadarStatusTransport 是雷达运行进度契约。 */
+export type CollectorRadarStatusTransport = components['schemas']['CollectorRadarScanStatusResponse'];
+/** CollectorRadarScheduleTransport 是用户定时巡检配置契约。 */
+export type CollectorRadarScheduleTransport = components['schemas']['CollectorRadarSchedule'];

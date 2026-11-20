@@ -205,7 +205,7 @@ func (r *CollectorRadarRepository) GetSchedule(ctx context.Context, userID int64
 	// def 是安全的默认关闭配置。
 	def := collectorapp.RadarScheduleConfig{Enabled: false, IntervalHours: 12}
 	if r == nil || r.store == nil || r.store.UserSettings == nil {
-		return def, nil
+		return def, errors.New("定时计划存储未初始化")
 	}
 	// raw、err 读取用户设置文本。
 	raw, err := r.store.UserSettings.GetForUser(ctx, userID, radarScheduleSettingKey)
@@ -216,7 +216,7 @@ func (r *CollectorRadarRepository) GetSchedule(ctx context.Context, userID int64
 	var parsed radarScheduleStoredJSON
 	// unmarshalErr 检查 JSON 合法性。
 	if unmarshalErr := json.Unmarshal([]byte(raw), &parsed); unmarshalErr != nil {
-		return def, nil
+		return def, errors.New("定时计划数据格式无效，需人工核对")
 	}
 	if parsed.IntervalHours != 6 && parsed.IntervalHours != 12 && parsed.IntervalHours != 24 {
 		parsed.IntervalHours = 12

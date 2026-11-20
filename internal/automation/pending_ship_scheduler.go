@@ -133,6 +133,8 @@ func (s *Scheduler) scanPendingShipDeliveriesWithContextAndLimit(ctx context.Con
 	afterOrderID := ""
 	// sweepStartedAt 是本轮完整扫描的起点；只有扫完全部候选页才会据此清除本轮没再出现的订单观测记录。
 	sweepStartedAt := time.Now().UTC()
+	// seen 是完整扫描期间实际出现的候选订单，用于区分时钟精度相同的连续扫描。
+	seen := make(map[string]struct{})
 	// blockedAccounts 记录本轮已遇到风控、会话失效或 Token 耗尽的账号，其余订单留待下一轮，不再请求平台。
 	blockedAccounts := map[string]struct{}{}
 	for {
@@ -147,7 +149,7 @@ func (s *Scheduler) scanPendingShipDeliveriesWithContextAndLimit(ctx context.Con
 			return
 		}
 		if len(orders) == 0 {
-			s.pruneUnseenPendingShip(sweepStartedAt)
+			s.pruneUnseenPendingShip(sweepStartedAt, seen)
 			return
 		}
 		// order 表示当前待发货候选订单。
@@ -161,6 +163,7 @@ func (s *Scheduler) scanPendingShipDeliveriesWithContextAndLimit(ctx context.Con
 				return
 			}
 			afterOrderID = order.OrderID
+			seen[order.OrderID] = struct{}{}
 			// blocked 表示该订单所属账号本轮已被平台阻断，其订单不再发起请求。
 			if _, blocked := blockedAccounts[order.CookieID]; blocked {
 				continue
@@ -214,7 +217,7 @@ func (s *Scheduler) scanPendingShipDeliveriesWithContextAndLimit(ctx context.Con
 			cancel()
 		}
 		if len(orders) < pendingShipScanPageSize {
-			s.pruneUnseenPendingShip(sweepStartedAt)
+			s.pruneUnseenPendingShip(sweepStartedAt, seen)
 			return
 		}
 	}
@@ -253,15 +256,17 @@ func (s *Scheduler) pendingShipSettleWindowValue() time.Duration {
 // pruneUnseenPendingShip 在一轮完整扫描结束后清除本轮没有再出现的订单观测记录：
 // 订单曾短暂离开候选集合（例如退款后又重新待发货）时，再次出现必须重新获得完整的实时付款事件等待窗口，而不是沿用旧的首次观测时间。
 // 提前结束的扫描（预算或任务上限）不会调用本方法，因此未扫到的订单只会多保留记录，不会被误清。
-func (s *Scheduler) pruneUnseenPendingShip(sweepStartedAt time.Time) {
+func (s *Scheduler) pruneUnseenPendingShip(sweepStartedAt time.Time, seen map[string]struct{}) {
 	if s == nil {
 		return
 	}
 	s.pendingShipMu.Lock()
 	defer s.pendingShipMu.Unlock()
-	// orderID、item 是观测表中的订单号与记录，最近观测早于本轮起点说明本轮没有再扫到它。
+	// orderID、item 是观测表中的订单号与记录；完整扫描未见且没有更新观测才清除。
 	for orderID, item := range s.pendingShipObserved {
-		if item.last.Before(sweepStartedAt) {
+		// present 区分真实候选和与扫描起点恰好同一时刻的旧记录。
+		_, present := seen[orderID]
+		if !present && !item.last.After(sweepStartedAt) {
 			delete(s.pendingShipObserved, orderID)
 		}
 	}

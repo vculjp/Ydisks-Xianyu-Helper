@@ -585,6 +585,13 @@ func (s *Server) setUserSetting(w http.ResponseWriter, r *http.Request) {
 	// err 是用户设置写入错误。
 	err := s.settingsApplication().SetUser(r.Context(), sess.UserID, key, req.Value)
 	if err != nil {
+		if errors.Is(err, settingsapp.ErrInvalidSupportConfig) {
+			writeErr(w, http.StatusBadRequest, "客服配置无效，请检查资料或会话归属")
+			return
+		}
+		if writeSettingsAccountError(w, err) {
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "保存失败")
 		return
 	}

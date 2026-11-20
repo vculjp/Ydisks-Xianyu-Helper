@@ -817,6 +817,24 @@ func TestAnalyticsAdminAndPublicSuccessResponseContracts(t *testing.T) {
 	if salesResponse.SalesOrders != 1 || salesResponse.ReceivedOrders != 1 || salesResponse.RefundedOrders != 0 {
 		t.Fatalf("sales stats response=%+v", salesResponse)
 	}
+	// scopedReq 是本人店铺统计查询，仍符合原有销售响应契约。
+	scopedReq := httptest.NewRequest(http.MethodGet, "/api/v1/analytics/sales?start_date=2026-08-14&end_date=2026-08-14&cookie_id=acc1", nil)
+	scopedReq.AddCookie(sessionCookie)
+	// scopedRecorder 保存单店铺 HTTP 查询响应。
+	scopedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(scopedRecorder, scopedReq)
+	if scopedRecorder.Code != http.StatusOK {
+		t.Fatal("本人店铺销售查询失败")
+	}
+	// deniedReq 模拟请求不属于用户的账号。
+	deniedReq := httptest.NewRequest(http.MethodGet, "/api/v1/analytics/sales?start_date=2026-08-14&end_date=2026-08-14&cookie_id=not-owned", nil)
+	deniedReq.AddCookie(sessionCookie)
+	// deniedRecorder 验证未知账号不能读取销售数据。
+	deniedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(deniedRecorder, deniedReq)
+	if deniedRecorder.Code != http.StatusForbidden {
+		t.Fatalf("未授权店铺状态码=%d", deniedRecorder.Code)
+	}
 
 	// 二维码生成使用测试专用平台替身。
 	setTestQRLogin(srv, &fakeQRLoginService{})

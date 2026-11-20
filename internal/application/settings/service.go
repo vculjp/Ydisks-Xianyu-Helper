@@ -4,9 +4,13 @@ package settings
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
+	"time"
+
+	"xianyu-go/internal/supportpolicy"
 )
 
 // ErrInvalidUser 表示调用方没有提供有效的本地用户标识。
@@ -23,6 +27,9 @@ var ErrConfigNotFound = errors.New("AI 回复设置不存在")
 
 // ErrPricingModeConflict 表示 AI 议价与固定自动改价规则不能同时启用。
 var ErrPricingModeConflict = errors.New("AI 议价与自动化规则改价不能同时启用，请先关闭另一种改价方式")
+
+// ErrInvalidSupportConfig 表示用户提交的客服知识或接管数据未通过业务校验。
+var ErrInvalidSupportConfig = errors.New("客服配置无效，请检查资料或会话归属")
 
 // SecretChange 描述敏感系统设置的显式三态变更命令。
 type SecretChange struct {
@@ -281,6 +288,64 @@ func (s *Service) SetUser(ctx context.Context, userID int64, key, value string) 
 	key = strings.TrimSpace(key)
 	if key == "" || len(key) > 100 {
 		return errors.New("设置键无效")
+	}
+	if key == supportpolicy.ConfigKey {
+		// cfg、err 是当前用户待保存的三级知识配置及验证结果。
+		cfg, err := supportpolicy.Decode(value)
+		if err != nil {
+			return ErrInvalidSupportConfig
+		}
+		// entry 是每条资料，非全局资料必须属于当前用户账号。
+		for _, entry := range cfg.Entries {
+			if entry.Scope != "global" {
+				// err 是非全局资料的店铺归属校验失败。
+				if err := s.ensureOwned(ctx, userID, entry.AccountID); err != nil {
+					return err
+				}
+			}
+			if entry.Scope == "item" {
+				// checker、ok 是商品存在性校验端口，禁止将条目绑到未知商品。
+				checker, ok := s.repository.(supportItemChecker)
+				if !ok {
+					return errors.New("商品归属校验未初始化")
+				}
+				// err 是本地商品归属验证失败。
+				if err := checker.CheckSupportItem(ctx, entry.AccountID, entry.ItemID); err != nil {
+					return err
+				}
+			}
+		}
+		// raw、err 是校验并规范化后的配置文本。
+		raw, err := json.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+		value = string(raw)
+	}
+	if strings.HasPrefix(key, supportpolicy.TakeoverPrefix) {
+		// row、err 是操作员显式提交的接管记录，不能伪造自动风险记录。
+		row, err := supportpolicy.DecodeTakeover(key, value)
+		if err != nil {
+			return ErrInvalidSupportConfig
+		}
+		// err 是会话所属店铺的归属校验异常。
+		if err := s.ensureOwned(ctx, userID, row.AccountID); err != nil {
+			return err
+		}
+		if row.Until != 0 && row.Until != -1 {
+			return ErrInvalidSupportConfig
+		}
+		row.Reason = "operator"
+		if row.Until == 0 {
+			row.Reason = "resumed"
+		}
+		row.UpdatedAt = time.Now().UnixMilli()
+		// raw、err 是由服务端登记时间和来源的状态。
+		raw, err := json.Marshal(row)
+		if err != nil {
+			return err
+		}
+		value = string(raw)
 	}
 	return s.repository.SetUser(ctx, userID, key, value)
 }

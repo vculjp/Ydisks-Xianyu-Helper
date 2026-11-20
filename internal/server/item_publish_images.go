@@ -275,7 +275,7 @@ func safeBaseName(name string) string {
 // safeZipPath 封装safeZip路径业务协调。
 func safeZipPath(raw string) (string, error) {
 	raw = strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/"))
-	if raw == "" || strings.HasPrefix(raw, "/") {
+	if raw == "" || strings.HasPrefix(raw, "/") || strings.Contains(raw, ":") || filepath.VolumeName(raw) != "" {
 		return "", fmt.Errorf("图片路径不安全: %s", raw)
 	}
 	// clean 用于本次流程后续判断的clean

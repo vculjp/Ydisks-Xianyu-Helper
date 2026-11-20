@@ -199,6 +199,17 @@ func (s *Service) UpdateRadarSchedule(ctx context.Context, userID int64, cfg Rad
 	}
 	s.radar.scheduleMu.Lock()
 	defer s.radar.scheduleMu.Unlock()
+	if normalized.Enabled && s.radar.scheduleSuspended[userID] {
+		s.radar.mu.Lock()
+		// run 是仍在收束的巡检；锁顺序固定为 scheduleMu 后 mu。
+		run := s.radar.runs[userID]
+		// running 表示风险停止流程尚未彻底收束，拒绝再次启用计划。
+		running := run != nil && run.status.Running
+		s.radar.mu.Unlock()
+		if running {
+			return RadarScheduleConfig{}, invalid("请等待巡检停止并人工核对账号后再配置计划")
+		}
+	}
 	// prev、readErr 读取此前自动运行时间，读取失败时不覆盖已有配置。
 	prev, readErr := s.radarRepo.GetSchedule(ctx, userID)
 	if readErr != nil {
@@ -209,7 +220,27 @@ func (s *Service) UpdateRadarSchedule(ctx context.Context, userID int64, cfg Rad
 	if saveErr := s.radarRepo.SaveSchedule(ctx, userID, normalized); saveErr != nil {
 		return RadarScheduleConfig{}, saveErr
 	}
+	// 只有用户显式保存成功才清除本地阻断；不因时间流逝或凭证变化自动恢复。
+	delete(s.radar.scheduleSuspended, userID)
 	return normalized, nil
+}
+
+// suspendRadarSchedule 关闭该用户的定时巡检计划，保留绑定账号、周期和运行时间。
+// 写入失败时本进程仍阻止下一轮自动调度；不承诺数据库不可用时能跨重启持久化。
+func (s *Service) suspendRadarSchedule(ctx context.Context, userID int64) error {
+	s.radar.scheduleMu.Lock()
+	defer s.radar.scheduleMu.Unlock()
+	s.radar.scheduleSuspended[userID] = true
+	// cfg、readErr 读取持久化计划，禁止使用旧快照覆盖用户设置。
+	cfg, readErr := s.radarRepo.GetSchedule(ctx, userID)
+	if readErr != nil {
+		return readErr
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	cfg.Enabled = false
+	return s.radarRepo.SaveSchedule(ctx, userID, cfg)
 }
 
 // normalizeRadarTargetInput 校验并规范化单条监控目标输入。

@@ -269,7 +269,7 @@ func buildMinimalXLSX(t *testing.T, grid [][]string) []byte {
 // TestPublishBatchPathAndZipSafety 封装Test发布批次路径AndZipSafety业务协调。
 func TestPublishBatchPathAndZipSafety(t *testing.T) {
 	// raw 表示当前遍历过程中的原始
-	for _, raw := range []string{"../secret.png", "/etc/passwd", `..\\secret.png`, ""} {
+	for _, raw := range []string{"../secret.png", "/etc/passwd", `..\\secret.png`, "", "C:/secret.png", `C:secret.png`, "folder/a.png:stream"} {
 		if // err 用于本次流程后续判断的err
 		_, err := safeZipPath(raw); err == nil {
 			t.Errorf("safeZipPath(%q) should fail", raw)

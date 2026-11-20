@@ -378,7 +378,7 @@ func New(cfg Config) *Account {
 	echoTracker := newOutgoingEchoTracker()
 	// 诊断日志器在账号对外可见之前一次性设置，之后只读；用于记录迟到推送回显，便于核对“结果不确定”的发送是否实际送达。
 	echoTracker.logger = logger.With("account", cfg.CookieID, "subsys", "echo")
-	// manualTakeover 保存当前账号各会话的人工介入状态；生命周期与账号 facade 一致，只存内存。
+	// manualTakeover 保存当前账号的内存回显观察；受控客服另使用本地持久化接管记录。
 	manualTakeover := newManualTakeoverTracker()
 	if cfg.Store != nil {
 		// aiReplier 保存当前账号的 AI 回复生成能力。
@@ -388,6 +388,12 @@ func New(cfg Config) *Account {
 			agentReplier := NewAgentReplier(cfg.CookieID, cfg.Store, cfg.ReplyDelivery, logger)
 			a.reply = NewReplyService(cfg.CookieID, cfg.Store, cfg.ReplyDelivery, agentReplier, aiReplier, logger)
 			a.reply.manualTakeover = manualTakeover
+			a.reply.support = db.NewSupportRepository(cfg.Store)
+			agentReplier.allowDelivery = func(ctx context.Context, chatID string) bool {
+				// gate 是外部 Agent 已在运行时的最新本地接管及安全模式。
+				gate := a.reply.loadManualTakeoverGate(ctx, chatID)
+				return !gate.skipGenerative() && !gate.managed
+			}
 			a.reply.manualRequests = func() Handler { return a.handler }
 		}
 	}

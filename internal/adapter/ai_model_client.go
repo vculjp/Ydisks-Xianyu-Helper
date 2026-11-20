@@ -170,6 +170,8 @@ type aiConnectionTestRequest struct {
 	Messages []aiConnectionTestMessage `json:"messages"`
 	// MaxTokens 约束诊断请求的最大生成额度。
 	MaxTokens int `json:"max_tokens"`
+	// ReasoningEffort 仅为已经验证支持该参数的本机 Ollama Qwen3.5 关闭思考，其他端点不发送。
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // aiConnectionTestMessage 是 OpenAI 兼容消息数组中的单条用户消息。
@@ -237,6 +239,10 @@ func (c *AIModelClient) TestConnection(ctx context.Context, baseURL, apiKey, mod
 			Role: "user", Content: "你好",
 		}},
 		MaxTokens: AIConnectionTestMaxTokens,
+	}
+	// 连接诊断与实际客服一致使用本机模型的非思考模式，避免短预算只生成不可展示的推理正文。
+	if baseURL == "http://127.0.0.1:11434/v1" && strings.HasPrefix(strings.ToLower(model), "qwen3.5:") {
+		payload.ReasoningEffort = "none"
 	}
 	// body、marshalErr 分别保存 JSON 编码后的请求正文及编码失败原因。
 	body, marshalErr := json.Marshal(payload)

@@ -27,7 +27,7 @@ type outgoingMessageCoordinator struct {
 }
 
 // noteOutgoing 在写入 WebSocket 之前登记一条出站消息，使其自身回显不被误判为人工发送；
-// 没有自动回复或自动化标记的发送来自网页聊天的人工操作，直接让会话进入人工介入暂停窗口。只读写内存。
+// 没有自动回复或自动化标记的发送来自网页聊天的人工操作，直接让会话进入人工介入暂停窗口。受控客服补充本地持久化。
 func (c *outgoingMessageCoordinator) noteOutgoing(ctx context.Context, chatID, messageType, content string) {
 	if c == nil || c.manualTakeover == nil {
 		return
@@ -35,6 +35,9 @@ func (c *outgoingMessageCoordinator) noteOutgoing(ctx context.Context, chatID, m
 	c.manualTakeover.recordSystemSend(chatID, messageType, content)
 	if !isAutomaticSend(ctx) {
 		c.manualTakeover.markManual(chatID, c.manualTakeover.now())
+		if c.account != nil && c.account.reply != nil {
+			c.account.reply.persistSupportHandoff(ctx, chatID, "human")
+		}
 	}
 }
 

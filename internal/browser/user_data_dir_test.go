@@ -9,6 +9,8 @@ import (
 
 // TestResolvePersistentUserDataDirConvertsRelativePathAndCreatesDirectory 封装TestResolvePersistent用户数据DirConvertsRelative路径AndCreatesDirectory业务协调。
 func TestResolvePersistentUserDataDirConvertsRelativePathAndCreatesDirectory(t *testing.T) {
+	// 把测试工作目录与临时目标放在同一磁盘，Windows 不支持跨盘符相对路径。
+	t.Chdir(t.TempDir())
 	// cwd、err 用于本次流程后续判断的cwd、err
 	cwd, err := os.Getwd()
 	if err != nil {

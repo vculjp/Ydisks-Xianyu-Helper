@@ -213,6 +213,9 @@ func (d *messageDispatcher) handleMessageContext(ctx context.Context, decrypted 
 		// 未被本系统出站登记消费的新鲜自身回显来自官方客户端的人工发送，会话进入人工介入暂停窗口；判定只读写内存。
 		if d.manualTakeover.observeOwnEcho(*ownEcho, echoCreatedAt(decrypted)) {
 			d.logger.InfoContext(ctx, "检测到人工回复，会话进入人工介入暂停窗口", "chat_id", ownEcho.ChatID)
+			if d.reply != nil {
+				d.reply.persistSupportHandoff(ctx, ownEcho.ChatID, "human")
+			}
 		}
 		// handler 保存当前可选业务处理器；旧集成未实现出站观察能力时保持原有仅过滤语义。
 		if handler := d.currentHandler(); handler != nil {

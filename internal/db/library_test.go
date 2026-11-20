@@ -86,6 +86,15 @@ func TestCollectorTemplateIdempotentCreate(t *testing.T) {
 	if listErr != nil || len(rows) != 1 || rows[0].Title != "原始标题" {
 		t.Fatalf("重复写入或覆盖旧数据: %+v %v", rows, listErr)
 	}
+	// existing、findErr 验证已完成的相同请求直接读取同一模板，不覆盖用户编辑。
+	existing, findErr := store.ProductTemplates.FindByCollectorKey(ctx, userID, "same-request")
+	if findErr != nil || existing.ID != id || existing.Title != "原始标题" {
+		t.Fatal("同请求模板查找错误")
+	}
+	// foreignErr 验证查询仍受用户归属约束。
+	if _, foreignErr := store.ProductTemplates.FindByCollectorKey(ctx, userID+1000, "same-request"); foreignErr == nil {
+		t.Fatal("跨用户查找到其他模板")
+	}
 }
 
 // TestProductTemplatesLifecycle 覆盖模板的创建、默认值补齐、更新、隔离读取和删除。

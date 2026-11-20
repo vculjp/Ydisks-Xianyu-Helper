@@ -158,9 +158,6 @@ func parseMarketSearchCard(rawEntry any) (MarketCollectedItem, bool) {
 
 	// price 提取商品售价文本（如 "9.90"）。
 	price := extractMarketCardPrice(exContent, detailParams, clickArgs)
-	if price == "" {
-		price = "0.00"
-	}
 	// originalPrice 提取可选划线原价。
 	originalPrice := cleanPriceText(firstNonEmptyString(
 		mtopString(exContent["oriPrice"]),
@@ -231,6 +228,9 @@ func parseMarketItemDetailData(data map[string]any, fallbackItemID string) (*Mar
 
 	// itemID 提取商品标识，缺失时使用请求传入的 ID。
 	itemID := firstNonEmptyString(mtopString(itemDO["itemId"]), mtopString(data["itemId"]), strings.TrimSpace(fallbackItemID))
+	if strings.TrimSpace(fallbackItemID) != "" && itemID != strings.TrimSpace(fallbackItemID) {
+		return nil, fmt.Errorf("商品详情标识与请求不一致，已拒绝使用该数据")
+	}
 	// description 提取完整商品描述正文。
 	description := strings.TrimSpace(firstNonEmptyString(mtopString(itemDO["desc"]), mtopString(itemDO["description"])))
 	// title 提取商品标题；闲鱼部分纯文案帖没有独立 title，自动截取描述首行前 30 字兜底。
@@ -238,18 +238,12 @@ func parseMarketItemDetailData(data map[string]any, fallbackItemID string) (*Mar
 	if title == "" {
 		return nil, fmt.Errorf("商品详情缺少标题与描述，可能已下架或不存在")
 	}
-	if description == "" {
-		description = title
-	}
 	// price 提取当前售价文本。
 	price := cleanPriceText(firstNonEmptyString(
 		mtopString(itemDO["soldPrice"]),
 		mtopString(itemDO["price"]),
 		mtopString(itemDO["reservePrice"]),
 	))
-	if price == "" {
-		price = "0.00"
-	}
 	// originalPrice 提取可选原价文本。
 	originalPrice := cleanPriceText(firstNonEmptyString(mtopString(itemDO["oriPrice"]), mtopString(itemDO["originalPrice"])))
 	// images 提取 imageInfos 中的全部高清原图地址（最多保留前 9 张以符合闲鱼发布上限）。
@@ -280,7 +274,7 @@ func parseMarketItemDetailData(data map[string]any, fallbackItemID string) (*Mar
 		CategoryID:      firstNonEmptyString(mtopString(itemDO["categoryId"]), mtopString(itemDO["catId"])),
 		IsFreeShipping:  transportFee == "0" || transportFee == "0.00",
 		IsMultiSpec:     len(skuList) > 0,
-		HasFullDetail:   true,
+		HasFullDetail:   description != "" && len(images) > 0,
 		PublishTimeUnix: extractPublishTimeUnix(itemDO, nil, nil),
 		WebURL:          "https://www.goofish.com/item?id=" + itemID,
 	}, nil
@@ -306,6 +300,11 @@ func parseSellerShopData(data map[string]any, sellerUserID string, pageNumber, p
 	out := make([]MarketCollectedItem, 0, len(parsedBase))
 	// base 是单条基础商品记录。
 	for _, base := range parsedBase {
+		// wantCount、hasWant 区分原始统计缺失和真实零想要。
+		wantCount, hasWant := wantByItemID[base.ID]
+		if !hasWant {
+			wantCount = -1
+		}
 		// picURL 归一化主图协议头。
 		picURL := normalizeHTTPSImageURL(base.PicURL)
 		// images 保存单张封面图切片。
@@ -322,7 +321,7 @@ func parseSellerShopData(data map[string]any, sellerUserID string, pageNumber, p
 			Area:            areaByItemID[base.ID],
 			SellerID:        sellerUserID,
 			SellerNick:      nickByItemID[base.ID],
-			WantCount:       wantByItemID[base.ID],
+			WantCount:       wantCount,
 			CategoryID:      base.CategoryID,
 			IsMultiSpec:     base.IsMultiSpec,
 			HasFullDetail:   false,
@@ -546,7 +545,7 @@ func extractFreeShippingFlag(exContent, detailParams map[string]any) bool {
 		return true
 	}
 	// rawJSON、err 将标签树序列化为紧凑文本以便快速检测“包邮”字样。
-	if rawJSON, err := json.Marshal(exContent["fishTags"]); err == nil && strings.Contains(string(rawJSON), "包邮") {
+	if rawJSON, err := json.Marshal(exContent["fishTags"]); err == nil && strings.Contains(string(rawJSON), "包邮") && !strings.Contains(string(rawJSON), "不包邮") && !strings.Contains(string(rawJSON), "非包邮") {
 		return true
 	}
 	return false

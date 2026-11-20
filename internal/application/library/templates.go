@@ -142,6 +142,22 @@ func (s *TemplateService) GetTemplate(ctx context.Context, userID, id int64) (Te
 	return s.repository.Get(ctx, userID, id)
 }
 
+// collectorTemplateFinder 是可选的本地幂等查询端口，生产仓储使用已有数据库唯一索引。
+type collectorTemplateFinder interface {
+	// FindByCollectorKey 按本人请求摘要读取已保存模板。
+	FindByCollectorKey(context.Context, int64, string) (Template, error)
+}
+
+// FindCollectorTemplate 在任何下载或改写之前查询已完成的本地转存；既有模板不被覆盖。
+func (s *TemplateService) FindCollectorTemplate(ctx context.Context, userID int64, key string) (Template, error) {
+	// finder、ok 断言仓储是否实现幂等读取能力，不能把仓储故障当作不存在。
+	finder, ok := s.repository.(collectorTemplateFinder)
+	if !ok {
+		return Template{}, errors.New("模板仓储不支持采集幂等查询")
+	}
+	return finder.FindByCollectorKey(ctx, userID, key)
+}
+
 // CreateTemplate 校验并创建模板。
 func (s *TemplateService) CreateTemplate(ctx context.Context, input Template) (Template, error) {
 	// normalized、err 保存规范化并通过校验的模板。

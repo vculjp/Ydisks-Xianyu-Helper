@@ -53,6 +53,8 @@ type AgentReplier struct {
 	turns agentTurnRegistry
 	// pollSleep 是轮询等待函数，遵守 ctx 取消；测试可替换以免真实等待。
 	pollSleep func(ctx context.Context, d time.Duration) error
+	// allowDelivery 在每次 Agent 消息投递之前复核本地接管和受控客服状态。
+	allowDelivery func(context.Context, string) bool
 }
 
 // NewAgentReplier 构造账号的 Agent 回复器；delivery 为空时回复器始终不接手。
@@ -241,6 +243,9 @@ func (a *AgentReplier) deliverReplies(ctx context.Context, m ChatMessage, replie
 	// reply 表示当前待发送的 Agent 回复。
 	for _, reply := range replies {
 		if ctx.Err() != nil {
+			return true
+		}
+		if a.allowDelivery != nil && !a.allowDelivery(ctx, m.ChatID) {
 			return true
 		}
 		if state.sent >= agentMaxRepliesPerTurn {

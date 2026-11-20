@@ -393,7 +393,7 @@ func (query Query) filter() Filter {
 func (query Query) salesFilter() Filter {
 	// statuses 是销售统计状态的独立副本，避免调用方修改全局集合。
 	statuses := append([]string(nil), salesStatuses...)
-	return Filter{UserID: query.UserID, StartAt: dateBoundary(query.StartDate, false, query.Location), EndBefore: dateBoundary(query.EndDate, true, query.Location), Statuses: statuses}
+	return Filter{UserID: query.UserID, CookieID: strings.TrimSpace(query.CookieID), StartAt: dateBoundary(query.StartDate, false, query.Location), EndBefore: dateBoundary(query.EndDate, true, query.Location), Statuses: statuses}
 }
 
 // dailyValue 保存单个日期的订单数和金额累计值。

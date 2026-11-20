@@ -926,7 +926,9 @@ func TestPruneUnseenPendingShipKeepsRecentAndDropsStale(t *testing.T) {
 	sweepStart := time.Date(2026, time.September, 15, 8, 0, 0, 0, time.UTC)
 	scheduler.observePendingShip("stale", sweepStart.Add(-time.Minute))
 	scheduler.observePendingShip("fresh", sweepStart.Add(time.Second))
-	scheduler.pruneUnseenPendingShip(sweepStart)
+	scheduler.observePendingShip("equal-stale", sweepStart)
+	scheduler.observePendingShip("equal-seen", sweepStart)
+	scheduler.pruneUnseenPendingShip(sweepStart, map[string]struct{}{"equal-seen": {}})
 	scheduler.pendingShipMu.Lock()
 	defer scheduler.pendingShipMu.Unlock()
 	// stale 保存本轮未再出现的订单记录是否仍被保留。
@@ -937,7 +939,15 @@ func TestPruneUnseenPendingShipKeepsRecentAndDropsStale(t *testing.T) {
 	if _, fresh := scheduler.pendingShipObserved["fresh"]; !fresh {
 		t.Fatal("本轮仍出现的订单不应被清除")
 	}
+	// equalStale 验证 Windows 时钟相同也应清除未出现的订单。
+	if _, equalStale := scheduler.pendingShipObserved["equal-stale"]; equalStale {
+		t.Fatal("相同时刻的旧观测应被清除")
+	}
+	// equalSeen 验证真实出现的候选不依赖时钟差异。
+	if _, equalSeen := scheduler.pendingShipObserved["equal-seen"]; !equalSeen {
+		t.Fatal("实际出现的候选不应被清除")
+	}
 	// nilScheduler 验证空调度器清理安全。
 	var nilScheduler *Scheduler
-	nilScheduler.pruneUnseenPendingShip(sweepStart)
+	nilScheduler.pruneUnseenPendingShip(sweepStart, nil)
 }

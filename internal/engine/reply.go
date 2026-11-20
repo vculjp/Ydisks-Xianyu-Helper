@@ -16,6 +16,7 @@ import (
 
 	"xianyu-go/internal/db"
 	"xianyu-go/internal/keywordmatch"
+	"xianyu-go/internal/supportpolicy"
 	"xianyu-go/internal/xianyu/ws"
 )
 
@@ -34,6 +35,8 @@ type ReplyResult struct {
 	AutoPriceQuote *AIPriceQuoteProposal
 	// NotifyManual 表示命中的关键词规则要求通知人工客服，并让会话进入人工介入暂停窗口。
 	NotifyManual bool
+	// ManualReason 保存客服质量门禁的非敏感人工处理原因。
+	ManualReason string
 }
 
 // hasImage 判断回复是否携带图片（URL 或图片库图片），用于一次性投递记录的分段领取。
@@ -123,6 +126,18 @@ type ReplyService struct {
 	manualTakeover *manualTakeoverTracker
 	// manualRequests 返回当前业务处理器，用于发送“买家请求人工客服”通知；为空或处理器未实现端口时只记录日志。
 	manualRequests func() Handler
+	// support 保存持久化人工接管和知识模式查询端口，仅生产装配后启用。
+	support supportTakeoverRepository
+}
+
+// supportTakeoverRepository 是消息运行时的客服状态最小端口。
+type supportTakeoverRepository interface {
+	// Load 获取本账号所属用户的知识和安全配置。
+	Load(context.Context, string) (supportpolicy.Config, error)
+	// ReadTakeover 读取会话持久化接管状态。
+	ReadTakeover(context.Context, string, string) (supportpolicy.Takeover, error)
+	// MarkTakeover 记录人工接管，不允许自动缩短现有接管。
+	MarkTakeover(context.Context, string, string, string, int64) error
 }
 
 // ChatManualRequest 是买家消息命中“通知人工”关键词规则后交给业务层的非敏感通知摘要。
@@ -144,70 +159,6 @@ type ChatManualRequest struct {
 // chatManualRequestHandler 是业务处理器可选实现的“请求人工客服”通知端口；实现方负责通知渠道选择和失败降级。
 type chatManualRequestHandler interface {
 	RequestManualReply(ctx context.Context, request ChatManualRequest) error
-}
-
-// manualTakeoverGate 是一次回复处理读取到的人工介入暂停状态。
-type manualTakeoverGate struct {
-	// paused 表示会话当前处于人工介入暂停窗口内。
-	paused bool
-	// scopeAll 表示暂停范围为全部自动回复；false 时只暂停 Agent 与 AI。
-	scopeAll bool
-	// window 是账号配置的暂停窗口时长；非正表示功能关闭。
-	window time.Duration
-}
-
-// skipAll 判断本次是否跳过全部自动回复。
-func (g manualTakeoverGate) skipAll() bool { return g.paused && g.scopeAll }
-
-// skipGenerative 判断本次是否跳过 Agent 与 AI 生成式回复；两种暂停范围都包含它们。
-func (g manualTakeoverGate) skipGenerative() bool { return g.paused }
-
-// loadManualTakeoverGate 读取账号人工介入配置并判断会话是否处于暂停窗口；读取失败时降级为不暂停并记录告警。
-func (r *ReplyService) loadManualTakeoverGate(ctx context.Context, chatID string) manualTakeoverGate {
-	if r.manualTakeover == nil || r.store == nil || r.store.Cookies == nil || strings.TrimSpace(chatID) == "" {
-		return manualTakeoverGate{}
-	}
-	// setting、err 是账号级暂停分钟数与范围，只读取非敏感列。
-	setting, err := r.store.Cookies.GetManualTakeoverSetting(ctx, r.cookieID)
-	if err != nil {
-		r.logger.WarnContext(ctx, "读取人工介入暂停配置失败，本条消息不做人工介入暂停", "err", err)
-		return manualTakeoverGate{}
-	}
-	// window 是配置的暂停窗口时长。
-	window := time.Duration(setting.Minutes) * time.Minute
-	return manualTakeoverGate{paused: r.manualTakeover.isPaused(chatID, window), scopeAll: setting.Scope == db.ManualTakeoverScopeAll, window: window}
-}
-
-// requestManualReply 在命中“通知人工”关键词后让会话进入人工介入窗口，并在去重窗口内最多发送一次通知。
-// 通知失败只记录日志，不影响本条消息的回复结果。
-func (r *ReplyService) requestManualReply(ctx context.Context, m ChatMessage) {
-	if strings.TrimSpace(m.ChatID) == "" {
-		return
-	}
-	if r.manualTakeover != nil {
-		r.manualTakeover.markManual(m.ChatID, r.manualTakeover.now())
-		if !r.manualTakeover.claimManualNotification(m.ChatID) {
-			r.logger.DebugContext(ctx, "会话已在去重窗口内通知过人工客服，跳过重复通知")
-			return
-		}
-	}
-	// handler 是当前业务处理器；未装配或未实现通知端口时只记录日志。
-	var handler Handler
-	if r.manualRequests != nil {
-		handler = r.manualRequests()
-	}
-	// notifier、supported 是可选的人工客服通知端口及其实现判断。
-	notifier, supported := handler.(chatManualRequestHandler)
-	if !supported {
-		r.logger.WarnContext(ctx, "买家请求人工客服，但当前未装配通知端口")
-		return
-	}
-	// err 保存通知发送失败原因；通知是旁路，不阻断回复。
-	if err := notifier.RequestManualReply(ctx, ChatManualRequest{AccountID: r.cookieID, ChatID: m.ChatID, BuyerID: m.SenderUserID, BuyerName: m.SenderName, ItemID: m.ItemID, Text: m.Text}); err != nil {
-		r.logger.WarnContext(ctx, "发送买家请求人工客服通知失败", "err", err)
-		return
-	}
-	r.logger.InfoContext(ctx, "买家请求人工客服，已发送通知")
 }
 
 // NewReplyService 构造。
@@ -256,11 +207,14 @@ func (r *ReplyService) Handle(ctx context.Context, m ChatMessage) error {
 	}
 	if res.NotifyManual {
 		// 先让会话进入人工介入窗口并通知人工，再发送规则回复；规则回复为空或发送失败都不影响通知。
-		r.requestManualReply(ctx, m)
+		// notice 是通知摘要；质量门禁拒绝时不把可能含敏感信息的买家原文转发给通知端口。
+		notice := m
+		if res.ManualReason != "" {
+			notice.Text = res.ManualReason
+		}
+		r.requestManualReply(ctx, notice)
 	}
-	if res.Source == "AI" && r.manualTakeover.isPaused(m.ChatID, gate.window) {
-		// AI 生成耗时期间人工可能已经回复；发送前只读内存再检查一次，避免与人工抢答。
-		r.logger.InfoContext(ctx, "AI 回复生成期间检测到人工介入，放弃发送", "reply_skipped", "manual_takeover")
+	if !r.allowResolvedReply(ctx, m, res, gate) {
 		return nil
 	}
 	if res.Skip {
@@ -454,7 +408,7 @@ func (r *ReplyService) resolveWithGate(ctx context.Context, m ChatMessage, gate 
 	}
 
 	// 优先级2：外部 Agent 回复。实现方可自行设置来源标签，未设置时沿用历史标签 "API"。
-	if r.api != nil {
+	if r.api != nil && !gate.managed {
 		if // res、err 用于本次流程后续判断的res、err
 		res, err := r.api.Reply(ctx, m); err != nil {
 			r.logger.ErrorContext(ctx, "API 回复失败", "err", err)
@@ -470,9 +424,14 @@ func (r *ReplyService) resolveWithGate(ctx context.Context, m ChatMessage, gate 
 	if r.ai != nil {
 		if // res、err 用于本次流程后续判断的res、err
 		res, err := r.ai.Reply(ctx, m); err != nil {
+			if gate.managed {
+				return supportManualResult("模型或本地事实不可用")
+			}
 			r.logger.ErrorContext(ctx, "AI 回复失败", "err", err)
 		} else if res != nil {
-			res.Source = "AI"
+			if res.Source == "" {
+				res.Source = "AI"
+			}
 			return res
 		}
 	}

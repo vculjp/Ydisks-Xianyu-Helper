@@ -86,8 +86,8 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
         setDraftDesc(fetched.description);
         setDraftPrice(fetched.price || draftPrice);
         setDraftImages(fetched.imageUrls);
-        setFullDetailLoaded(true);
-        setStatusMessage({ tone: 'ok', text: `已成功补抓完整文案与 ${fetched.imageUrls.length} 张高清主图` });
+        setFullDetailLoaded(fetched.hasFullDetail);
+        setStatusMessage(fetched.hasFullDetail ? { tone: 'ok', text: `已成功补抓完整文案与 ${fetched.imageUrls.length} 张主图` } : { tone: 'err', text: '返回的详情不完整，请人工核对正文及图片' });
       } else if (batch.errors.length > 0) {
         setStatusMessage({ tone: 'err', text: batch.errors[0].message });
       }

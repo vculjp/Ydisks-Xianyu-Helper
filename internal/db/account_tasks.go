@@ -188,14 +188,14 @@ func (s *AccountTaskStore) claimRun(ctx context.Context, run AccountTaskRun, now
 	// retryCondition 限制累计执行次数、冷却时间，并排除已明确标记为永久失败的运行记录。
 	retryCondition := "attempt_count<? AND next_retry_at<=? AND error_message NOT LIKE ?"
 	// args 保存更新时间、运行键、最大执行次数、当前时间和永久失败前缀参数。
-	args := []any{now, run.RunKey, accountTaskMaxAttempts, now, NoRetryErrorPrefix + "%"}
+	args := []any{now, run.RunKey, run.CookieID, run.TaskType, run.TargetID, run.RunDate, accountTaskMaxAttempts, now, NoRetryErrorPrefix + "%"}
 	if immediate {
 		retryCondition = "attempt_count<? AND error_message NOT LIKE ?"
-		args = []any{now, run.RunKey, accountTaskMaxAttempts, NoRetryErrorPrefix + "%"}
+		args = []any{now, run.RunKey, run.CookieID, run.TaskType, run.TargetID, run.RunDate, accountTaskMaxAttempts, NoRetryErrorPrefix + "%"}
 	}
 	// res、err 用于本次流程后续判断的res、err
 	res, err := s.DB.ExecContext(ctx, `UPDATE account_task_runs SET status='running',attempt_count=attempt_count+1,started_at=?,finished_at=0,error_message=''
-		WHERE run_key=? AND status='failed' AND `+retryCondition, args...)
+		WHERE run_key=? AND cookie_id=? AND task_type=? AND COALESCE(target_id,'')=? AND COALESCE(run_date,'')=? AND status='failed' AND `+retryCondition, args...)
 	if err != nil {
 		return false, err
 	}
@@ -220,7 +220,7 @@ func (s *AccountTaskStore) claimRun(ctx context.Context, run AccountTaskRun, now
 			status       string
 		)
 		// queryErr 保存读取人工重试状态时的数据库错误。
-		if queryErr := s.DB.QueryRowContext(ctx, `SELECT attempt_count,status FROM account_task_runs WHERE run_key=?`, run.RunKey).Scan(&attemptCount, &status); queryErr != nil && !errors.Is(queryErr, sql.ErrNoRows) {
+		if queryErr := s.DB.QueryRowContext(ctx, `SELECT attempt_count,status FROM account_task_runs WHERE run_key=? AND cookie_id=? AND task_type=? AND COALESCE(target_id,'')=? AND COALESCE(run_date,'')=?`, run.RunKey, run.CookieID, run.TaskType, run.TargetID, run.RunDate).Scan(&attemptCount, &status); queryErr != nil && !errors.Is(queryErr, sql.ErrNoRows) {
 			return false, queryErr
 		}
 		if status == "failed" && attemptCount >= accountTaskMaxAttempts {

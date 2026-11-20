@@ -272,6 +272,15 @@ func (c *Center) RunAccountTask(ctx context.Context, accountID, taskType string)
 	return summary, nil
 }
 
+// TryAcquireBatchAdmission 提供共享的本地批处理执行权给采集适配器；不会等待或调用平台。
+// 成功时返回唯一释放函数，失败时不取得任何执行权；交易规则和客服发送不经过该门禁。
+func (c *Center) TryAcquireBatchAdmission() (func(), bool) {
+	if c == nil || !c.taskRunner.batchActive.CompareAndSwap(false, true) {
+		return nil, false
+	}
+	return func() { c.taskRunner.batchActive.Store(false) }, true
+}
+
 // scanAccountTasks 扫描启用的账号任务，并委托给账号任务协调器。
 func (c *Center) scanAccountTasks(ctx context.Context) {
 	c.taskRunner.scanAccountTasks(ctx)

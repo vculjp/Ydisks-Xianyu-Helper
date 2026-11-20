@@ -414,7 +414,8 @@ func TestMtopString(t *testing.T) {
 	}{
 		{"hello", "hello"},
 		{float64(123), "123"},
-		{float64(12.99), "12"},
+		// 金额转换必须保留小数，不能截断为整数。
+		{float64(12.99), "12.99"},
 		{int(456), "456"},
 		{json.Number("789"), "789"},
 		{nil, ""},

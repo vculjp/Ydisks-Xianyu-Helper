@@ -2327,6 +2327,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/support-takeover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 持久化人工接管或恢复 */
+        post: operations["setCustomerSupportTakeover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/support-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 客服沙盒，仅生成候选回复 */
+        post: operations["previewCustomerSupport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/user": {
         parameters: {
             query?: never;
@@ -3055,6 +3089,23 @@ export interface components {
             reply_content: string;
         };
         ItemReplyListResponse: components["schemas"]["ItemReplyResponse"][];
+        SupportTakeoverRequest: {
+            account_id: string;
+            chat_id: string;
+            paused: boolean;
+        };
+        SupportPreviewRequest: {
+            account_id: string;
+            item_id: string;
+            message: string;
+        };
+        SupportPreviewResponse: {
+            source: string;
+            reply: string;
+            /** @enum {string} */
+            decision: "pass" | "manual" | "unmatched";
+            reason: string;
+        };
         AIReplySettingsResponse: {
             cookie_id?: string;
             ai_enabled: boolean;
@@ -3086,6 +3137,9 @@ export interface components {
             [key: string]: string;
         };
         UserSettingResponse: {
+            value: string;
+        };
+        UserSettingUpdateRequest: {
             value: string;
         };
         PublishCategoryResponse: {
@@ -6805,6 +6859,8 @@ export interface operations {
     getApiV1AnalyticsSales: {
         parameters: {
             query: {
+                /** @description 限定当前登录用户拥有的店铺；省略表示本人全部店铺。 */
+                cookie_id?: string;
                 start_date: string;
                 end_date: string;
                 timezone_offset_minutes?: number;
@@ -16837,6 +16893,144 @@ export interface operations {
             };
         };
     };
+    setCustomerSupportTakeover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SupportTakeoverRequest"];
+            };
+        };
+        responses: {
+            /** @description 成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationResponse"];
+                };
+            };
+            /** @description 统一错误响应 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 统一错误响应 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 统一错误响应 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 统一错误响应 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 统一错误响应 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    previewCustomerSupport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SupportPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description 通过检查的候选回复或人工处理决策 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupportPreviewResponse"];
+                };
+            };
+            /** @description 统一错误响应 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 统一错误响应 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 统一错误响应 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 统一错误响应 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 统一错误响应 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     getApiV1SettingsUser: {
         parameters: {
             query?: never;
@@ -16978,7 +17172,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserSettingUpdateRequest"];
+            };
+        };
         responses: {
             /** @description 成功 */
             200: {

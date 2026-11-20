@@ -30,6 +30,8 @@ func (s *Server) mountVersionedSettingsCardNotificationRoutes(r chi.Router) {
 		r.Use(auth.RequireAuth)
 
 		r.Get("/api/v1/settings/ai-reply", s.listAIReply)
+		r.Post("/api/v1/settings/support-preview", s.previewCustomerSupport)
+		r.Post("/api/v1/settings/support-takeover", s.setCustomerSupportTakeover)
 		r.Get("/api/v1/settings/ai-reply/{cookie_id}", s.getAIReply)
 		r.Put("/api/v1/settings/ai-reply/{cookie_id}", s.setAIReply)
 		r.Get("/api/v1/settings/user", s.listUserSettings)

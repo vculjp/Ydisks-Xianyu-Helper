@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { addRadarTargets, clearRadarItems, deleteRadarTarget, loadRadar, saveRadarSchedule, startRadar, stopRadar, toggleRadarTarget, type RadarData, type RadarSort } from '../radarApi';
+import { addRadarTargets, clearRadarItems, deleteRadarTarget, loadRadar, saveRadarSchedule, startRadar, stopRadar, toggleRadarTarget, type RadarData, type RadarSort } from '../api';
 import { collectorErrorMessage } from '../api';
 
 /** RadarPanelProps 提供当前选中账号与人工进入详情采集的回调。 */
@@ -21,6 +21,7 @@ export function RadarPanel({ cookieId, onInspect }: RadarPanelProps) {
   const [data, setData] = useState<RadarData | null>(null);
   // type、value、days 分别是待添加目标类型、输入文本及新发天数。
   const [type, setType] = useState<'keyword' | 'seller'>('keyword');
+  // value 与 setValue 保存未提交的监控目标文本。
   const [value, setValue] = useState('');
   const [days, setDays] = useState(3);
   // interval 是用户将要保存的定时间隔，未保存时不改动后台。
@@ -120,7 +121,7 @@ export function RadarPanel({ cookieId, onInspect }: RadarPanelProps) {
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 text-xs">
           <span>自动巡检：{status?.schedule.enabled ? `已开启（每 ${status.schedule.interval} 小时，账号 ${status.schedule.cookieId}）` : '已关闭'}</span>
           <select aria-label="巡检周期" className={inputStyle} value={interval} onChange={/* event 更新尚未保存的低频周期。 */ event => setIntervalHours(Number(event.target.value))}><option value={6}>6 小时</option><option value={12}>12 小时</option><option value={24}>24 小时</option></select>
-          <button className={buttonStyle} disabled={busy || !cookieId} onClick={/* 用户确认保存当前账号及周期。 */ () => void perform(/* signal 控制定时写入。 */ signal => saveRadarSchedule(true, cookieId, interval, signal))}>开启 / 保存计划</button>
+          <button className={buttonStyle} disabled={busy || !cookieId || running} onClick={/* 计划须由用户明确确认授权和账号状态；异常后不会自动恢复。 */ () => { if (window.confirm('请确认已通过官方渠道核对账号状态，并具备相应操作授权。确定保存此定时计划？')) void perform(/* signal 控制定时写入。 */ signal => saveRadarSchedule(true, cookieId, interval, signal)); }}>开启 / 保存计划</button>
           <button className={buttonStyle} disabled={busy || !status?.schedule.enabled} onClick={/* 用户明确关闭未来自动巡检。 */ () => void perform(/* signal 控制关闭计划请求。 */ signal => saveRadarSchedule(false, status?.schedule.cookieId ?? '', interval, signal))}>关闭计划</button>
         </div>
       </div>

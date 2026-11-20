@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	collectorapp "xianyu-go/internal/application/collector"
@@ -26,6 +27,10 @@ type collectorMTopClient interface {
 
 // CollectorPlatformPort 将商品采集应用端口适配到数据库凭证管理与闲鱼 MTOP 协议层。
 type CollectorPlatformPort struct {
+	// requestMu 在整个进程的共享适配器中仅允许一个采集平台调用；不影响客服、订单或既有节流机制。
+	requestMu sync.Mutex
+	// batchAdmission 由组合根固定注入，与账号计划共享本地执行权；单独构造的测试适配器使用本地互斥。
+	batchAdmission func() (func(), bool)
 	// store 提供非敏感账号归属检查与受互斥锁保护的 Cookie 会话提交。
 	store *db.Store
 	// client 提供遵循账号级节流器的 MTOP 客户端实例。
@@ -45,6 +50,7 @@ func NewCollectorPlatformPort(
 	logger *slog.Logger,
 	updateRunningCookie func(context.Context, string, string),
 	recoverExpiredSession func(context.Context, string, error),
+	batchAdmission func() (func(), bool),
 ) *CollectorPlatformPort {
 	if logger == nil {
 		logger = slog.Default()
@@ -60,12 +66,24 @@ func NewCollectorPlatformPort(
 		return mtop.NewClient()
 	}
 	return &CollectorPlatformPort{
+		batchAdmission:        batchAdmission,
 		store:                 store,
 		client:                resolveClient,
 		logger:                logger,
 		updateRunningCookie:   updateRunningCookie,
 		recoverExpiredSession: recoverExpiredSession,
 	}
+}
+
+// tryAcquireBatch 取得进程共享批处理执行权；拒绝时不等待、不缓存请求，避免积压后补发。
+func (p *CollectorPlatformPort) tryAcquireBatch() (func(), bool) {
+	if p.batchAdmission != nil {
+		return p.batchAdmission()
+	}
+	if !p.requestMu.TryLock() {
+		return nil, false
+	}
+	return p.requestMu.Unlock, true
 }
 
 // OwnsAccount 仅读取账号 owner 列校验归属，不解密任何 Cookie 或令牌。
@@ -86,6 +104,12 @@ func (p *CollectorPlatformPort) OwnsAccount(ctx context.Context, userID int64, c
 
 // SearchMarket 使用指定账号执行单页全站关键词搜索并回写任何更新后的 Cookie。
 func (p *CollectorPlatformPort) SearchMarket(ctx context.Context, cookieID string, params collectorapp.PlatformSearchParams) ([]collectorapp.CollectedItem, bool, int, error) {
+	// release、acquired 持有共享执行权直到本轮请求结束；争用时直接拒绝。
+	release, acquired := p.tryAcquireBatch()
+	if !acquired {
+		return nil, false, 0, collectorapp.ErrCollectorBusy
+	}
+	defer release()
 	// requestCtx、cancel 限制单页搜索总时长。
 	requestCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -124,6 +148,12 @@ func (p *CollectorPlatformPort) SearchMarket(ctx context.Context, cookieID strin
 
 // FetchItemDetail 拉取单件商品详情（包含完整文案与最多 9 张主图）；background 为 true 时使用 ≥5 秒后台慢速节流。
 func (p *CollectorPlatformPort) FetchItemDetail(ctx context.Context, cookieID, itemID string, background bool) (collectorapp.CollectedItem, error) {
+	// release、acquired 限制跨账号重叠访问，不产生等待中的平台请求。
+	release, acquired := p.tryAcquireBatch()
+	if !acquired {
+		return collectorapp.CollectedItem{}, collectorapp.ErrCollectorBusy
+	}
+	defer release()
 	// requestCtx、cancel 限制单品详情请求时长（含排队节流预算）。
 	requestCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -148,6 +178,12 @@ func (p *CollectorPlatformPort) FetchItemDetail(ctx context.Context, cookieID, i
 
 // FetchSellerPage 拉取目标同行卖家单页在售商品列表；background 为 true 时使用 ≥5 秒后台慢速节流。
 func (p *CollectorPlatformPort) FetchSellerPage(ctx context.Context, cookieID, sellerID string, pageNumber, pageSize int, background bool) ([]collectorapp.CollectedItem, bool, int, error) {
+	// release、acquired 复用账号任务与采集的统一执行权。
+	release, acquired := p.tryAcquireBatch()
+	if !acquired {
+		return nil, false, 0, collectorapp.ErrCollectorBusy
+	}
+	defer release()
 	// requestCtx、cancel 限制单页店铺采集总时长。
 	requestCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -180,7 +216,7 @@ func (p *CollectorPlatformPort) IsAbortError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return IsBatchAbortError(err) || mtop.IsRiskVerificationErr(err) || mtop.IsSessionExpiredErr(err)
+	return errors.Is(err, collectorapp.ErrCollectorBusy) || errors.Is(err, collectorapp.ErrCollectorAccountStopped) || IsBatchAbortError(err) || mtop.IsRiskVerificationErr(err) || mtop.IsSessionExpiredErr(err)
 }
 
 // beginSession 短暂加锁读取账号凭证快照并立即释放锁，避免在慢速网络请求期间占用账号凭证锁。
@@ -190,6 +226,21 @@ func (p *CollectorPlatformPort) beginSession(ctx context.Context, cookieID strin
 	}
 	// unlock 保护凭证快照读取，读取完成后立即释放。
 	unlock := p.store.LockAccountCredentials(cookieID)
+	// enabled、statusErr 读取非敏感的持久化启停状态；停用或查询失败时不读取凭证、不发平台请求。
+	enabled, statusErr := p.store.Cookies.Status(ctx, cookieID)
+	if statusErr != nil || !enabled {
+		unlock()
+		if errors.Is(statusErr, db.ErrNotFound) {
+			return nil, "", ctx, nil, collectorapp.ErrAccountNotOwned
+		}
+		return nil, "", ctx, nil, collectorapp.ErrCollectorAccountStopped
+	}
+	// paused、pauseErr 统一使用既有本地暂停状态，读取失败时同样禁止采集。
+	paused, _, pauseErr := p.store.Cookies.IsPaused(ctx, cookieID)
+	if pauseErr != nil || paused {
+		unlock()
+		return nil, "", ctx, nil, collectorapp.ErrCollectorAccountStopped
+	}
 	// latest、loadErr 读取当前账号的平台运行时凭证数据。
 	latest, loadErr := p.store.Cookies.GetCookiePlatformRuntimeData(ctx, cookieID)
 	unlock()

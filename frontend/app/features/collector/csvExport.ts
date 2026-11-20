@@ -45,7 +45,7 @@ export const buildLibraryImportTemplateRows = (
     item.title.slice(0, 100),
     item.title,
     item.description || item.title,
-    item.price || '9.90',
+    item.price,
     item.originalPrice,
     '5',
     'none',

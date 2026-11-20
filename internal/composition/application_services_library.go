@@ -99,6 +99,7 @@ func buildCatalogAndLibrary(dependencies Dependencies, sessionRecovery adapter.S
 				sessionRecovery(ctx, cookieID, err)
 			}
 		},
+		dependencies.Automation.TryAcquireBatchAdmission,
 	)
 	// aiAdapter 复用于标题文案改写与爆品雷达当季热词裂变。
 	aiAdapter := dependencies.ItemDependencies.NewCollectorAIRewriter()

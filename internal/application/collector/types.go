@@ -33,6 +33,12 @@ func (e *ValidationError) Error() string {
 // ErrAccountNotOwned 表示目标采集账号不存在或不属于当前登录用户。
 var ErrAccountNotOwned = errors.New("采集账号不存在或无权使用")
 
+// ErrCollectorAccountStopped 表示本地停用或状态无法确认，必须终止本轮采集，不再访问平台。
+var ErrCollectorAccountStopped = &ValidationError{Message: "采集账号已暂停、停用或状态无法确认，请先在账号管理中人工核对"}
+
+// ErrCollectorBusy 拒绝重叠的采集操作，不创建等待后自动补发的请求。
+var ErrCollectorBusy = &ValidationError{Message: "已有采集操作正在运行，请等待完成并核对状态后再手动操作"}
+
 // ErrAIUnavailable 表示系统尚未配置可用的大模型 API 密钥或地址。
 var ErrAIUnavailable = errors.New("尚未配置系统 AI 接口密钥，请先在「系统与AI」中完成配置")
 
@@ -302,6 +308,12 @@ type LibraryImageUploader interface {
 type LibraryTemplateCreator interface {
 	// CreateTemplate 校验并持久化一条新的商品模板。
 	CreateTemplate(ctx context.Context, input libraryapp.Template) (libraryapp.Template, error)
+}
+
+// LibraryTemplateFinder 定义已有模板的本地查询能力，避免重复转存再次下载或调用模型。
+type LibraryTemplateFinder interface {
+	// FindCollectorTemplate 查询指定用户及同一请求摘要的模板；不存在返回资源库的标准未找到错误。
+	FindCollectorTemplate(context.Context, int64, string) (libraryapp.Template, error)
 }
 
 // ManualVerifyPort 定义一键弹出可见闲鱼窗口供用户手动滑过官方验证并自动提取完整 Cookie Jar 的端口。

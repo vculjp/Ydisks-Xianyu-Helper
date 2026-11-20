@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -25,6 +26,10 @@ func (s *Service) SaveToTemplates(ctx context.Context, userID int64, input SaveT
 	if len(input.Items) > MaxSaveTemplateBatch {
 		return SaveTemplatesResult{}, invalid(fmt.Sprintf("单次最多支持转存 %d 件商品到模板库（当前 %d 件）", MaxSaveTemplateBatch, len(input.Items)))
 	}
+	if !s.saveMu.TryLock() {
+		return SaveTemplatesResult{}, invalid("已有模板转存正在处理，请核对本地模板后再手动操作")
+	}
+	defer s.saveMu.Unlock()
 	// postageMode 校验并归一邮费方式，默认使用虚拟商品最常用的 none（无需邮寄）。
 	postageMode := strings.TrimSpace(input.PostageMode)
 	if postageMode == "" {
@@ -70,6 +75,11 @@ func (s *Service) SaveToTemplates(ctx context.Context, userID int64, input SaveT
 
 	// idx、item 按顺序逐件处理转存任务。
 	for idx, item := range input.Items {
+		if riskAborted {
+			result.Failed++
+			result.Results = append(result.Results, SavedTemplateOutcome{ItemID: item.ItemID, Title: item.Title, Error: "本批次已安全停止，本商品未执行，请人工核对"})
+			continue
+		}
 		if batchCtx.Err() != nil {
 			result.Failed++
 			result.Results = append(result.Results, SavedTemplateOutcome{ItemID: item.ItemID, Title: item.Title, Error: "批次已取消或达到时间预算，本商品尚未执行"})
@@ -129,25 +139,36 @@ func (s *Service) saveSingleTemplateItem(
 	}
 	// collectorKey 是持久化唯一约束使用的单商品 SHA-256 摘要。
 	collectorKey := fmt.Sprintf("%x", sha256.Sum256(encoded))
+	// finder、ok 判断是否支持已有模板查询，生产资源库在任何外部工作之前进行本地复核。
+	if finder, ok := s.templateCreator.(LibraryTemplateFinder); ok {
+		// existing、findErr 是已持久化的同请求模板及查询错误。
+		existing, findErr := finder.FindCollectorTemplate(ctx, userID, collectorKey)
+		if findErr == nil {
+			return SavedTemplateOutcome{ItemID: itemID, Title: existing.Title, Success: true, TemplateID: existing.ID, ImageCount: len(existing.ImageIDs)}, false
+		}
+		if !errors.Is(findErr, libraryapp.ErrTemplateNotFound) {
+			return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: "无法确认已有模板，未执行转存，请核对本地数据库"}, false
+		}
+	}
 
 	// needDetail 判断是否需要向平台补抓多图和详情文案。
-	needDetail := input.FetchDetailIfMissing && !skipRemoteDetail && cookieID != "" && itemID != "" && (!item.HasFullDetail || description == "" || len(imageURLs) == 0)
+	needDetail := input.FetchDetailIfMissing && (!item.HasFullDetail || description == "" || len(imageURLs) == 0)
 	if needDetail {
+		if skipRemoteDetail || cookieID == "" || itemID == "" {
+			return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: "无法补全商品详情，请核对采集账号和商品标识"}, triggeredAbort
+		}
 		// detail、detailErr 使用后台慢速节流（多于 1 件时）补抓完整详情。
 		detail, detailErr := s.platform.FetchItemDetail(ctx, cookieID, itemID, len(input.Items) > 1)
 		if detailErr != nil {
 			if s.platform.IsAbortError(detailErr) {
 				triggeredAbort = true
 			}
-			// 若列表本身尚未携带标题或封面图则无法继续落库；若已有标题与高清封面主图，则停止继续请求详情并安全降级用已有图文入库。
-			if title == "" || len(imageURLs) == 0 {
-				return SavedTemplateOutcome{
-					ItemID: itemID,
-					Title:  title,
-					Error:  "补抓商品详情失败：" + detailErr.Error(),
-				}, triggeredAbort
-			}
+			// 用户明确要求补全时不得静默降级成摘要模板。
+			return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: "补抓商品详情失败：" + detailErr.Error()}, triggeredAbort
 		} else {
+			if detail.ItemID != itemID || !detail.HasFullDetail || strings.TrimSpace(detail.Description) == "" || len(filterNonEmptyURLs(detail.ImageURLs)) == 0 {
+				return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: "返回的商品标识或详情不完整，未创建模板"}, triggeredAbort
+			}
 			if title == "" {
 				title = detail.Title
 			}
@@ -244,7 +265,7 @@ func (s *Service) saveSingleTemplateItem(
 		Title:      created.Title,
 		Success:    true,
 		TemplateID: created.ID,
-		ImageCount: len(imageIDs),
+		ImageCount: len(created.ImageIDs),
 	}, triggeredAbort
 }
 
@@ -257,11 +278,8 @@ func (s *Service) downloadAndStoreImages(ctx context.Context, userID int64, item
 		// data、fetchErr 经受保护的出站客户端下载图片。
 		data, fetchErr := s.imageDownloader.Fetch(ctx, rawURL)
 		if fetchErr != nil {
-			// 首张主图下载失败时整条失败；次要副图偶发失效且已有主图时跳过坏副图以提升成功率。
-			if idx == 0 || len(uploads) == 0 {
-				return nil, fmt.Errorf("下载主图失败（%s）", fetchErr.Error())
-			}
-			continue
+			// 请求中的图片必须全部可用，不能将缺图模板误报成功。
+			return nil, fmt.Errorf("第 %d 张图片下载失败，请核对图片后再转存", idx+1)
 		}
 		uploads = append(uploads, libraryapp.ImageUpload{
 			Filename: buildCollectedImageFilename(itemID, idx+1, rawURL),
@@ -273,15 +291,15 @@ func (s *Service) downloadAndStoreImages(ctx context.Context, userID int64, item
 	if uploadErr != nil {
 		return nil, fmt.Errorf("写入图片库失败：%w", uploadErr)
 	}
+	if len(stored) != len(uploads) {
+		return nil, fmt.Errorf("图片库返回的结果数量不一致，未创建模板")
+	}
 	// ids 提取保持主图顺序的图片主键。
 	ids := make([]int64, 0, len(stored))
 	// idx、res 分别对应主图或副图顺序及单张上传结果；不允许无效图 ID 进入模板。
 	for idx, res := range stored {
 		if res.Error != "" || res.Image.ID <= 0 {
-			if idx == 0 {
-				return nil, fmt.Errorf("主图写入图片库失败：%s", res.Error)
-			}
-			continue
+			return nil, fmt.Errorf("第 %d 张图片写入图片库失败，未创建模板", idx+1)
 		}
 		ids = append(ids, res.Image.ID)
 	}

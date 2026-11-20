@@ -408,6 +408,10 @@ type SettingsPort interface {
 	UpsertAIReply(context.Context, int64, string, settingsapp.AIReplySettings) error
 	ListAIModels(context.Context, int64, string, string) ([]string, error)
 	TestAIConnection(context.Context, int64, string, string, string) (settingsapp.AIConnectionTestResult, error)
+	// PreviewSupport 仅执行客服沙盒，不发送真实消息或修改订单。
+	PreviewSupport(context.Context, int64, string, string, string) (settingsapp.SupportPreview, error)
+	// SetSupportTakeover 持久化人工暂停或恢复会话的动作。
+	SetSupportTakeover(context.Context, int64, string, string, bool) error
 }
 
 // AdminPort 定义管理员用户与统计能力。
@@ -566,8 +570,8 @@ type ApplicationPortsInput struct {
 	ItemGreetings          ItemGreetingsPort
 	// AgentReplies 是账号外部 Agent 回复配置与连接测试用例。
 	AgentReplies AgentReplyPort
-	Library   LibraryPort
-	Collector CollectorPort
+	Library      LibraryPort
+	Collector    CollectorPort
 	Keywords     KeywordsPort
 	Settings     SettingsPort
 	Admin        AdminPort

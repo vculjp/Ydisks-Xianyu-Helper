@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -271,18 +272,21 @@ func TestLibraryImportStoreIOFailures(t *testing.T) {
 	}
 	// dir 返回任务目录路径。
 	dir := func(id string) string { return filepath.Join(root, libraryImportsDirName, id) }
-	// 1. 任务目录只读：临时清单写入失败。
-	if err := store.Create(ctx, "import_ro", []byte("s"), nil); err != nil {
-		t.Fatal(err)
-	}
-	// err 保存把任务目录改为只读的权限修改错误。
-	if err := os.Chmod(dir("import_ro"), 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir("import_ro"), 0o750) })
-	// err 保存本次调用的返回值，用于断言：只读目录写清单应失败。
-	if err := store.SaveManifest(ctx, libraryapp.ImportManifest{ImportID: "import_ro"}); err == nil || !strings.Contains(err.Error(), "保存导入进度失败") {
-		t.Fatalf("只读目录写清单应失败: %v", err)
+	// Windows 的 Chmod 不具备 POSIX 拒绝写入语义，仅在支持该权限模型的系统验证清单写入失败。
+	if runtime.GOOS != "windows" {
+		// 1. 任务目录只读：临时清单写入失败。
+		if err := store.Create(ctx, "import_ro", []byte("s"), nil); err != nil {
+			t.Fatal(err)
+		}
+		// err 保存把任务目录改为只读的权限修改错误。
+		if err := os.Chmod(dir("import_ro"), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir("import_ro"), 0o750) })
+		// err 保存本次调用的返回值，用于断言：只读目录写清单应失败。
+		if err := store.SaveManifest(ctx, libraryapp.ImportManifest{ImportID: "import_ro"}); err == nil || !strings.Contains(err.Error(), "保存导入进度失败") {
+			t.Fatalf("只读目录写清单应失败: %v", err)
+		}
 	}
 	// 2. manifest.json 是非空目录：重命名失败，读取清单失败且不是“不存在”。
 	if err := store.Create(ctx, "import_dir", []byte("s"), []byte("zip")); err != nil {
@@ -300,22 +304,25 @@ func TestLibraryImportStoreIOFailures(t *testing.T) {
 	if _, err := store.LoadManifest(ctx, "import_dir"); err == nil || errors.Is(err, libraryapp.ErrImportNotFound) {
 		t.Fatalf("清单为目录时应返回系统错误: %v", err)
 	}
-	// 3. 压缩包不可读：打开失败。
-	if err := os.Chmod(filepath.Join(dir("import_dir"), libraryImportZipFile), 0o000); err != nil {
-		t.Fatal(err)
-	}
-	// err 保存本次调用的返回值，用于断言：压缩包不可读应返回系统错误。
-	if _, _, err := store.OpenZip(ctx, "import_dir"); err == nil || errors.Is(err, libraryapp.ErrImportNotFound) {
-		t.Fatalf("压缩包不可读应返回系统错误: %v", err)
-	}
-	// 4. 导入根目录不可列举：过期清理失败。
-	if err := os.Chmod(filepath.Join(root, libraryImportsDirName), 0o300); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(filepath.Join(root, libraryImportsDirName), 0o750) })
-	// err 保存本次调用的返回值，用于断言：导入根目录不可列举时清理应失败。
-	if err := store.CleanupBefore(ctx, time.Now()); err == nil {
-		t.Fatal("导入根目录不可列举时清理应失败")
+	// 压缩包和目录的只读故障仅在权限位生效的平台验证；保留上方跨平台重命名故障测试。
+	if runtime.GOOS != "windows" {
+		// 3. 压缩包不可读：打开失败。
+		if err := os.Chmod(filepath.Join(dir("import_dir"), libraryImportZipFile), 0o000); err != nil {
+			t.Fatal(err)
+		}
+		// err 保存本次调用的返回值，用于断言：压缩包不可读应返回系统错误。
+		if _, _, err := store.OpenZip(ctx, "import_dir"); err == nil || errors.Is(err, libraryapp.ErrImportNotFound) {
+			t.Fatalf("压缩包不可读应返回系统错误: %v", err)
+		}
+		// 4. 导入根目录不可列举：过期清理失败。
+		if err := os.Chmod(filepath.Join(root, libraryImportsDirName), 0o300); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(filepath.Join(root, libraryImportsDirName), 0o750) })
+		// err 保存本次调用的返回值，用于断言：导入根目录不可列举时清理应失败。
+		if err := store.CleanupBefore(ctx, time.Now()); err == nil {
+			t.Fatal("导入根目录不可列举时清理应失败")
+		}
 	}
 }
 

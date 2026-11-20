@@ -116,7 +116,7 @@ func parseSingleItemID(segment string) string {
 	return ""
 }
 
-// splitInputLines 按换行符和分号拆分多条输入并过滤空白行。
+// splitInputLines 按换行符和分号拆分多条输入；纯数字 ID 列表额外支持中英文逗号，不改写分享链接中的逗号。
 func splitInputLines(raw string) []string {
 	// normalized 统一回车换行与中文分号。
 	normalized := strings.NewReplacer("\r\n", "\n", "\r", "\n", "；", "\n", ";", "\n").Replace(raw)
@@ -126,6 +126,24 @@ func splitInputLines(raw string) []string {
 	for _, part := range strings.Split(normalized, "\n") {
 		// trimmed 是去除首尾空白后的单行输入。
 		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			// fragments 是可能由逗号分隔的纯数字 ID；含普通分享文案时保留原片段。
+			fragments := strings.Split(strings.ReplaceAll(trimmed, "，", ","), ",")
+			// numericList 表示所有片段都是独立的有效数字 ID。
+			numericList := len(fragments) > 1
+			// fragment 是当前待验证的数字 ID。
+			for _, fragment := range fragments {
+				if !numericIDPattern.MatchString(strings.TrimSpace(fragment)) {
+					numericList = false
+					break
+				}
+			}
+			if numericList {
+				// fragment 按原输入顺序写入完整数字 ID。
+				for _, fragment := range fragments {
+					out = append(out, strings.TrimSpace(fragment))
+				}
+				continue
+			}
 			out = append(out, trimmed)
 		}
 	}

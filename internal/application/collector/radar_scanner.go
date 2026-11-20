@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"math/big"
 	"strings"
 	"sync"
@@ -23,8 +24,10 @@ type radarCoordinator struct {
 	mu sync.Mutex
 	// targetMu 串行化本进程监控项新增的总量校验和写入，仓储调用受请求上下文约束。
 	targetMu sync.Mutex
-	// scheduleMu 保护定时配置的读改写，不能在持有 mu 时获取。
+	// scheduleMu 保护定时配置读改写和本地安全暂停标记；不能在持有 mu 时获取。
 	scheduleMu sync.Mutex
+	// scheduleSuspended 在暂停配置尚未成功落库时仍阻止本进程自动启动；仅显式保存计划才能清除。
+	scheduleSuspended map[int64]bool
 	// clearing 记录正在清理榜单的用户，防止清理期间启动新巡检。
 	clearing map[int64]bool
 	// rootCtx 是由生命周期协调器注入的进程根 Context。
@@ -49,9 +52,10 @@ func newRadarCoordinator(customDelay func() time.Duration) *radarCoordinator {
 		delayFn = defaultRadarJitterDelay
 	}
 	return &radarCoordinator{
-		runs:      make(map[int64]*radarUserRun),
-		clearing:  make(map[int64]bool),
-		stepDelay: delayFn,
+		runs:              make(map[int64]*radarUserRun),
+		scheduleSuspended: make(map[int64]bool),
+		clearing:          make(map[int64]bool),
+		stepDelay:         delayFn,
 	}
 }
 
@@ -144,8 +148,11 @@ func (s *Service) StartRadarScan(ctx context.Context, userID int64, cookieID str
 	if len(targets) == 0 {
 		return RadarScanStatus{}, invalid("监控池暂无已启用的词或同行，请先导入种子词包或添加监控目标")
 	}
-	// schedule、_ 读取当前定时配置一并返回。
-	schedule, _ := s.radarRepo.GetSchedule(ctx, userID)
+	// schedule、scheduleErr 读取当前定时配置，未知状态不能当成已关闭。
+	schedule, scheduleErr := s.radarRepo.GetSchedule(ctx, userID)
+	if scheduleErr != nil {
+		return RadarScanStatus{}, invalid("无法读取定时计划，请核对本地数据库；本次未启动巡检")
+	}
 	return s.launchUserRadarScan(userID, normalizedCookie, targets, schedule)
 }
 
@@ -181,8 +188,17 @@ func (s *Service) GetRadarScanStatus(ctx context.Context, userID int64) (RadarSc
 	}
 	if s.radarRepo != nil {
 		// schedule、schedErr 合并数据库持久化的定时巡检设置。
-		if schedule, schedErr := s.radarRepo.GetSchedule(ctx, userID); schedErr == nil {
-			out.Schedule = schedule
+		schedule, schedErr := s.radarRepo.GetSchedule(ctx, userID)
+		if schedErr != nil {
+			return out, invalid("无法确认定时计划状态，请检查本地数据库")
+		}
+		out.Schedule = schedule
+		s.radar.scheduleMu.Lock()
+		// suspended 表示计划登记失败时生效的进程内阻断，不能把持久化的启用字段当成正在自动运行。
+		suspended := s.radar.scheduleSuspended[userID]
+		s.radar.scheduleMu.Unlock()
+		if suspended && schedule.Enabled && out.LastError == "" {
+			out.LastError = "定时计划本地登记失败，当前进程禁止自动巡检，请人工核对并保存计划"
 		}
 	}
 	return out, nil
@@ -299,12 +315,26 @@ func (s *Service) executeRadarScan(ctx context.Context, userID int64, cookieID s
 		// items、scanErr 单页精扫第 1 页前 30 条核心商品，绝不深翻页。
 		items, scanErr := s.fetchSingleRadarTarget(ctx, cookieID, target)
 		if scanErr != nil {
-			if ctx.Err() != nil {
-				finish(false, "已手动停止本轮爆品巡检")
+			if errors.Is(scanErr, ErrCollectorBusy) {
+				// 本地执行权争用并非平台风险，本轮直接结束，不排队、不重试、不修改定时计划。
+				finish(false, "本地其他任务正在运行，本轮巡检已停止；请人工核对任务状态")
 				return
 			}
 			if s.platform.IsAbortError(scanErr) {
-				finish(true, scanErr.Error())
+				// pauseCtx 在本轮取消后仍允许短暂写入本地安全状态，不执行任何平台操作。
+				pauseCtx, cancelPause := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				// pauseErr 保存定时计划关闭失败的原因；错误正文不进入界面。
+				pauseErr := s.suspendRadarSchedule(pauseCtx, userID)
+				cancelPause()
+				if pauseErr != nil {
+					finish(true, "采集已停止；定时计划关闭未能持久化，本次进程禁止自动重启。请立即人工核对并关闭计划，重启后仍需核对。")
+					return
+				}
+				finish(true, "采集账号需要人工核对，已停止本轮并关闭定时计划。请通过官方渠道检查账号状态和授权；不要自动重试。")
+				return
+			}
+			if ctx.Err() != nil {
+				finish(false, "已手动停止本轮爆品巡检")
 				return
 			}
 			// 非风控单条异常记录提示但继续扫描后续目标。
@@ -455,6 +485,10 @@ func (s *Service) triggerDueScheduledScans(ctx context.Context) {
 			continue
 		}
 		s.radar.scheduleMu.Lock()
+		if s.radar.scheduleSuspended[entry.UserID] {
+			s.radar.scheduleMu.Unlock()
+			continue
+		}
 		// latest、readErr 在获得定时配置写锁后重新读取，避免覆盖刚关闭或改动的计划。
 		latest, readErr := s.radarRepo.GetSchedule(ctx, entry.UserID)
 		if readErr != nil || !latest.Enabled || latest.CookieID != cfg.CookieID || latest.IntervalHours != cfg.IntervalHours ||
@@ -462,14 +496,16 @@ func (s *Service) triggerDueScheduledScans(ctx context.Context) {
 			s.radar.scheduleMu.Unlock()
 			continue
 		}
-		// launchErr 仅在本轮真正获得执行权时为 nil。
-		if _, launchErr := s.launchUserRadarScan(entry.UserID, latest.CookieID, targets, latest); launchErr == nil {
-			latest.LastAutoRunUnix = nowUnix
-			// saveErr 表示定时运行时间持久化失败，停止当前任务以免调度状态与执行事实失配。
-			if saveErr := s.radarRepo.SaveSchedule(ctx, entry.UserID, latest); saveErr != nil {
-				_, _ = s.StopRadarScan(ctx, entry.UserID)
-			}
+		// 先持久化本轮调度占用时间，再启动 worker；存储失败绝不启动平台请求。
+		latest.LastAutoRunUnix = nowUnix
+		// saveErr 表示本轮登记失败；本进程禁止再自动尝试，需人工核对并保存计划。
+		if saveErr := s.radarRepo.SaveSchedule(ctx, entry.UserID, latest); saveErr != nil {
+			s.radar.scheduleSuspended[entry.UserID] = true
+			s.radar.scheduleMu.Unlock()
+			continue
 		}
+		// 若执行权已被其他任务占用，保守跳过本周期，不补发请求。
+		_, _ = s.launchUserRadarScan(entry.UserID, latest.CookieID, targets, latest)
 		s.radar.scheduleMu.Unlock()
 	}
 }

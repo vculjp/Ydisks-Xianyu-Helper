@@ -3,12 +3,15 @@ package db
 import (
 	"context"
 	"database/sql"
+	"sync"
 )
 
 // UserSettings 保存用户级界面与偏好设置。
 type UserSettings struct {
 	DB      *sql.DB
 	Dialect Dialect
+	// supportMu 串行化同一进程的客服接管写入，不跨网络或平台调用。
+	supportMu sync.Mutex
 }
 
 // AllForUser 查询指定用户的全部设置。

@@ -77,6 +77,8 @@ const Settings = lazy(/* Settings 页面按路由激活时加载。 */ () => imp
 const Rules = lazy(/* Rules 页面按路由激活时加载。 */ () => import('../features/rules/pages/Rules'));
 // AutomationAuditPanel 是规则日志面板，仅在规则页打开“规则日志”页签时才下载，避免撑大规则页分片。
 const AutomationAuditPanel = lazy(/* 规则日志面板随规则页签按需加载。 */ () => import('../features/rules/components/AutomationAuditPanel'));
+// SupportCenter 是独立的 AI 客服中心分片，仅打开该页签时下载。
+const SupportCenter = lazy(/* 客服中心面板按需加载。 */ () => import('../features/rules/components/SupportCenter'));
 // DeliveryTemplates 是按需加载的发货模板管理页面。
 const DeliveryTemplates = lazy(/* DeliveryTemplates 页面按路由激活时加载。 */ () => import('../features/delivery-templates/pages/DeliveryTemplates'));
 // Notifications 是按需加载的通知页面，避免首屏载入通知配置代码。
@@ -144,6 +146,7 @@ export const AppContent: React.FC<AppContentProps> = ({
         initialDeliveryTarget={deliveryRuleTarget}
         onDeliveryTargetHandled={onDeliveryTargetHandled}
         auditPanel={AutomationAuditPanel}
+        supportPanel={SupportCenter}
         libraryImageChooser={LibraryImageChooser}
       />;
       case 'delivery-templates': return <DeliveryTemplates libraryImageChooser={LibraryImageChooser} />;

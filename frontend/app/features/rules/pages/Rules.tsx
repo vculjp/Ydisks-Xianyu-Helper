@@ -40,7 +40,7 @@ import { ImageSourceField } from '../../../../shared/ui/ImageSourceField';
 import { PageHeader } from '../../../../shared/ui/PageHeader';
 
 // Rules 是规则 feature 在旧页面目录下保留的兼容入口组件。
-const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHandled, auditPanel: AuditPanel, libraryImageChooser }) => {
+const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHandled, auditPanel: AuditPanel, supportPanel: SupportPanel, libraryImageChooser }) => {
   // [activeTab, 解构得到当前 Hook 返回的状态和操作函数。
   const [activeTab, setActiveTab] = useState<RulesTab>('automation');
   // [selectedAccountId, 解构得到当前 Hook 返回的状态和操作函数。
@@ -252,7 +252,7 @@ const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHa
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             刷新
           </button>
-          {activeTab !== 'greeting' && activeTab !== 'agent' && activeTab !== 'logs' && (
+          {activeTab !== 'greeting' && activeTab !== 'agent' && activeTab !== 'support' && activeTab !== 'logs' && (
           <button
             onClick={activeTab === 'automation' ? /* 当前回调处理用户交互或异步状态变化。 */ () => openNewAutomationRule('order_paid') : activeTab === 'reply' ? handleAddReplyRule : /* 当前回调处理用户交互或异步状态变化。 */ () => void openDefaultReplyModal()}
             disabled={!selectedAccountId}
@@ -272,6 +272,7 @@ const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHa
           { id: 'default' as const, label: '账号默认回复', icon: Bot },
           { id: 'greeting' as const, label: '商品首次回复', icon: Gift },
           { id: 'agent' as const, label: 'Agent 回复', icon: Network },
+          { id: 'support' as const, label: 'AI 客服中心', icon: Bot },
           { id: 'logs' as const, label: '规则日志', icon: ScrollText },
         ].map(/* 当前回调处理用户交互或异步状态变化。 */ tab => {
           // Icon 渲染Icon React 组件。
@@ -687,6 +688,8 @@ const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHa
       {activeTab === 'greeting' && <ItemGreetingPanel accountID={selectedAccountId} libraryImageChooser={libraryImageChooser} />}
 
       {activeTab === 'agent' && <AgentReplyPanel accountID={selectedAccountId} />}
+
+      {activeTab === 'support' && SupportPanel && <Suspense fallback={<p className="p-5 text-sm text-gray-500">加载客服中心…</p>}><SupportPanel accountId={selectedAccountId} accounts={accounts} items={items} /></Suspense>}
 
       {activeTab === 'logs' && (
         AuditPanel ? (

@@ -314,6 +314,10 @@ func (r *AnalyticsRepository) orderScope(filter analyticsapp.Filter, amountColum
 		conditions = append(conditions, "EXISTS (SELECT 1 FROM cookies WHERE cookies.id = orders.cookie_id AND cookies.user_id = ?)")
 		args = append(args, filter.UserID)
 	}
+	if filter.CookieID != "" {
+		conditions = append(conditions, "orders.cookie_id = ?")
+		args = append(args, filter.CookieID)
+	}
 	if len(filter.Statuses) > 0 {
 		// placeholders 是状态条件需要的占位符列表。
 		placeholders := make([]string, len(filter.Statuses))

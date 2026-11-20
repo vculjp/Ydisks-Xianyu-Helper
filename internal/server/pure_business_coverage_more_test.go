@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 )
 
@@ -44,7 +45,7 @@ func TestPublishImageAndSheetHelpersCoverPathAndHeaderBranches(t *testing.T) {
 		t.Fatal("图片 URL 协议识别异常")
 	}
 	// rel、relErr 保存安全图片路径的归一化结果和错误。
-	if rel, relErr := safeZipPath("folder/image.png"); relErr != nil || rel != "folder/image.png" {
+	if rel, relErr := safeZipPath("folder/image.png"); relErr != nil || rel != filepath.Join("folder", "image.png") {
 		t.Fatalf("安全图片路径=%q err=%v", rel, relErr)
 	}
 	// unsafeErr 保存路径逃逸校验错误。

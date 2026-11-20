@@ -24,6 +24,9 @@ const sampleItem: CollectedProduct = {
 };
 
 describe('collector csvExport', /* 验证选品分析表与资源库铺货导入表两套导出列映射。 */ () => {
+  test('未知价格保持为空，不虚构售价', /* 保留未知价格供人工填写。 */ () => {
+    expect(buildLibraryImportTemplateRows([{ ...sampleItem, price: '' }])[1][3]).toBe('');
+  });
   test('选品分析表格包含想要人数、卖家信息和分号拼接主图', /* 校验首行表头与首条数据列对齐。 */ () => {
     // rows 是生成的二维数组。
     const rows = buildSelectionAnalysisRows([sampleItem]);

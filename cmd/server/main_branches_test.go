@@ -188,7 +188,8 @@ func TestLoadOrCreateDataKeyFailureBranches(t *testing.T) {
 	if _, err := loadOrCreateDataKey(dir); err == nil {
 		t.Fatal("目录当作密钥文件应失败")
 	}
-	if os.Geteuid() != 0 {
+	// Windows 不按 POSIX 的 0500 权限阻止文件创建，故仅在支持该语义的非 root 系统上断言拒绝写入。
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
 		// readonly 是无写权限目录，创建密钥文件应失败。
 		readonly := filepath.Join(dir, "ro")
 		// err 保存下方被测调用返回的错误，用于断言该路径按预期成功或失败。

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -34,6 +35,8 @@ type Dependencies struct {
 
 // Service 编排全站关键词采集、单品精准采集、同行店铺采集、黑马爆品雷达、AI 改写与转存模板库用例。
 type Service struct {
+	// saveMu 防止同一进程的转存请求重叠，争用直接拒绝，不自动重试。
+	saveMu sync.Mutex
 	// platform 是闲鱼平台采集端口。
 	platform PlatformPort
 	// rewriter 是系统大模型改写端口。
@@ -194,6 +197,10 @@ func (s *Service) CollectItemDetails(ctx context.Context, userID int64, input De
 			if s.platform.IsAbortError(err) {
 				out.AbortedByRisk = true
 			}
+			continue
+		}
+		if detail.ItemID != itemID {
+			out.Errors = append(out.Errors, DetailItemError{ItemID: itemID, Message: "返回的商品标识与请求不一致，已拒绝使用"})
 			continue
 		}
 		out.Items = append(out.Items, detail)

@@ -51,6 +51,7 @@ func TestOpenAPISuccessContractCoverage(t *testing.T) {
 		{name: "named-success", run: TestNamedSuccessResponseContracts},
 		{name: "remaining-success", run: TestRemainingSuccessResponseContracts},
 		{name: "settings-cards-notifications-batch", run: TestSettingsCardsNotificationsBatchContracts},
+		{name: "customer-support", run: TestCustomerSupportHTTPContracts},
 		{name: "dynamic-success", run: TestDynamicCompatibilitySuccessContracts},
 		{name: "reply-and-account-task-success", run: TestReplyAndAccountTaskSuccessResponseContracts},
 		{name: "analytics-admin-public-success", run: TestAnalyticsAdminAndPublicSuccessResponseContracts},
@@ -66,6 +67,8 @@ func TestOpenAPISuccessContractCoverage(t *testing.T) {
 		{name: "library", run: TestLibraryHandlersContract},
 		{name: "library-template-imports", run: TestLibraryTemplateImportHandlersContract},
 		{name: "automation-audit-events", run: TestAutomationAuditEventsEndpoint},
+		{name: "collector", run: TestCollectorHandlersOpenAPIContract},
+		{name: "collector-radar", run: TestCollectorRadarSuccessContracts},
 	}
 	// scenario 是当前执行的领域真实响应场景。
 	for _, scenario := range scenarios {

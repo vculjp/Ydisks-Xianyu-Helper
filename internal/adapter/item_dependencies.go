@@ -104,11 +104,11 @@ func (d *ItemDependencies) NewItemSyncRepository(client func() MTOPClient, logge
 }
 
 // NewCollectorPlatformPort 创建全站商品采集专用的平台访问适配器。
-func (d *ItemDependencies) NewCollectorPlatformPort(client func() MTOPClient, logger *slog.Logger, update func(context.Context, string, string), recover func(context.Context, string, error)) *CollectorPlatformPort {
+func (d *ItemDependencies) NewCollectorPlatformPort(client func() MTOPClient, logger *slog.Logger, update func(context.Context, string, string), recover func(context.Context, string, error), batchAdmission func() (func(), bool)) *CollectorPlatformPort {
 	if d == nil {
 		return nil
 	}
-	return NewCollectorPlatformPort(d.store, client, logger, update, recover)
+	return NewCollectorPlatformPort(d.store, client, logger, update, recover, batchAdmission)
 }
 
 // NewCollectorAIRewriter 创建商品采集标题与文案 AI 改写适配器。

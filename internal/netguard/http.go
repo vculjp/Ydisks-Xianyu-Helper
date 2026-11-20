@@ -341,13 +341,21 @@ func DialPublicContext(ctx context.Context, network, address string, timeout tim
 func dialContextWithPolicy(ctx context.Context, network, address string, timeout time.Duration,
 	allow func(net.IP) bool, deniedMessage, connectErrorMessage string,
 ) (net.Conn, error) {
+	return dialContextWithResolver(ctx, network, address, timeout, allow, deniedMessage, connectErrorMessage, net.DefaultResolver.LookupIPAddr)
+}
+
+// dialContextWithResolver 在拨号前解析并检查每一个目标地址；测试可注入确定性的解析错误，不访问外部 DNS。
+func dialContextWithResolver(ctx context.Context, network, address string, timeout time.Duration,
+	allow func(net.IP) bool, deniedMessage, connectErrorMessage string,
+	lookup func(context.Context, string) ([]net.IPAddr, error),
+) (net.Conn, error) {
 	// host、port、err 用于本次流程后续判断的host、port、err
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
 	// ips、err 用于本次流程后续判断的ips、err
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	ips, err := lookup(ctx, host)
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ updateAccountStatus,
 import { AccountAISettingsModal } from '../components/AccountAISettingsModal';
 import AccountAutomationModal from '../components/AccountAutomationModal';
 import { AccountCard } from '../components/AccountCard';
+import { AccountSafetyPanel } from '../components/AccountSafetyPanel';
 import { AccountDeleteDialog } from '../components/AccountDeleteDialog';
 import { AccountQRCodeModal } from '../components/AccountQRCodeModal';
 import { useAccountsData } from '../hooks';
@@ -173,7 +174,7 @@ const AccountList: React.FC<AccountListProps> = ({ accountEditModal: AccountEdit
       setRefreshingProfileId('');
     }
   };
-  if (loading) return <div className="p-20 flex justify-center"><Loader2 className="w-8 h-8 text-brand animate-spin"/></div>;
+  if (loading && accounts.length === 0) return <div className="p-20 flex justify-center"><Loader2 className="w-8 h-8 text-brand animate-spin"/></div>;
 
   // filteredAccounts 过滤后的账号列表，负责当前功能中的对应处理。
   const filteredAccounts = accounts.filter(/* 当前回调处理集合中的单个元素。 */ account => {
@@ -208,6 +209,8 @@ const AccountList: React.FC<AccountListProps> = ({ accountEditModal: AccountEdit
           </button>
         </div>
       </PageHeader>
+
+      <AccountSafetyPanel accounts={accounts} refresh={loadAccounts} />
 
       <div className="rounded-2xl border border-blue-100 bg-blue-50 px-5 py-4 text-sm text-blue-900 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
         <div className="font-bold">当前显示 {filteredAccounts.length} / {accounts.length} 个账号</div>

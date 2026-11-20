@@ -11,6 +11,8 @@ import (
 type Query struct {
 	// UserID 是当前登录用户的本地身份标识。
 	UserID int64
+	// CookieID 限定销售统计所属店铺；空值保留所有本人店铺的汇总口径。
+	CookieID string
 	// StartDate 是用户本地日期范围的起始日期，格式为 YYYY-MM-DD。
 	StartDate string
 	// EndDate 是用户本地日期范围的结束日期，格式为 YYYY-MM-DD。
@@ -23,6 +25,8 @@ type Query struct {
 type Filter struct {
 	// UserID 是订单所属账号对应的用户身份标识。
 	UserID int64
+	// CookieID 仅追加账号范围限制，不能替换已有用户归属条件。
+	CookieID string
 	// StartAt 是包含边界的 UTC 起始时间文本；为空表示不限制起始时间。
 	StartAt string
 	// EndBefore 是排除边界的 UTC 结束时间文本；为空表示不限制结束时间。

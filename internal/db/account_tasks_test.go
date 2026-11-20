@@ -79,6 +79,17 @@ func TestAccountTaskStoreSQLiteLifecycle(t *testing.T) {
 	if finishErr := store.AccountTasks.FinishRun(ctx, run.RunKey, "failed", 0, 1, "retry", 500); finishErr != nil {
 		t.Fatal(finishErr)
 	}
+	// mismatched 是相同运行键但不同目标的请求；禁止用它重领其他任务。
+	mismatched := run
+	mismatched.TargetID = "other-order"
+	// claimed、err 验证人工入口不能领取目标不一致的记录。
+	if claimed, err := store.AccountTasks.ClaimRunImmediately(ctx, mismatched, 499); err != nil || claimed {
+		t.Fatal("人工入口重领了不匹配的任务")
+	}
+	// claimed、err 验证自动入口到达重试时间仍不能领取错误目标。
+	if claimed, err := store.AccountTasks.ClaimRun(ctx, mismatched, 500); err != nil || claimed {
+		t.Fatal("定时入口重领了不匹配的任务")
+	}
 	// earlyClaim、earlyErr 保存尚未到重试时间的声明结果。
 	earlyClaim, earlyErr := store.AccountTasks.ClaimRun(ctx, run, 499)
 	if earlyErr != nil || earlyClaim {

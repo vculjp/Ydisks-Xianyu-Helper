@@ -231,6 +231,7 @@ func shouldSkipDirectory(path, root string) bool {
 	if err != nil {
 		return false
 	}
+	relativePath = filepath.ToSlash(relativePath)
 	// ignoredNames 是不属于业务源码、不能进入注释门禁的目录集合。
 	ignoredNames := map[string]bool{
 		".git": true, "vendor": true, "node_modules": true, "dist": true,
@@ -241,7 +242,7 @@ func shouldSkipDirectory(path, root string) bool {
 	}
 	// ignoredPath 表示当前检查的被忽略目录前缀。
 	for ignoredPath := range ignoredNames {
-		if strings.HasPrefix(relativePath, ignoredPath+string(filepath.Separator)) {
+		if strings.HasPrefix(relativePath, ignoredPath+"/") {
 			return true
 		}
 	}

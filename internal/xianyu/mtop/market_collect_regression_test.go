@@ -22,6 +22,29 @@ func TestCollectorDecimalPriceAndNumberID(t *testing.T) {
 	}
 }
 
+// TestCollectorDetailIdentityAndCompleteness 使用合成响应验证商品身份和完整性，缺失价格保持未知。
+func TestCollectorDetailIdentityAndCompleteness(t *testing.T) {
+	// err 是商品身份不匹配的拒绝结果。
+	if _, err := parseMarketItemDetailData(map[string]any{"itemId": "10002", "title": "测试"}, "10001"); err == nil {
+		t.Fatal("接受了错误商品详情")
+	}
+	// detail、err 是仅包含标题的部分详情，不得补造正文和售价。
+	detail, err := parseMarketItemDetailData(map[string]any{"itemId": "10001", "title": "测试"}, "10001")
+	if err != nil || detail == nil || detail.HasFullDetail || detail.Price != "" || detail.Description != "" {
+		t.Fatal("不完整详情被误报为完整或伪造价格")
+	}
+}
+
+// TestCollectorNegativeShippingLabel 确认负向邮费标签不等同于包邮。
+func TestCollectorNegativeShippingLabel(t *testing.T) {
+	if extractFreeShippingFlag(map[string]any{"fishTags": []any{"不包邮"}}, nil) {
+		t.Fatal("不包邮误判为包邮")
+	}
+	if !extractFreeShippingFlag(map[string]any{"fishTags": []any{"包邮"}}, nil) {
+		t.Fatal("明确包邮标签丢失")
+	}
+}
+
 // TestCollectorUnknownWantCount 验证真实零值与未知人数不会互相覆盖。
 func TestCollectorUnknownWantCount(t *testing.T) {
 	if extractWantCount(map[string]any{"wantCnt": 0, "favorCnt": 200}, nil, nil) != 0 {

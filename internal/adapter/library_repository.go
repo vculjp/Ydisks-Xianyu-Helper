@@ -299,6 +299,20 @@ func (r *LibraryTemplateRepository) Get(ctx context.Context, userID, id int64) (
 	return libraryTemplateModel(*row)
 }
 
+// FindByCollectorKey 读取已完成的同内容转存结果，保留原有模板归属约束。
+func (r *LibraryTemplateRepository) FindByCollectorKey(ctx context.Context, userID int64, key string) (libraryapp.Template, error) {
+	// err 是本地存储初始化检查的错误。
+	if err := r.validate(); err != nil {
+		return libraryapp.Template{}, err
+	}
+	// row、err 保存按用户和摘要隔离的查询结果。
+	row, err := r.store.ProductTemplates.FindByCollectorKey(ctx, userID, key)
+	if err != nil {
+		return libraryapp.Template{}, mapLibraryTemplateError(err)
+	}
+	return libraryTemplateModel(*row)
+}
+
 // Create 写入模板。
 func (r *LibraryTemplateRepository) Create(ctx context.Context, template libraryapp.Template) (int64, error) {
 	// err 保存 validate 调用的失败原因。

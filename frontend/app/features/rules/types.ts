@@ -28,8 +28,18 @@ ShippingRule,
 ShippingVariant
 } from './api';
 
-// RulesTab 表示规则页面的六个业务页签：交易自动化、关键词回复、账号默认回复、商品首次回复、Agent 回复和规则日志。
-export type RulesTab = 'automation' | 'reply' | 'default' | 'greeting' | 'agent' | 'logs';
+// RulesTab 表示规则页面的业务页签，包括独立的 AI 客服中心。
+export type RulesTab = 'automation' | 'reply' | 'default' | 'greeting' | 'agent' | 'support' | 'logs';
+
+// SupportCenterProps 是客服中心使用的现有本地账号和商品摘要。
+export interface SupportCenterProps {
+  // accountId 是规则页选择的店铺。
+  accountId: string;
+  // accounts 是本人拥有的账号列表。
+  accounts: AccountDetail[];
+  // items 是本地商品摘要，不包含凭证。
+  items: Item[];
+}
 
 // RulesProps 描述规则页面从父级接收的联动参数。
 export interface RulesProps {
@@ -47,6 +57,8 @@ export interface RulesProps {
   // auditPanel 是应用壳按需注入的规则日志面板；缺省时“规则日志”页签只显示不可用提示。
   // 面板体积较大，由应用壳懒加载后注入，避免规则页分片超出体积预算。
   auditPanel?: ComponentType<AutomationAuditPanelProps>;
+  // supportPanel 是应用壳按需注入的客服中心独立面板。
+  supportPanel?: ComponentType<SupportCenterProps>;
   // libraryImageChooser 是应用壳按需注入的图片库选择器；缺省时图片回复只能填写外链。
   libraryImageChooser?: LibraryImageChooserComponent;
 }

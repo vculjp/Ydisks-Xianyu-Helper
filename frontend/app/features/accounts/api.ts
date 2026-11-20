@@ -17,6 +17,7 @@ OperationResponse,
 QRLoginGenerateResponse,QRLoginStatusResponse,QRLoginVerificationResponse
 } from './models';
 import { contractClient, runContractRequest } from '../../../shared/api-contract/client';
+import { formatLocalDate } from '../../../dateRange';
 import { type RequestControlOptions } from '../../../shared/http/client';
 import { collectionFrom,objectFrom } from '../../../shared/http/contract';
 import { normalizeConsignProofMode } from './consignProof';
@@ -412,4 +413,67 @@ export const getAccountBindings = async (cookieId: string, options?: RequestCont
   // result 是去除历史包裹后的账号通知绑定对象。
   const result = objectFrom<Partial<AccountBindingsResponse>>(response, ['data', 'result']) || {};
   return Array.isArray(result.channel_ids) ? result.channel_ids : [];
+}
+
+
+/** OperationsSales 仅保留统计金额和订单数量，不读取买家信息。 */
+export interface OperationsSales {
+  // amount、orders 是已发货和已完成订单的金额（元）与数量。
+  amount: number;
+  orders: number;
+  // received 是已完成订单金额（元），不是实时到账余额。
+  received: number;
+  // cancelled 是本地取消订单金额（元），沿用原销售统计口径。
+  cancelled: number;
+}
+
+/** OperationsEvent 是安全总览中不含原始错误、卡密和买家消息的审计摘要。 */
+export interface OperationsEvent {
+  // id 用于区分审计行或计划任务行。
+  id: number;
+  // accountId 是事件所属的账号。
+  accountId: string;
+  // kind 是任务或触发类型。
+  kind: string;
+  // status 是持久化运行结果。
+  status: string;
+  // at 是开始或审计发生的 Unix 秒时间戳。
+  at: number;
+  // source 区分账号任务和自动化规则审计。
+  source: string;
+}
+
+/** readOperationsSales 复用鉴权销售统计，只查询本地数据，按选定账号和最近自然日窗口筛选。 */
+export async function readOperationsSales(accountId: string, days: number, signal: AbortSignal): Promise<OperationsSales> {
+  // end 是浏览器本地当前日期；start 包含今日在内共 days 天。
+  const end = new Date();
+  // start 是包含今日在内的统计窗口起始日期。
+  const start = new Date(end);
+  start.setDate(start.getDate() - days + 1);
+  // data 是生成契约的销售统计响应，只转换数值字段。
+  const data = await runContractRequest(/* requestSignal 是本地查询取消与超时信号。 */ requestSignal => contractClient.GET('/api/v1/analytics/sales', { params: { query: { cookie_id: accountId || undefined, start_date: formatLocalDate(start), end_date: formatLocalDate(end), timezone_offset_minutes: -end.getTimezoneOffset() } }, signal: requestSignal }), { signal });
+  return { amount: data.sales_amount, orders: data.sales_orders, received: data.received_amount, cancelled: data.refunded_amount };
+}
+
+/** readOperationsTasks 查询选中账号最近的账号任务记录；不调用运行或重试接口。 */
+export async function readOperationsTasks(accountId: string, signal: AbortSignal): Promise<OperationsEvent[]> {
+  // data 是当前账号最近任务记录（现有接口默认最多二十条）。
+  const data = await runContractRequest(/* requestSignal 控制本地任务记录查询。 */ requestSignal => contractClient.GET('/api/v1/account-tasks/{cid}/runs', { params: { path: { cid: accountId } }, signal: requestSignal }), { signal });
+  return data.runs.map(/* run 是一条持久化账号任务，丢弃原始错误与目标内容。 */ run => ({ id: run.id, accountId: run.account_id, kind: run.task_type, status: run.status, at: run.started_at, source: '账号计划' }));
+}
+
+/** readOperationsAudit 读取本人自动化审计的失败、人工核对或跳过事件，不返回敏感正文。 */
+export async function readOperationsAudit(accountId: string, status: 'failed' | 'needs_review' | 'skipped', signal: AbortSignal): Promise<OperationsEvent[]> {
+  // data 是服务端已按归属与状态筛选的最近审计记录。
+  const data = await runContractRequest(/* requestSignal 控制本地审计查询。 */ requestSignal => contractClient.GET('/api/v1/automation-audit-events', { params: { query: { cookie_id: accountId || undefined, status, page: 1, page_size: 30 } }, signal: requestSignal }), { signal });
+  return data.data.map(/* event 是一条规则审计摘要，不传递订单正文或原始错误。 */ event => ({ id: event.id, accountId: event.cookie_id, kind: event.trigger_type || event.event_type, status: event.status, at: event.created_at, source: '规则审计' }));
+}
+
+/** readOperationsRuntime 仅读取管理员已有的本地错误日志权限范围，并按主动选择的本人账号清单过滤摘要。 */
+export async function readOperationsRuntime(accountIds: readonly string[], signal: AbortSignal): Promise<OperationsEvent[]> {
+  // data 是服务端保留的最近错误日志；绝不向运营面板传递 raw message、error 或 details。
+  const data = await runContractRequest(/* requestSignal 控制管理员日志查询。 */ requestSignal => contractClient.GET('/api/v1/logs/runtime', { params: { query: { level: 'error', limit: 100 } }, signal: requestSignal }), { signal });
+  // allowed 是本次显示范围的本人账号标识集合。
+  const allowed = new Set(accountIds);
+  return data.entries.filter(/* 排除无账号标识或不在当前选定范围内的记录。 */ entry => allowed.has(entry.account_id || '')).map(/* 仅转换固定来源、等级和时间，不传递错误正文。 */ entry => ({ id: entry.seq, accountId: entry.account_id || '', kind: entry.source, status: 'failed', at: Math.floor(Date.parse(entry.time) / 1000), source: '运行日志' })).sort(/* 最近错误排在前面。 */ (a, b) => b.at - a.at);
 }

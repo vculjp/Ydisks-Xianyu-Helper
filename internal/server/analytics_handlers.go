@@ -86,9 +86,15 @@ func (s *Server) validOrders(w http.ResponseWriter, r *http.Request) {
 func (s *Server) salesStats(w http.ResponseWriter, r *http.Request) {
 	// sess 是当前请求的认证会话。
 	sess := auth.SessionFromContext(r.Context())
+	// cookieID 是可选销售统计账号，仅允许查看自己拥有的店铺。
+	cookieID := r.URL.Query().Get("cookie_id")
+	if cookieID != "" && !s.ownsAccount(r, cookieID) {
+		writeErr(w, http.StatusForbidden, "无权访问该账号")
+		return
+	}
 	// query 是从 HTTP 查询参数映射出的销售统计用例请求。
 	query := analyticsapp.Query{
-		UserID: sess.UserID, StartDate: r.URL.Query().Get("start_date"), EndDate: r.URL.Query().Get("end_date"),
+		UserID: sess.UserID, CookieID: cookieID, StartDate: r.URL.Query().Get("start_date"), EndDate: r.URL.Query().Get("end_date"),
 		Location: analyticsapp.LocationFromOffset(r.URL.Query().Get("timezone_offset_minutes")),
 	}
 	// result 和 err 是订单分析应用服务返回的销售统计结果及错误。

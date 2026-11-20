@@ -162,8 +162,12 @@ func TestDialContextWithPolicyBranches(t *testing.T) {
 	if _, err := dialContextWithPolicy(context.Background(), "tcp", address, time.Second, alwaysAllow, "拒绝", "连接失败"); err == nil || !strings.Contains(err.Error(), "连接失败") {
 		t.Fatalf("允许地址的拨号失败应带连接错误: %v", err)
 	}
-	// lookupErr 保存无法解析保留域名时的 DNS 错误。
-	if _, lookupErr := dialContextWithPolicy(context.Background(), "tcp", "does-not-exist.invalid:80", time.Second, alwaysAllow, "拒绝", "连接失败"); lookupErr == nil {
+	// dnsErr 是确定性的 DNS 失败，避免本机 DNS 劫持或代理返回合成地址。
+	dnsErr := &net.DNSError{Err: "fixture lookup failed", Name: "does-not-exist.invalid", IsNotFound: true}
+	// lookup 模拟解析错误，验证拨号逻辑遇到错误直接终止。
+	lookup := func(context.Context, string) ([]net.IPAddr, error) { return nil, dnsErr }
+	// lookupErr 保存无法解析主机时的 DNS 错误。
+	if _, lookupErr := dialContextWithResolver(context.Background(), "tcp", "does-not-exist.invalid:80", time.Second, alwaysAllow, "拒绝", "连接失败", lookup); !errors.Is(lookupErr, dnsErr) {
 		t.Fatal("无法解析主机应返回 DNS 错误")
 	}
 	// successListener 保存用于覆盖公网策略允许连接分支的本地监听器。

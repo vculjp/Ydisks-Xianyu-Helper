@@ -30,6 +30,75 @@ import { collectionFrom,objectFrom } from '../../../shared/http/contract';
 export type * from './models';
 import type { AuditDeliveredCard,AutomationAuditEvent,AutomationAuditPage,AutomationAuditQuery } from './auditModels';
 
+/** 客服知识条目，独立于原有关键词和发货配置。 */
+export interface SupportEntry {
+  /** scope 是全局、店铺或商品归属。 */
+  scope: 'global' | 'account' | 'item';
+  /** account_id 是非全局资料所属账号。 */
+  account_id: string;
+  /** item_id 是商品级资料所属商品。 */
+  item_id: string;
+  /** title 是内部资料标题。 */
+  title: string;
+  /** question 非空时作为精确匹配 FAQ。 */
+  question: string;
+  /** answer 是商家核对后的公开事实或答案，不得含密钥。 */
+  answer: string;
+}
+/** 客服知识与安全策略的用户级配置。 */
+export interface SupportConfig {
+  /** enabled 是受控客服模式的用户级开关。 */
+  enabled: boolean;
+  /** entries 是已保存的知识与 FAQ 条目。 */
+  entries: SupportEntry[];
+}
+/** 接管记录不包含聊天正文。 */
+export interface SupportTakeover {
+  /** account_id 是会话所属账号。 */
+  account_id: string;
+  /** chat_id 是平台会话 ID。 */
+  chat_id: string;
+  /** until 为 -1 时须人工恢复，0 表示已恢复，否则为 Unix 秒截止时间。 */
+  until: number;
+  /** reason 是接管来源分类。 */
+  reason: string;
+  /** updated_at 是 Unix 毫秒记录时间。 */
+  updated_at: number;
+}
+/** 沙盒的安全决策与候选回复。 */
+export interface SupportPreviewResult {
+  /** source 是 FAQ 或 AI 来源。 */
+  source: string;
+  /** reply 是通过质量门禁的候选文本。 */
+  reply: string;
+  /** decision 表明候选可用、人工处理或模式未匹配。 */
+  decision: 'pass' | 'manual' | 'unmatched';
+  /** reason 是非敏感诊断说明。 */
+  reason: string;
+}
+/** readSupportWorkspace 从本人用户配置中读取知识和接管记录，不读取聊天内容或触发平台请求。 */
+export const readSupportWorkspace = async (options?: RequestControlOptions): Promise<{ /** config 是用户已保存配置。 */ config: SupportConfig; /** takeovers 是已登记的会话接管。 */ takeovers: SupportTakeover[] }> => {
+  // values 是登录用户的本地设置索引。
+  const values = await runContractRequest(/* signal 控制本地配置查询取消。 */ signal => contractClient.GET('/api/v1/settings/user', { signal }), options);
+  // cfg 是验证过基本格式的用户配置；损坏时保留错误而不是默认关闭后覆盖。
+  const cfg = values.customer_support_v1 ? JSON.parse(values.customer_support_v1) as SupportConfig : { enabled: false, entries: [] };
+  if (typeof cfg?.enabled !== 'boolean' || !Array.isArray(cfg?.entries)) throw new Error('客服配置损坏，请核对本地数据');
+  // takeovers 只提取专用键，避免展示其他个人设置。
+  const takeovers = Object.entries(values).filter(/* entry 筛选接管记录键。 */ entry => entry[0].startsWith('support_takeover_v1_')).map(/* entry 解析接管记录。 */ entry => JSON.parse(entry[1]) as SupportTakeover);
+  return { config: cfg, takeovers };
+};
+/** saveSupportConfig 保存经过后端校验的三级知识库与安全模式。 */
+export const saveSupportConfig = async (config: SupportConfig, options?: RequestControlOptions): Promise<void> => {
+  await runContractRequest(/* signal 控制本地设置持久化。 */ signal => contractClient.PUT('/api/v1/settings/user/{key}', { params: { path: { key: 'customer_support_v1' } }, body: { value: JSON.stringify(config) }, signal }), options);
+};
+/** previewSupport 使用合成问题调用同一后端决策器，绝不发送真实消息。 */
+export const previewSupport = async (accountID: string,itemID: string,message: string, options?: RequestControlOptions): Promise<SupportPreviewResult> =>
+  runContractRequest(/* signal 控制沙盒单轮请求。 */ signal => contractClient.POST('/api/v1/settings/support-preview', { body: { account_id: accountID, item_id: itemID, message }, signal }), { ...options, timeoutMs: 45_000 });
+/** setSupportTakeover 只更新本人会话的持久化人工接管状态。 */
+export const setSupportTakeover = async (accountID: string,chatID: string,paused: boolean, options?: RequestControlOptions): Promise<void> => {
+  await runContractRequest(/* signal 控制本地接管状态写入。 */ signal => contractClient.POST('/api/v1/settings/support-takeover', { body: { account_id: accountID, chat_id: chatID, paused }, signal }), options);
+};
+
 /** 发货模板创建和更新请求体。 */
 interface DeliveryTemplateWritePayload {
   /** 模板名称。 */

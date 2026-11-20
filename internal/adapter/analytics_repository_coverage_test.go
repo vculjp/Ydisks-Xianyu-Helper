@@ -155,3 +155,62 @@ func TestAnalyticsRepositorySalesQueries(t *testing.T) {
 		t.Fatalf("sales daily ids=%+v", dailyIDs)
 	}
 }
+
+// TestSalesStatsAccountScope 验证本地销售统计按店铺隔离，指定其他用户账号也无法读到订单。
+func TestSalesStatsAccountScope(t *testing.T) {
+	// store、cleanup 是临时 SQLite 仓储和关闭责任。
+	store, cleanup := newAdapterTestStore(t)
+	defer cleanup()
+	// ctx 限制本地数据库操作，不访问平台。
+	ctx := context.Background()
+	// owner、ownerErr 获取默认账号所有者。
+	owner, ownerErr := store.Users.GetByUsername(ctx, "admin")
+	if ownerErr != nil {
+		t.Fatal(ownerErr)
+	}
+	// err 保存第二个测试用户创建失败的原因。
+	if _, err := store.Users.Create(ctx, "analytics-other", "analytics-other@example.com", "pw"); err != nil {
+		t.Fatal(err)
+	}
+	// other、otherErr 获取独立测试用户以验证数据隔离。
+	other, otherErr := store.Users.GetByUsername(ctx, "analytics-other")
+	if otherErr != nil {
+		t.Fatal(otherErr)
+	}
+	// err 保存本人第二家店铺测试记录的写入错误。
+	if err := store.Cookies.Save(ctx, "shop-2", "sid=test", owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	// err 保存其他用户店铺记录的写入错误。
+	if err := store.Cookies.Save(ctx, "shop-foreign", "sid=test", other.ID); err != nil {
+		t.Fatal(err)
+	}
+	// ids 是三个账号标识，amounts 是彼此可区分的订单金额。
+	ids := []string{"cid", "shop-2", "shop-foreign"}
+	// amounts 对应每家店铺的唯一测试金额，单位为元。
+	amounts := []string{"10.50", "20.25", "100.00"}
+	// i 是金额索引，id 是本次创建订单的所属店铺。
+	for i, id := range ids {
+		// err 保存本次订单写入失败的原因。
+		if err := store.Orders.Upsert(ctx, "ops-sales-"+id, db.OrderUpsertOpts{CookieID: id, OrderStatus: "completed", Amount: amounts[i], CreatedAt: "2026-08-14 10:00:00"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// service 套用真实销售用例与仓储，验证两个查询均携带店铺条件。
+	service := analyticsapp.NewService(NewAnalyticsRepository(store))
+	// total、err 是本人全部店铺的金额与订单聚合。
+	total, err := service.SalesStats(ctx, analyticsapp.Query{UserID: owner.ID})
+	if err != nil || total.SalesAmount != 30.75 || total.SalesOrders != 2 {
+		t.Fatalf("本人汇总错误: %+v %v", total, err)
+	}
+	// one、err 记录单店铺销售汇总及按日统计。
+	one, err := service.SalesStats(ctx, analyticsapp.Query{UserID: owner.ID, CookieID: "shop-2"})
+	if err != nil || one.SalesAmount != 20.25 || one.SalesOrders != 1 || len(one.Daily) != 1 || one.Daily[0].SalesAmount != 20.25 {
+		t.Fatalf("单店统计错误: %+v %v", one, err)
+	}
+	// foreign、err 验证过滤条件不能替换用户归属。
+	foreign, err := service.SalesStats(ctx, analyticsapp.Query{UserID: owner.ID, CookieID: "shop-foreign"})
+	if err != nil || foreign.SalesOrders != 0 || len(foreign.Daily) != 0 {
+		t.Fatal("销售统计跨用户泄露")
+	}
+}

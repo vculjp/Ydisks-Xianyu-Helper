@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"reflect"
 	"testing"
 	"time"
@@ -75,11 +76,39 @@ func sweepStore(ctx context.Context, store *Store) int {
 				}
 				func() {
 					defer func() { _ = recover() }()
+					// results 保存反射调用返回的资源，确保测试不遗留数据库句柄。
+					var results []reflect.Value
 					if methodType.IsVariadic() {
-						method.CallSlice(args)
-						return
+						results = method.CallSlice(args)
+					} else {
+						results = method.Call(args)
 					}
-					method.Call(args)
+					// result 是本次调用返回的独立资源；只释放明确需要调用方关闭的类型。
+					for _, result := range results {
+						// resource 是必须由测试调用方释放的标准 SQL 资源。
+						switch resource := result.Interface().(type) {
+						case *sql.Rows:
+							if resource != nil {
+								_ = resource.Close()
+							}
+						case *sql.Row:
+							if resource != nil {
+								_ = resource.Scan()
+							}
+						case *sql.Tx:
+							if resource != nil {
+								_ = resource.Rollback()
+							}
+						case *sql.Stmt:
+							if resource != nil {
+								_ = resource.Close()
+							}
+						case *sql.Conn:
+							if resource != nil {
+								_ = resource.Close()
+							}
+						}
+					}
 				}()
 				calls++
 			}

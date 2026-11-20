@@ -126,7 +126,7 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
                   />
                   <span className="text-xs text-slate-700">
                     <strong className="font-bold text-slate-900">可选：尝试补抓详情页多图与长文案</strong>
-                    <span className="block text-slate-500">默认直接下载已还原的阿里 CDN 高清原图极速入库（零额外闲鱼接口请求，最防风控）；开启后若详情接口受限也会自动降级用高清封面入库</span>
+                    <span className="block text-slate-500">关闭时仅使用已有快照；开启时必须成功取得完整详情，否则该商品不会创建新模板。请核对已有快照及图片的使用授权。</span>
                   </span>
                 </label>
 
@@ -240,8 +240,8 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
           ) : (
             <div className="space-y-3">
               <div className={`rounded-xl p-4 text-xs font-bold ${summary.failed === 0 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
-                转存执行完成：成功创建 {summary.succeeded} 个商品模板，失败 {summary.failed} 个。
-                {summary.abortedByRisk && '（期间检测到平台风控，已自动安全熔断停止后续详情抓取）'}
+                转存执行完成：已保存或复用 {summary.succeeded} 条模板结果，失败 {summary.failed} 条。相同请求复用原模板，请在资源库核对内容。
+                {summary.abortedByRisk && '（本批次因安全状态或本地任务冲突停止，剩余商品未执行，请人工核对）'}
               </div>
               <div className="max-h-60 divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">
                 {summary.results.map(/* row 是单条商品的转存结果记录。 */ row => (

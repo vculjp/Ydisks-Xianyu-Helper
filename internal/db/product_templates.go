@@ -119,6 +119,19 @@ func (p *ProductTemplates) Get(ctx context.Context, userID, id int64) (*ProductT
 	return &t, nil
 }
 
+// FindByCollectorKey 按用户和请求摘要查询既有模板，不读取其他用户记录，也不修改已编辑内容。
+func (p *ProductTemplates) FindByCollectorKey(ctx context.Context, userID int64, key string) (*ProductTemplate, error) {
+	// row、err 是唯一约束对应的本地模板与读取错误。
+	row, err := scanProductTemplate(p.DB.QueryRowContext(ctx, `SELECT `+productTemplateColumns+` FROM product_templates WHERE user_id=? AND collector_key=?`, userID, key))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
 // Create 写入新模板并返回主键。
 func (p *ProductTemplates) Create(ctx context.Context, t ProductTemplate) (int64, error) {
 	normalizeProductTemplateJSON(&t)

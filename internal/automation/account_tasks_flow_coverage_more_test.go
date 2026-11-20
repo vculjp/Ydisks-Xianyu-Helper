@@ -15,6 +15,8 @@ import (
 type accountTaskFlowRepository struct {
 	// AccountTaskRepository 嵌入流程未涉及方法的默认接口实现。
 	AccountTaskRepository
+	// safetyDisabled 模拟本地停用，默认测试账号启用。
+	safetyDisabled bool
 	// value、valueErr 保存 Cookie 读取结果和错误。
 	value    string
 	valueErr error
@@ -40,6 +42,16 @@ type accountTaskFlowRepository struct {
 	// runtimeData、runtimeDataErr 保存凭证指纹读取结果和错误。
 	runtimeData    db.CookieRuntimeData
 	runtimeDataErr error
+}
+
+// IsPaused 为流程测试提供非敏感暂停状态。
+func (repository *accountTaskFlowRepository) IsPaused(context.Context, string) (bool, int64, error) {
+	return false, 0, nil
+}
+
+// Status 模拟任务批次中途收到本地停用状态。
+func (repository *accountTaskFlowRepository) Status(context.Context, string) (bool, error) {
+	return !repository.safetyDisabled, nil
 }
 
 // GetValue 返回测试预置的 Cookie。

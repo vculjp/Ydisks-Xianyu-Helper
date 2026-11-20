@@ -72,6 +72,10 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
   const [pageNumber, setPageNumber] = useState(1);
   // hasMore 与 setHasMore 表示当前搜索是否仍有下一页。
   const [hasMore, setHasMore] = useState(false);
+  // searchResultKey 与 setSearchResultKey 保存当前结果实际使用的筛选条件，禁止旧页码应用到新条件。
+  const [searchResultKey, setSearchResultKey] = useState('');
+  // searchKey 只包含关键词搜索的本地筛选条件，不保存凭证。
+  const searchKey = JSON.stringify([selectedCookieId, keyword.trim(), sortMode, minPrice.trim(), maxPrice.trim(), publishDays, minWantCount]);
 
   // detailInputText 与 setDetailInputText 保存单品精准采集的多行链接或商品 ID 文本。
   const [detailInputText, setDetailInputText] = useState('');
@@ -102,7 +106,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
   // requestAbortRef 持有普通采集的当前请求，切换账号、模式或卸载时取消。
   const requestAbortRef = useRef<AbortController | null>(null);
 
-  useEffect(/* collectUnmountEffect 使卸载前发起的采集请求失效并释放网络请求。 */ () => () => {
+  useEffect(/* collectUnmountEffect 使卸载前发起的采集请求失效并释放网络请求。 */ () => /* 清理回调取消当前尚未完成的采集请求。 */ () => {
     ++requestSeqRef.current;
     requestAbortRef.current?.abort();
   }, []);
@@ -125,6 +129,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
     setSelectedIds(new Set());
     setPageNumber(1);
     setHasMore(false);
+    setSearchResultKey('');
     setBanner(null);
     setEditingItem(null);
     setSaveModalItems([]);
@@ -156,6 +161,10 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
 
   /** runKeywordSearch 执行指定页码的全站关键词搜索采集。 */
   const runKeywordSearch = async (targetPage: number): Promise<void> => {
+    if (targetPage > 1 && searchResultKey !== searchKey) {
+      setBanner({ tone: 'warn', text: '筛选条件已改变，请从第 1 页重新搜索' });
+      return;
+    }
     if (!selectedCookieId) {
       setBanner({ tone: 'err', text: '请先在顶部选择一个已登录的闲鱼采集账号' });
       return;
@@ -184,6 +193,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       if (seq !== requestSeqRef.current) return;
       setItems(res.items);
       setPageNumber(res.pageNumber);
+      setSearchResultKey(searchKey);
       setHasMore(res.hasMore);
       setSelectedIds(new Set());
       setBanner({
@@ -220,11 +230,13 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       setHasMore(false);
       setSelectedIds(new Set(res.items.map(/* it 默认自动全选刚精准采集成功的商品。 */ it => it.itemId)));
       if (res.abortedByRisk) {
-        setBanner({ tone: 'warn', text: `触发平台风控保护已安全熔断：成功获取 ${res.items.length} 件，失败 ${res.errors.length} 件（${res.errors[0]?.message ?? ''}）` });
+        setBanner({ tone: 'warn', text: `本批次已安全停止：获取 ${res.items.length} 件，失败或未处理 ${res.errors.length} 件（${res.errors[0]?.message ?? ''}）` });
       } else if (res.errors.length > 0) {
         setBanner({ tone: 'warn', text: `采集完成：成功 ${res.items.length} 件，失败 ${res.errors.length} 件（${res.errors.map(/* e 格式化单条失败提示。 */ e => `${e.itemId}: ${e.message}`).join('；')}）` });
       } else {
-        setBanner({ tone: 'info', text: `精准采集完成：已完整提取 ${res.items.length} 件商品的详情文案与高清多图` });
+        // incomplete 是平台返回正文或图片不完整的商品数，不把部分数据标为完整成功。
+        const incomplete = res.items.filter(/* item 是已返回的详情快照。 */ item => !item.hasFullDetail).length;
+        setBanner(incomplete > 0 ? { tone: 'warn', text: `已获取 ${res.items.length} 件，其中 ${incomplete} 件详情不完整，请人工核对` } : { tone: 'info', text: `精准采集完成：已获取 ${res.items.length} 件商品的详情文案与主图` });
       }
     } catch (failure /* failure 是详情采集请求失败原因。 */) {
       if (seq !== requestSeqRef.current) return;
@@ -783,7 +795,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
                     )}
 
                     <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                      <span className="text-base font-black text-rose-600">¥{item.price}</span>
+                      <span className="text-base font-black text-rose-600">{item.price ? `¥${item.price}` : '售价未知'}</span>
                       {item.originalPrice && <span className="text-slate-400 line-through">¥{item.originalPrice}</span>}
                       <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2.5 py-0.5 font-bold text-orange-600">
                         <Flame className="h-3.5 w-3.5" /> {item.wantCount < 0 ? '想要人数未知' : `${item.wantCount} 人想要`}
@@ -829,11 +841,11 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
 
         {activeTab === 'search' && (items.length > 0 || hasMore || pageNumber > 1) && (
           <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
-            <span className="text-xs font-bold text-slate-500">当前第 {pageNumber} 页</span>
+            <span className="text-xs font-bold text-slate-500">当前第 {pageNumber} 页 · 勾选范围仅限当前页{searchResultKey !== searchKey ? ' · 条件已变更，请重新搜索' : ''}</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                disabled={loading || pageNumber <= 1}
+                disabled={loading || pageNumber <= 1 || searchResultKey !== searchKey}
                 onClick={/* 翻到上一页搜索结果。 */ () => void runKeywordSearch(pageNumber - 1)}
                 className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
               >
@@ -841,7 +853,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
               </button>
               <button
                 type="button"
-                disabled={loading || !hasMore}
+                disabled={loading || !hasMore || searchResultKey !== searchKey}
                 onClick={/* 翻到下一页搜索结果。 */ () => void runKeywordSearch(pageNumber + 1)}
                 className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
               >

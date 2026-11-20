@@ -7,7 +7,62 @@ import (
 
 	settingsapp "xianyu-go/internal/application/settings"
 	"xianyu-go/internal/db"
+	"xianyu-go/internal/engine"
+	"xianyu-go/internal/supportpolicy"
 )
+
+// PreviewSupport 调用与生产共用的 AI 决策器，只构造合成输入，不持有会话投递能力。
+func (r *SettingsRepository) PreviewSupport(ctx context.Context, accountID, itemID, message string) (settingsapp.SupportPreview, error) {
+	// err 检查本地存储装配情况。
+	if err := r.validate(); err != nil {
+		return settingsapp.SupportPreview{}, err
+	}
+	if itemID != "" {
+		// err 核对预览商品确属选择的店铺。
+		if err := r.CheckSupportItem(ctx, accountID, itemID); err != nil {
+			return settingsapp.SupportPreview{}, err
+		}
+	}
+	// replier 是独立的生成器，不装配聊天发送、自动化执行或 Agent。
+	replier := engine.NewAIReplier(accountID, r.store, nil)
+	// result、err 是通过相同知识与质量门禁的预览结果。
+	result, err := replier.PreviewSupport(ctx, itemID, message)
+	if err != nil {
+		return settingsapp.SupportPreview{Decision: "manual", Reason: "模型或本地配置不可用，请检查 AI 连接"}, nil
+	}
+	if result == nil {
+		return settingsapp.SupportPreview{Decision: "unmatched", Reason: "当前 AI 工作模式不处理此消息"}, nil
+	}
+	if result.Skip || result.NotifyManual {
+		return settingsapp.SupportPreview{Decision: "manual", Reason: result.ManualReason}, nil
+	}
+	// source 是 FAQ 或原生 AI，不接受外部生成的来源标签。
+	source := "AI"
+	if result.Source == "FAQ" {
+		source = "FAQ"
+	}
+	return settingsapp.SupportPreview{Decision: "pass", Source: source, Reply: result.Text}, nil
+}
+
+// CheckSupportItem 查询当前账号下的本地商品，拒绝不存在或已被删除的商品。
+func (r *SettingsRepository) CheckSupportItem(ctx context.Context, accountID, itemID string) error {
+	// err 是本地存储装配异常。
+	if err := r.validate(); err != nil {
+		return err
+	}
+	// item、err 按账号和商品联合标识读取本地记录。
+	item, err := r.store.Items.GetByCookieItem(ctx, accountID, itemID)
+	if errors.Is(err, db.ErrNotFound) {
+		return settingsapp.ErrInvalidSupportConfig
+	}
+	if err != nil {
+		return err
+	}
+	if item.ItemID != itemID {
+		return settingsapp.ErrInvalidSupportConfig
+	}
+	return nil
+}
 
 // SettingsRepository 将系统、用户和账号 AI 设置数据库模型适配为应用层 Port。
 type SettingsRepository struct {
@@ -137,6 +192,9 @@ func (r *SettingsRepository) SetUser(ctx context.Context, userID int64, key, val
 	// err 表示设置数据库适配器未装配。
 	if err := r.validate(); err != nil {
 		return err
+	}
+	if strings.HasPrefix(key, supportpolicy.TakeoverPrefix) {
+		return r.store.UserSettings.SetSupportTakeover(ctx, userID, key, value)
 	}
 	return r.store.UserSettings.SetForUser(ctx, userID, key, value)
 }

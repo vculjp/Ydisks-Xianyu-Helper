@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xianyu-go/internal/db"
@@ -37,6 +38,9 @@ type accountTaskRiskBlock struct {
 
 // errAccountTaskCredentialRenewed 表示本轮任务因凭证已续期而提前结束，等待后续扫描使用新凭证重试。
 var errAccountTaskCredentialRenewed = errors.New("账号任务凭证已续期，等待下一轮重试")
+
+// errAccountTaskBusy 表示已有本地账号计划处理占用执行权，不允许叠加手动任务。
+var errAccountTaskBusy = errors.New("已有账号计划任务正在处理，请等待结束并核对状态")
 
 // AccountTaskClient 用于本次流程后续判断的账号任务Client
 type AccountTaskClient interface {
@@ -79,6 +83,8 @@ type AccountTaskSummary struct {
 // 它拥有账号任务专用的 Session 指纹状态，Center 只保留兼容调用入口和依赖装配。
 // accountTaskCoordinator 用于本次流程后续判断的账号任务Coordinator
 type accountTaskCoordinator struct {
+	// batchActive 是账号计划的进程内非阻塞执行权，自动扫描与人工执行共享；不等待网络或影响交易规则。
+	batchActive atomic.Bool
 	// repository 提供账号任务所需的最小持久化能力。
 	repository AccountTaskRepository
 	// client 返回构造期固定的账号任务平台客户端。
@@ -165,6 +171,10 @@ func (c *accountTaskCoordinator) accountAutomationAllowed(ctx context.Context, a
 
 // runAccountTask 执行指定账号任务，并在执行前检查账号状态门禁。
 func (c *accountTaskCoordinator) runAccountTask(ctx context.Context, accountID, taskType string) (AccountTaskSummary, error) {
+	if !c.batchActive.CompareAndSwap(false, true) {
+		return AccountTaskSummary{TaskType: taskType}, errAccountTaskBusy
+	}
+	defer c.batchActive.Store(false)
 	// allowed、err 用于本次流程后续判断的allowed、err
 	allowed, err := c.accountAutomationAllowed(ctx, accountID)
 	if err != nil {
@@ -214,6 +224,10 @@ func (c *accountTaskCoordinator) runConfiguredAccountTask(ctx context.Context, s
 
 // scanAccountTasks 封装scan账号任务列表业务协调。
 func (c *accountTaskCoordinator) scanAccountTasks(ctx context.Context) {
+	if !c.batchActive.CompareAndSwap(false, true) {
+		return
+	}
+	defer c.batchActive.Store(false)
 	if c.client() == nil || c.repository == nil {
 		return
 	}
@@ -269,6 +283,10 @@ func (c *accountTaskCoordinator) scanAccountTasks(ctx context.Context) {
 			}
 		}
 		if setting.AutoPolishEnabled && polishDue(setting, now) {
+			// allowed、allowErr 重新核对启停状态，避免前一个任务完成期间用户停用账号。
+			if allowed, allowErr := c.accountAutomationAllowed(ctx, setting.CookieID); allowErr != nil || !allowed {
+				continue
+			}
 			if // blocked 用于本次流程后续判断的blocked
 			blocked, _ := c.accountTaskSessionBlocked(ctx, setting.CookieID); blocked {
 				continue
@@ -459,6 +477,10 @@ func (c *accountTaskCoordinator) runAutoRate(ctx context.Context, settings db.Ac
 	current := credential.cookieValue
 	// orderID 表示当前由买家确认收货 WebSocket 确认、可执行评价动作的订单。
 	for _, orderID := range orderIDs {
+		// allowed、allowErr 在领取下一笔任务之前复核本地启停状态；拒绝后不再读取或发送下一笔平台动作。
+		if allowed, allowErr := c.accountAutomationAllowed(ctx, settings.CookieID); allowErr != nil || !allowed {
+			return summary, errors.Join(errors.New("账号已暂停、停用或状态无法确认，已停止后续计划任务"), allowErr)
+		}
 		// runKey 用于本次流程后续判断的运行Key
 		runKey := "rate:" + settings.CookieID + ":" + orderID
 		// claimed、err 用于本次流程后续判断的claimed、err
@@ -609,6 +631,12 @@ func (c *accountTaskCoordinator) runAutoPolish(ctx context.Context, settings db.
 	var lastError string
 	// item 表示当前遍历过程中的商品
 	for _, item := range items.Items {
+		// allowed、allowErr 复核当前账号是否仍允许执行；部分完成的批次隔离，禁止自动从头重放。
+		if allowed, allowErr := c.accountAutomationAllowed(ctx, settings.CookieID); allowErr != nil || !allowed {
+			// stopErr 是不含凭证明文的本地停止原因。
+			stopErr := errors.New("账号已暂停、停用或状态无法确认，剩余计划任务需人工核对")
+			return summary, errors.Join(stopErr, c.quarantineAccountTaskRun(ctx, runKey, summary.Success, summary.Failed, stopErr))
+		}
 		// result、polishErr 用于本次流程后续判断的result、polishErr
 		result, polishErr := c.client().PolishItem(credential.requestContext, current, item.ID)
 		if polishErr != nil || result == nil || !result.Success {

@@ -107,7 +107,7 @@ describe('AccountEditModal 业务开关', /* 验证三个开关互不串联且�
     render(<Harness onForm={/* 记录最新表单快照。 */ form => { latest = form; }} />);
     // radios 是凭证模式单选按钮。
     const radios = within(screen.getByRole('radiogroup', { name: '确认发货凭证' })).getAllByRole('radio');
-    expect(radios.map(/* 读取每个选项的文字。 */ item => item.textContent)).toEqual(['卡密/模板全文', '固定文字', '不携带']);
+    expect(radios.map(/* 读取每个选项的文字。 */ item => item.textContent)).toEqual(['发货内容全文', '固定文字', '不携带']);
     expect(radios[0].getAttribute('aria-checked')).toBe('true');
     expect(screen.queryByLabelText('确认发货固定文字')).toBeNull();
 

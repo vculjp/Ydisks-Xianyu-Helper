@@ -35,14 +35,27 @@ describe('frontend navigation routing', () => {
 
   test('route pages are lazy-loaded behind a shared Suspense boundary', () => {
     const app = readFrontendFile('app/shell/AuthenticatedShell.tsx'); /* app 表示认证后页面组合器源码。 */
-    const lazyPageCount = (app.match(/const (Dashboard|AccountList|OrderList|CardList|ItemList|Settings|Rules|Notifications|Chat) = lazy\(/g) || []).length; /* lazyPageCount 表示按路由懒加载的页面数量。 */
+    const lazyPageCount = (app.match(/const (Dashboard|AccountList|OrderList|ItemList|Settings|Rules|Notifications|Chat) = lazy\(/g) || []).length; /* lazyPageCount 表示当前可访问的路由页面懒加载数量。 */
 
-    expect(lazyPageCount).toBe(9);
+    expect(lazyPageCount).toBe(8);
     expect(app).toContain('const PageLoading: React.FC');
     expect(app).toContain('<Suspense fallback={<PageLoading />}>');
     expect(app).not.toContain("import Dashboard from '../../components/Dashboard'");
     expect(app).toContain("import('../features/dashboard/pages/Dashboard')");
   } /* 测试回调断言已登录应用的路由、访问控制或延迟加载契约。 */);
+
+  test('卡密库存入口隐藏且直接访问旧地址也不会加载卡密页面', /* 确保隐藏范围不依赖侧栏可见性，避免旧书签绕过。 */ () => {
+    // sidebar 是侧栏菜单源码，用于确认卡密按钮不会出现在导航中。
+    const sidebar = readFrontendFile('shared/ui/Sidebar.tsx');
+    // routes 是地址映射源码，用于防止直接访问旧卡密地址。
+    const routes = readFrontendFile('app/router/routes.ts');
+    // shell 是页面组合器源码，用于确认隐藏页面不再挂载或懒加载。
+    const shell = readFrontendFile('app/shell/AuthenticatedShell.tsx');
+    expect(sidebar).not.toContain("id: 'cards'");
+    expect(routes).not.toContain("'/app/cards'");
+    expect(shell).not.toContain("case 'cards'");
+    expect(shell).not.toContain("features/cards/pages/CardList");
+  });
 
   test('authenticated shell owns sidebar and page composition', () => {
     const app = readFrontendFile('app/router/AppRouter.tsx'); /* app 表示认证后的路由组合器源码。 */
@@ -181,13 +194,14 @@ describe('frontend navigation routing', () => {
     expect(rules).not.toContain(': (isMultiSpecRule ? variants : [variants[0]]).map');
   } /* 测试回调断言已登录应用的路由、访问控制或延迟加载契约。 */);
 
-  test('batch publishing help explains card fields without required-field jargon', () => {
+  test('batch publishing help only explains currently visible template fields', () => {
     const itemList = readFrontendFile('app/features/items/pages/ItemList.tsx'); /* itemList 表示当前商品List。 */
 
     expect(itemList).not.toContain('条件必填');
-    expect(itemList).toContain('“付款后发送的卡密”怎么填');
-    expect(itemList).toContain('101:1:0;102:2:3');
-    expect(itemList).toContain('买家购买 3 件时会发送 6 份');
+    expect(itemList).not.toContain('“付款后发送的卡密”怎么填');
+    expect(itemList).not.toContain('101:1:0;102:2:3');
+    expect(itemList).toContain('填写发货模板 T模板ID');
+    expect(itemList).toContain('求评价等待小时');
   } /* 测试回调断言已登录应用的路由、访问控制或延迟加载契约。 */);
 
   test('item publish image previews revoke object urls', () => {

@@ -51,7 +51,7 @@ export const triggerOrder: AutomationTriggerType[] = ['order_paid', 'order_creat
 // reviewRequestText 是超时未评价规则的默认提醒文案。
 export const reviewRequestText = '亲，商品使用满意的话，麻烦给个评价，谢谢～';
 
-// emptyVariant 创建一个未选择卡密库存的发货规格草稿。
+// emptyVariant 为新发货内容默认选择模板模式；旧规则保存的库存模式不受此默认值变化影响。
 export const emptyVariant = (): ShippingVariant => ({
   spec_name: '',
   spec_value: '',
@@ -60,7 +60,7 @@ export const emptyVariant = (): ShippingVariant => ({
   enabled: true,
   delay_override: false,
   delay_seconds: 0,
-  delivery_mode: 'card',
+  delivery_mode: 'template',
   delivery_template_id: 0,
   template_bindings: [],
   custom_variables: {},

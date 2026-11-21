@@ -1,4 +1,5 @@
 import { Activity,AlertCircle,DollarSign,ExternalLink,Package,PackageCheck,ShoppingCart,TrendingUp,Users } from 'lucide-react';
+import { SHOW_CARD_UI } from '../../../../shared/ui/featureVisibility';
 import React,{ useState } from 'react';
 import { Cell,Legend,Pie,PieChart,ResponsiveContainer,Tooltip } from 'recharts';
 import { getDateRange,TimeRange,validateCustomDateRange } from '../../../../dateRange';
@@ -232,7 +233,7 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         <StatCard
           title="累计营收 (CNY)"
           value={`¥${analytics.revenue_stats.total_amount.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`}
@@ -252,12 +253,12 @@ const Dashboard: React.FC = () => {
           icon={ShoppingCart}
           colorClass="bg-blue-500"
         />
-        <StatCard
+        {SHOW_CARD_UI && <StatCard
           title="库存卡密余量"
           value={stats.available_card_stock}
           icon={Package}
           colorClass="bg-purple-500"
-        />
+        />}
       </div>
 
       <DashboardTrendChart chartData={chartData} selectedRangeLabel={dataRangeLabel} totalAmount={totalAmount} />

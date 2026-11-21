@@ -41,13 +41,13 @@ test('按模板 key 显示字符串 value 输入，而不是数组下标输入',
 
     expect(screen.getByText('{{custom.remark}}')).toBeTruthy();
     expect(screen.getByPlaceholderText('填写 remark 对应的字符串')).toBeTruthy();
-    expect(screen.getByText('{{cards.main}}')).toBeTruthy();
+    expect(screen.queryByText('{{cards.main}}')).toBeNull();
   });
 });
 
 afterEach(/* 当前回调清理后续模板变量编辑器测试 DOM。 */ () => cleanup());
 
-test('模板变量绑定展示启用的 text、data 和就绪 API 卡券', /* 当前回调验证模板执行器支持范围与选择器保持一致。 */ () => {
+test('隐藏库存绑定控件但保留发货模板选择', /* 库存能力继续存在于配置模型，界面只允许编辑自定义变量。 */ () => {
   // cards 是包含所有卡券类型和启用状态的筛选样例。
   const cards: Card[] = [
     { id: 1, name: '文本卡', type: 'text', enabled: true },
@@ -62,16 +62,17 @@ test('模板变量绑定展示启用的 text、data 和就绪 API 卡券', /* �
   const updateVariant = vi.fn();
   render(<TemplateVariantEditor index={0} variant={variantFixture} cards={cards} deliveryTemplates={[templateFixture]} updateVariant={updateVariant} />);
 
-  expect(screen.getByRole('option', { name: '文本卡' })).toBeTruthy();
-  expect(screen.getByRole('option', { name: '批量卡' })).toBeTruthy();
-  expect(screen.getByRole('option', { name: '就绪 API 卡' })).toBeTruthy();
+  expect(screen.getByRole('option', { name: '订单通知' })).toBeTruthy();
+  expect(screen.queryByRole('option', { name: '文本卡' })).toBeNull();
+  expect(screen.queryByRole('option', { name: '批量卡' })).toBeNull();
+  expect(screen.queryByRole('option', { name: '就绪 API 卡' })).toBeNull();
   expect(screen.queryByRole('option', { name: '图片卡' })).toBeNull();
   expect(screen.queryByRole('option', { name: '停用文本卡' })).toBeNull();
   expect(screen.queryByRole('option', { name: '停用批量卡' })).toBeNull();
   expect(screen.queryByRole('option', { name: '未就绪 API 卡' })).toBeNull();
 });
 
-test('已有 text/data 绑定仍可显示并修改数量', /* 当前回调验证合法历史绑定在过滤后仍保留可编辑能力。 */ () => {
+test('已有库存绑定隐藏，但编辑自定义变量不覆盖原绑定', /* 只提交变动字段，历史库存配置仍由上层草稿保留。 */ () => {
   // cards 是已有绑定和另一个可选库存的最小列表。
   const cards: Card[] = [
     { id: 1, name: '已绑定文本卡', type: 'text', enabled: true },
@@ -81,11 +82,21 @@ test('已有 text/data 绑定仍可显示并修改数量', /* 当前回调验证
   const updateVariant = vi.fn();
   render(<TemplateVariantEditor index={0} variant={{ ...variantFixture, template_bindings: [{ variable_key: 'main', card_id: 1, delivery_count: 1 }] }} cards={cards} deliveryTemplates={[templateFixture]} updateVariant={updateVariant} />);
 
-  expect(screen.getByRole('option', { name: '已绑定文本卡' })).toBeTruthy();
-  // countInputs 保存模板绑定数量输入框；同一编辑器还会渲染自定义变量输入，故按 aria-label 取第一个绑定控件。
-  const countInputs = screen.getAllByRole('spinbutton', { name: 'main 每件份数' });
-  // countInput 保存当前用例要修改的第一个模板绑定数量输入框。
-  const countInput = countInputs[0];
-  fireEvent.change(countInput, { target: { value: '2' } });
-  expect(updateVariant).toHaveBeenCalledWith(0, { template_bindings: [{ variable_key: 'main', card_id: 1, delivery_count: 2 }] });
+  expect(screen.queryByRole('option', { name: '已绑定文本卡' })).toBeNull();
+  expect(screen.queryByRole('spinbutton', { name: 'main 每件份数' })).toBeNull();
+  fireEvent.change(screen.getByPlaceholderText('填写 remark 对应的字符串'), { target: { value: '订单已发货' } });
+  expect(updateVariant).toHaveBeenCalledWith(0, { custom_variables: { remark: '订单已发货' } });
+});
+
+test('新增规则不展示无法配置库存绑定的模板，但仍保留当前历史模板', /* 不允许新规则选中隐藏了必填库存选择器的模板。 */ () => {
+  // plainTemplate 是仅包含自定义变量、可以在当前界面完整配置的发货模板。
+  const plainTemplate: DeliveryTemplate = { ...templateFixture, id: 10, name: '网盘链接', keys: [], messages: [{ id: 2, sort_order: 1, content: '{{custom.remark}}' }] };
+  // updateVariant 是组件选择模板时的更新回调替身。
+  const updateVariant = vi.fn();
+  render(<TemplateVariantEditor index={0} variant={{ ...variantFixture, delivery_template_id: 0 }} cards={[]} deliveryTemplates={[templateFixture, plainTemplate]} updateVariant={updateVariant} />);
+  expect(screen.queryByRole('option', { name: '订单通知' })).toBeNull();
+  expect(screen.getByRole('option', { name: '网盘链接' })).toBeTruthy();
+  cleanup();
+  render(<TemplateVariantEditor index={0} variant={variantFixture} cards={[]} deliveryTemplates={[templateFixture, plainTemplate]} updateVariant={updateVariant} />);
+  expect(screen.getByRole('option', { name: '订单通知' })).toBeTruthy();
 });

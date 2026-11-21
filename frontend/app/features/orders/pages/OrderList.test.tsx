@@ -134,9 +134,9 @@ describe('OrderList 页面组合行为', /* 当前回调验证订单筛选、编
     render(<OrderList />);
     fireEvent.click(screen.getByTitle('查看详情'));
     expect(screen.getByText('订单详情')).toBeTruthy();
-    // 打开详情时按订单号读取自动发货的卡密，并在没有记录时给出升级前订单的说明。
-    await waitFor(/* 等待已发卡密区块加载完成。 */ () => expect(screen.getByText(/暂无自动发货卡密记录/)).toBeTruthy());
-    expect(orderListMocks.getOrderDeliveredCards.mock.calls[0][0]).toBe('order-1');
+    // 订单详情仍可打开，但卡密明文入口和对应查询都不应触发。
+    expect(screen.queryByText(/暂无自动发货卡密记录/)).toBeNull();
+    expect(orderListMocks.getOrderDeliveredCards).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('关闭'));
     expect(screen.queryByText('订单详情')).toBeNull();
 

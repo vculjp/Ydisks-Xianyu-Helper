@@ -16,8 +16,8 @@ export interface ConsignProofModeOption {
 
 // CONSIGN_PROOF_MODES 是编辑弹窗展示的凭证模式选项，顺序即界面顺序。
 export const CONSIGN_PROOF_MODES: ReadonlyArray<ConsignProofModeOption> = [
-  { value: 'delivery', label: '卡密/模板全文', hint: '确认发货时提交买家实际收到的卡密或发货模板全文及图片；内容含外链、联系方式等时可能被闲鱼判定为敏感词而确认失败' },
-  { value: 'fixed', label: '固定文字', hint: '确认发货时只提交下方填写的固定文字，不提交卡密、模板全文或图片' },
+  { value: 'delivery', label: '发货内容全文', hint: '确认发货时提交买家实际收到的发货内容及图片；内容含外链、联系方式等时可能被闲鱼判定为敏感词而确认失败' },
+  { value: 'fixed', label: '固定文字', hint: '确认发货时只提交下方填写的固定文字，不提交发货内容全文或图片' },
   { value: 'none', label: '不携带', hint: '确认发货时不提交任何发货凭证' },
 ];
 

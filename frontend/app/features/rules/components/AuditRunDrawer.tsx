@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { useRunTimeline } from '../auditLog';
 import { auditActionLabel,auditEventTypeLabel,auditStatusMeta } from '../auditState';
 import DeliveredCardsReveal from './DeliveredCardsReveal';
+import { SHOW_CARD_UI } from '../../../../shared/ui/featureVisibility';
 
 // AuditRunDrawerProps 描述运行时间线弹层需要的运行与订单信息。
 export interface AuditRunDrawerProps {
@@ -56,7 +57,7 @@ const AuditRunDrawer: React.FC<AuditRunDrawerProps> = ({ runId, orderId, onClose
               </div>
             );
           })}
-          {delivered && orderId ? <DeliveredCardsReveal orderId={orderId} /> : null}
+          {SHOW_CARD_UI && delivered && orderId ? <DeliveredCardsReveal orderId={orderId} /> : null}
         </div>
       </div>
     </div>,

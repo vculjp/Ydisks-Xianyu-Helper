@@ -2,6 +2,7 @@ import React from 'react';
 import SearchableSelect from '../../../../shared/ui/SearchableSelect';
 import type { Card, DeliveryTemplate, ShippingVariant } from '../types';
 import { isDeliveryCardReady } from '../utils';
+import { SHOW_CARD_UI } from '../../../../shared/ui/featureVisibility';
 
 /** 模板变体编辑器的输入参数。 */
 export interface TemplateVariantEditorProps {
@@ -43,7 +44,7 @@ const TemplateVariantEditor: React.FC<TemplateVariantEditorProps> = ({ index, va
           className="w-full ios-input px-3 py-2.5 rounded-lg"
         >
           <option value="">请选择发货模板</option>
-          {deliveryTemplates.filter(/* templateCandidate 是待筛选的启用模板或当前既有引用。 */ templateCandidate => templateCandidate.enabled || templateCandidate.id === variant.delivery_template_id).map(/* templateCandidate 是待渲染的模板选项。 */ templateCandidate => <option key={templateCandidate.id} value={templateCandidate.id} disabled={!templateCandidate.enabled}>{templateCandidate.name}{templateCandidate.enabled ? '' : '（已停用，仅保留现有引用）'}</option>)}
+          {deliveryTemplates.filter(/* templateCandidate 新增引用只允许无需库存变量的模板；历史已选模板仍保留，避免破坏原配置。 */ templateCandidate => (templateCandidate.enabled || templateCandidate.id === variant.delivery_template_id) && (SHOW_CARD_UI || templateCandidate.keys.length === 0 || templateCandidate.id === variant.delivery_template_id)).map(/* templateCandidate 是待渲染的模板选项。 */ templateCandidate => <option key={templateCandidate.id} value={templateCandidate.id} disabled={!templateCandidate.enabled}>{templateCandidate.name}{templateCandidate.enabled ? '' : '（已停用，仅保留现有引用）'}</option>)}
         </select>
       </div>
       {customKeys.length > 0 && <div className="min-w-0 md:col-span-full rounded-xl bg-amber-50 p-3 space-y-2">
@@ -61,7 +62,7 @@ const TemplateVariantEditor: React.FC<TemplateVariantEditorProps> = ({ index, va
           }} className="ios-input rounded-lg px-3 py-2" placeholder={`填写 ${key} 对应的字符串`} />
         </label>)}
       </div>}
-      <div className="min-w-0 md:col-span-full rounded-xl bg-sky-50 p-3 space-y-2">
+      {SHOW_CARD_UI && <div className="min-w-0 md:col-span-full rounded-xl bg-sky-50 p-3 space-y-2">
         <p className="text-xs font-bold text-sky-700">模板变量绑定</p>
         {(template?.keys || []).map(/* key 是当前模板要求绑定的变量键。 */ key => {
           // binding 保存当前变量已有的卡密绑定。
@@ -81,7 +82,7 @@ const TemplateVariantEditor: React.FC<TemplateVariantEditorProps> = ({ index, va
             </div>
           );
         })}
-      </div>
+      </div>}
     </>
   );
 };

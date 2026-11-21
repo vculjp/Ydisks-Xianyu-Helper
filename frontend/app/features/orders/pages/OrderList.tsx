@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { formatLocalDateTime } from '../../../../dateTime';
 import type { OrderStatus } from '../api';
 import { DeliveredCardsSection } from '../components/DeliveredCardsSection';
+import { SHOW_CARD_UI } from '../../../../shared/ui/featureVisibility';
 import { OrderFilterBar } from '../components/OrderFilterBar';
 import { useOrderQuery } from '../hooks';
 import { useOrderActions } from '../orderActions';
@@ -361,7 +362,7 @@ const OrderList: React.FC = () => {
               </div>
 
               {/* 已发卡密：按订单号 key 挂载，切换订单会取消旧请求并清空明文 */}
-              <DeliveredCardsSection key={selectedOrder.order_id} orderId={selectedOrder.order_id} />
+              {SHOW_CARD_UI && <DeliveredCardsSection key={selectedOrder.order_id} orderId={selectedOrder.order_id} />}
             </div>
 
             <div className="modal-footer">

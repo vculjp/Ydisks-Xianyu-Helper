@@ -1,6 +1,7 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { actionsInScope, newAction, syncTemplateBindings, type SpecScope } from '../templateDraft';
 import type { LibraryAction, LibraryActionGroup, LibraryAutomation, LibraryCardOption, LibraryDeliveryTemplateOption } from '../types';
+import { SHOW_CARD_UI } from '../../../../shared/ui/featureVisibility';
 
 /** TemplateAutomationEditorProps 描述自动化编辑器的输入与回调。 */
 export interface TemplateAutomationEditorProps {
@@ -52,7 +53,7 @@ const ActionRow = ({ action, cards, deliveryTemplates, onChange, onRemove }: Act
         ) : (
           <select aria-label="发货模板" className={inputClass} value={action.deliveryTemplateId} onChange={/* 选择发货模板并重建变量绑定。 */ event => onChange(syncTemplateBindings(action, deliveryTemplates.find(/* option 按主键匹配。 */ option => option.id === Number(event.target.value))))}>
             <option value={0}>选择发货模板</option>
-            {deliveryTemplates.map(/* option 渲染一个发货模板选项。 */ option => <option key={option.id} value={option.id}>{option.name}</option>)}
+            {deliveryTemplates.filter(/* option 新引用排除无法在当前界面绑定库存的模板，现有引用仍保留可见。 */ option => SHOW_CARD_UI || option.keys.length === 0 || option.id === action.deliveryTemplateId).map(/* option 渲染一个发货模板选项。 */ option => <option key={option.id} value={option.id}>{option.name}</option>)}
           </select>
         )}
         <label className="flex items-center gap-1 text-xs text-gray-500">延迟
@@ -62,7 +63,7 @@ const ActionRow = ({ action, cards, deliveryTemplates, onChange, onRemove }: Act
       </div>
       {action.actionType === 'send_template' && template && (
         <div className="space-y-2 pl-1">
-          {action.templateBindings.map(/* binding 渲染一个卡密变量的绑定。 */ binding => (
+          {SHOW_CARD_UI && action.templateBindings.map(/* binding 渲染一个卡密变量的绑定。 */ binding => (
             <div key={binding.variableKey} className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
               <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono">{`{{cards.${binding.variableKey}}}`}</code>
               <select aria-label={`变量 ${binding.variableKey} 的卡密组`} className={inputClass} value={binding.cardId} onChange={/* 绑定变量到卡密组。 */ event => onChange({ ...action, templateBindings: action.templateBindings.map(/* item 替换当前变量。 */ item => item.variableKey === binding.variableKey ? { ...item, cardId: Number(event.target.value) } : item) })}>
@@ -106,13 +107,13 @@ const GroupEditor = ({ title, hint, group, scopes, cards, deliveryTemplates, onC
     {group.enabled && scopes.map(/* scope 渲染一个规格范围的动作列表。 */ scope => (
       <div key={`${scope.specName}|${scope.specValue}`} className="space-y-2">
         {scopes.length > 1 || scope.specName ? <h5 className="text-xs font-black text-gray-700">规格：{scope.label}</h5> : null}
-        {actionsInScope(group, scope).map(/* entry 渲染该范围内的一个动作。 */ ({ action, index }) => (
+        {actionsInScope(group, scope).filter(/* entry 是原动作数组中的条目；隐藏库存动作但保持原索引用于安全保存。 */ entry => SHOW_CARD_UI || entry.action.actionType !== 'send_card').map(/* entry 渲染该范围内的一个动作。 */ ({ action, index }) => (
           <ActionRow key={index} action={action} cards={cards} deliveryTemplates={deliveryTemplates}
             onChange={/* 原位更新动作。 */ next => onChange({ ...group, actions: group.actions.map(/* item、i 定位被修改动作。 */ (item, i) => i === index ? next : item) })}
             onRemove={/* 删除动作。 */ () => onChange({ ...group, actions: group.actions.filter(/* _、i 过滤被删除动作。 */ (_, i) => i !== index) })} />
         ))}
         <div className="flex gap-2">
-          <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-gray-700 shadow-sm hover:bg-emerald-50" onClick={/* 追加发卡动作。 */ () => onChange({ ...group, actions: [...group.actions, newAction('send_card', scope)] })}><Plus className="h-3.5 w-3.5" />发送卡密</button>
+          {SHOW_CARD_UI && <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-gray-700 shadow-sm hover:bg-emerald-50" onClick={/* 追加发卡动作。 */ () => onChange({ ...group, actions: [...group.actions, newAction('send_card', scope)] })}><Plus className="h-3.5 w-3.5" />发送卡密</button>}
           <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-gray-700 shadow-sm hover:bg-emerald-50" onClick={/* 追加发货模板动作。 */ () => onChange({ ...group, actions: [...group.actions, newAction('send_template', scope)] })}><Plus className="h-3.5 w-3.5" />发货模板</button>
         </div>
       </div>

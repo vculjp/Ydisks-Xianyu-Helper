@@ -140,7 +140,7 @@ describe('useRuleActions 分支', /* 当前套件覆盖校验提示、异常路�
     // hook 是规则动作。
     const hook = setup();
     act(/* 当前回调打开新规则。 */ () => hook.result.current.openNewAutomationRule());
-    act(/* 当前回调填入合法规格。 */ () => hook.result.current.updateVariant(0, { card_id: 7 }));
+    act(/* 当前回调明确选择历史库存模式并填入合法规格，验证隐藏入口不影响兼容保存。 */ () => hook.result.current.updateVariant(0, { delivery_mode: 'card', card_id: 7 }));
     await act(/* 当前回调保存并遇到失败。 */ async () => hook.result.current.handleSaveAutomationRule());
     expect(alertMock).toHaveBeenLastCalledWith('保存失败：boom');
     expect(hook.result.current.automationSubmitState.submitting).toBe(false);

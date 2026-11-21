@@ -47,8 +47,6 @@ const AccountEditModal = lazy(/* 账号编辑弹窗随账号页面按需加载�
 const OrderList = lazy(/* OrderList 页面按路由激活时加载。 */ () => import('../features/orders/pages/OrderList'));
 // SalesStats 是按需加载的销售统计页面，避免首屏载入图表代码。
 const SalesStats = lazy(/* SalesStats 页面按路由激活时加载。 */ () => import('../features/sales/pages/SalesStats'));
-// CardList 是按需加载的卡密页面，避免首屏载入卡密批量处理代码。
-const CardList = lazy(/* CardList 页面按路由激活时加载。 */ () => import('../features/cards/pages/CardList'));
 // ItemList 是按需加载的商品页面，避免首屏载入商品发布编辑器代码。
 const ItemList = lazy(/* ItemList 页面按路由激活时加载。 */ () => import('../features/items/pages/ItemList'));
 // PublishSpecsEditor 在商品页面中按需加载，保持规格编辑器与商品主分片解耦。
@@ -140,7 +138,6 @@ export const AppContent: React.FC<AppContentProps> = ({
       case 'chat': return <Chat libraryImageChooser={LibraryImageChooser} />;
       case 'orders': return <OrderList />;
       case 'sales': return <SalesStats />;
-      case 'cards': return <CardList libraryImageChooser={LibraryImageChooser} />;
       case 'items': return <ItemList onConfigureDelivery={handleConfigureDelivery} publishSpecsEditor={PublishSpecsEditor} publishImagesEditor={PublishImagesEditor} itemAISettingsModal={ItemAISettingsModal} libraryImagePicker={LibraryImagePicker} />;
       case 'rules': return <Rules
         initialDeliveryTarget={deliveryRuleTarget}

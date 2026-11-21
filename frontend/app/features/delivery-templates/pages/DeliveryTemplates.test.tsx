@@ -40,7 +40,8 @@ describe('DeliveryTemplates 页面组合行为', /* 当前回调验证模板编�
     expect(screen.getByRole('dialog')).toBeTruthy();
     expect(screen.getByText('新建发货模板')).toBeTruthy();
     expect(screen.getByPlaceholderText('例如：数字产品发货')).toBeTruthy();
-    expect(screen.getByText('内置、卡密、自定义变量均用双大括号')).toBeTruthy();
+    expect(screen.getByText('内置和自定义变量均用双大括号')).toBeTruthy();
+    expect(screen.queryByText('{{cards.<变量名>}}')).toBeNull();
     expect(screen.getByText('{{buyer_nickname}}')).toBeTruthy();
     expect(screen.getByText('{{custom.<变量名>}}')).toBeTruthy();
     expect(screen.getByText('如何声明和使用')).toBeTruthy();

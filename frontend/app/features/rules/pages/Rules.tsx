@@ -38,6 +38,7 @@ import type { AutomationTriggerType,ReplyRule,RulesProps,RulesTab } from '../typ
 import { accentClasses,accountLabel,actionSummary,adjustPriceTarget,buildReviewConfig,reviewLookbackHours,cardActionsForTrigger,isDeliveryCardReady,needsAllItemsConfirmation,statusPill,triggerMeta,triggerOrder,withAllItemsConfirmation } from '../utils';
 import { ImageSourceField } from '../../../../shared/ui/ImageSourceField';
 import { PageHeader } from '../../../../shared/ui/PageHeader';
+import { SHOW_CARD_UI } from '../../../../shared/ui/featureVisibility';
 
 // Rules 是规则 feature 在旧页面目录下保留的兼容入口组件。
 const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHandled, auditPanel: AuditPanel, supportPanel: SupportPanel, libraryImageChooser }) => {
@@ -884,7 +885,7 @@ const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHa
                         <div>
                           <div className="flex items-center gap-2">
                             <Layers3 className="w-5 h-5 text-brand" />
-                            <h4 className="font-black text-gray-900">{currentTrigger === 'buyer_reviewed' ? '赠品库存' : '发货库存'}</h4>
+                            <h4 className="font-black text-gray-900">{currentTrigger === 'buyer_reviewed' ? '赠品内容' : '发货内容'}</h4>
                           </div>
                           <p className="text-sm text-gray-500 mt-1">
                             {isMultiSpecRule
@@ -903,7 +904,8 @@ const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHa
                       </div>
 
                       <div className="space-y-3">
-                        {displayVariants.map((variant, index) => (/* 当前回调处理集合中的单个元素。 */
+                        {displayVariants.map((variant, index) => (/* 旧库存模式保留在编辑草稿及保存载荷中，但隐藏对应前端编辑行。 */
+                          !SHOW_CARD_UI && variant.delivery_mode !== 'template' ? null :
                           <div
                             key={variant.id || index}
                             className={`rules-delivery-grid grid min-w-0 grid-cols-1 gap-3 items-end rounded-2xl border border-gray-200 p-4 ${isMultiSpecRule ? 'rules-delivery-grid-multi' : ''}`}
@@ -937,13 +939,13 @@ const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHa
                                 onChange={/* 当前回调切换卡密库存和模板两种发货模式。 */ event => updateVariant(index, { delivery_mode: event.target.value as 'card' | 'template', card_id: 0, delivery_template_id: 0, template_bindings: [] })}
                                 className="w-full ios-input px-3 py-2.5 rounded-lg"
                               >
-                                <option value="card">卡密库存</option>
+                                {SHOW_CARD_UI && <option value="card">卡密库存</option>}
                                 <option value="template">发货模板</option>
                               </select>
                             </div>
                             {variant.delivery_mode === 'template' ? (
                               <TemplateVariantEditor index={index} variant={variant} cards={cards} deliveryTemplates={deliveryTemplates} updateVariant={updateVariant} />
-                            ) : (
+                            ) : SHOW_CARD_UI ? (
                               <div>
                                 <label className="block text-xs font-bold text-gray-600 mb-2">卡密库存</label>
                                 <SearchableSelect
@@ -955,7 +957,7 @@ const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHa
                                 />
 
                               </div>
-                            )}
+                            ) : null}
                             <div>
                               <label className="block text-xs font-bold text-gray-600 mb-2">每件份数</label>
                               <input
@@ -975,7 +977,7 @@ const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHa
                                   onChange={/* 当前回调处理用户交互或异步状态变化。 */ event => updateVariant(index, { delay_override: event.target.checked })}
                                   className="accent-brand"
                                 />
-                                覆盖卡密默认延时
+                                覆盖默认延时
                               </label>
                               {variant.delay_override && (
                                 <input
@@ -988,7 +990,7 @@ const Rules: React.FC<RulesProps> = ({ initialDeliveryTarget, onDeliveryTargetHa
                                   aria-label="动作延时秒数"
                                 />
                               )}
-                              <span className="text-xs text-gray-500">{variant.delay_override ? `本动作延时 ${variant.delay_seconds || 0} 秒` : '使用卡密默认延时'}</span>
+                              <span className="text-xs text-gray-500">{variant.delay_override ? `本动作延时 ${variant.delay_seconds || 0} 秒` : '使用默认延时'}</span>
                             </div>
                             <button
                               type="button"

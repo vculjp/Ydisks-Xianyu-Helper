@@ -152,16 +152,19 @@ func (s *Sessions) Get(ctx context.Context, sessionID string) (*Session, error) 
 
 // RenewIfExpiring 只为已验证且即将过期的会话续期，不会复活已注销或已过期的会话。
 func (s *Sessions) RenewIfExpiring(ctx context.Context, sessionID string, expiresAt int64) (bool, error) {
+	// now 是本次数据库续期判断的 Unix 秒时间戳，与 expiresAt 使用相同单位。
 	now := time.Now().Unix()
 	if sessionID == "" || expiresAt <= now || expiresAt > now+int64(SessionRenewWindow.Seconds()) {
 		return false, nil
 	}
+	// result 是带旧过期时间条件的原子更新回执；err 是数据库更新失败的原因。
 	result, err := s.DB.ExecContext(ctx,
 		`UPDATE sessions SET expires_at=? WHERE session_id=? AND expires_at=? AND expires_at>?`,
 		now+int64(SessionTTL.Seconds()), sessionID, expiresAt, now)
 	if err != nil {
 		return false, err
 	}
+	// count 是实际更新的会话行数；err 是读取数据库影响行数失败的原因。
 	count, err := result.RowsAffected()
 	return count > 0, err
 }

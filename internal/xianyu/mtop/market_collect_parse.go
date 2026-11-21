@@ -666,17 +666,6 @@ func firstNonEmptyString(candidates ...string) string {
 	return ""
 }
 
-// firstPositiveInt 返回首个大于 0 的整数，全部非正时返回 0。
-func firstPositiveInt(candidates ...int) int {
-	// candidate 是按优先级排列的候选整数。
-	for _, candidate := range candidates {
-		if candidate > 0 {
-			return candidate
-		}
-	}
-	return 0
-}
-
 // firstLineRunes 取文本首个非空行的前 maxRunes 个字符，用作无标题帖子的安全标题兜底。
 func firstLineRunes(text string, maxRunes int) string {
 	// line 是按换行切分出的每一行文本。

@@ -30,3 +30,11 @@ export const SETTINGS_SAVE_OMIT_KEYS = new Set([
   'item_sync_max_pages',
   'default_reply',
 ]);
+
+/** 设置页敏感输入的空字符串仅表示保留已保存的秘密；由本 feature 自行维护，避免 UI 状态直接依赖 transport 层。 */
+export const SETTINGS_SECRET_KEYS = new Set([
+  'ai_api_key',
+  'smtp_password',
+  'qq_reply_secret_key',
+  'captcha.remote_secret_key',
+]);

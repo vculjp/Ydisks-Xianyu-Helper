@@ -1,6 +1,5 @@
 import type { SystemSettings } from './api';
-import { SETTINGS_SAVE_OMIT_KEYS } from './constants';
-import { SENSITIVE_SYSTEM_SETTING_KEYS } from '../../../shared/api-contract/settings';
+import { SETTINGS_SAVE_OMIT_KEYS,SETTINGS_SECRET_KEYS } from './constants';
 import type { CredentialsForm,CredentialsMessage } from './types';
 
 /** 将配置草稿裁剪为可以保存到后端的字段。 */
@@ -11,7 +10,7 @@ export const buildPersistableSettings = (settings: SystemSettings): Partial<Syst
       ([key, value]) => !SETTINGS_SAVE_OMIT_KEYS.has(key)
         && value !== undefined && value !== null
         // 服务端只返回密钥的已配置状态；空输入表示“不更改”，而不是“清除已保存密钥”。
-        && !(SENSITIVE_SYSTEM_SETTING_KEYS.has(key) && value === ''),
+        && !(SETTINGS_SECRET_KEYS.has(key) && value === ''),
     ),
   ) as Partial<SystemSettings>
 );

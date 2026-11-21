@@ -46,31 +46,41 @@ func TestPersistentLoginTTL(t *testing.T) {
 
 // TestPersistentSessionRenewsOnActivity 验证旧会话在临期访问时续期且仍使用 HttpOnly Cookie。
 func TestPersistentSessionRenewsOnActivity(t *testing.T) {
+	// svc 保存独立测试用的登录服务；cleanup 负责关闭其中的临时数据库资源。
 	svc, cleanup := newAuth(t)
 	defer cleanup()
+	// ctx 绑定整轮会话查询、更新和删除操作的生命周期。
 	ctx := context.Background()
+	// sid 是测试管理员登录生成的会话标识；err 表示创建会话的失败原因。
 	sid, _, err := svc.Login(ctx, "admin", "pw")
 	if err != nil || sid == "" {
 		t.Fatalf("无法建立测试会话: %v", err)
 	}
+	// nearExpiry 模拟距离到期不足一周的旧会话，确保中间件会主动续期。
 	nearExpiry := time.Now().Add(6 * 24 * time.Hour).Unix()
+	// err 表示修改临期测试数据时的数据库写入错误。
 	if _, err := svc.Store.DB.ExecContext(ctx, `UPDATE sessions SET expires_at=? WHERE session_id=?`, nearExpiry, sid); err != nil {
 		t.Fatal(err)
 	}
+	// protected 是要求登录并执行会话自动续期的 HTTP 测试处理链。
 	protected := svc.Middleware(RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})))
+	// req 用携带会话 Cookie 的模拟请求验证多次访问的续期行为。
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/session", nil)
 	req.AddCookie(&http.Cookie{Name: CookieName, Value: sid})
+	// rec 记录首次临期请求的响应头和状态码，以便检查 Cookie 刷新结果。
 	rec := httptest.NewRecorder()
 	protected.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("自动续期后的状态码: %d", rec.Code)
 	}
+	// cookies 是中间件更新后的安全 Cookie 集合，不得包含额外会话值。
 	cookies := rec.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Value != sid || !cookies[0].HttpOnly || cookies[0].MaxAge != CookieMaxAge {
 		t.Fatalf("续期未正确刷新安全 Cookie: %+v", cookies)
 	}
+	// updated 是续期后从数据库重新读取的会话；err 是读取失败原因。
 	updated, err := svc.Store.Sessions.Get(ctx, sid)
 	if err != nil || updated.ExpiresAt < time.Now().Add(29*24*time.Hour).Unix() {
 		t.Fatalf("会话续期未持久化: session=%+v err=%v", updated, err)
@@ -81,6 +91,7 @@ func TestPersistentSessionRenewsOnActivity(t *testing.T) {
 	if len(rec.Result().Cookies()) != 0 {
 		t.Fatal("非临期会话不应重复续期")
 	}
+	// err 表示显式注销后删除该会话的数据库错误。
 	if err := svc.Store.Sessions.Delete(ctx, sid); err != nil {
 		t.Fatal(err)
 	}

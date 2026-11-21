@@ -90,9 +90,10 @@ func (s *Server) runRemoteItemAction(w http.ResponseWriter, r *http.Request, inp
 	}
 	// shelfState、message 是已成功执行操作的回执，不携带任何原始平台数据。
 	shelfState, message := "", "商品修改已同步到闲鱼并保存到本地"
-	if input.Action == itemapp.RemoteItemDownShelfAction {
+	switch input.Action {
+	case itemapp.RemoteItemDownShelfAction:
 		shelfState, message = "off", "商品已在闲鱼下架，保留本地资料和自动发货规则"
-	} else if input.Action == itemapp.RemoteItemReshelfAction {
+	case itemapp.RemoteItemReshelfAction:
 		shelfState, message = "on", "闲鱼已确认重新上架，保留商品原有资料和规则"
 	}
 	writeJSON(w, http.StatusOK, itemRemoteActionResponse{Success: true, Message: message, ShelfState: shelfState})

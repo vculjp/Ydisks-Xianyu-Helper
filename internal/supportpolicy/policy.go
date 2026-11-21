@@ -81,7 +81,17 @@ func Decode(raw string) (Config, error) {
 		if entry.Title == "" || entry.Answer == "" || utf8.RuneCountInString(entry.Title) > 80 || utf8.RuneCountInString(entry.Question) > 120 || utf8.RuneCountInString(entry.Answer) > 600 {
 			return Config{}, errors.New("知识标题、问题或正文为空或超过长度限制")
 		}
-		if !((entry.Scope == "global" && entry.AccountID == "" && entry.ItemID == "") || (entry.Scope == "account" && entry.AccountID != "" && entry.ItemID == "") || (entry.Scope == "item" && entry.AccountID != "" && entry.ItemID != "")) {
+		// scopeValid 校验资料所属层级与账号、商品标识必须同时满足的约束，避免错误范围覆盖其他店铺。
+		scopeValid := false
+		switch entry.Scope {
+		case "global":
+			scopeValid = entry.AccountID == "" && entry.ItemID == ""
+		case "account":
+			scopeValid = entry.AccountID != "" && entry.ItemID == ""
+		case "item":
+			scopeValid = entry.AccountID != "" && entry.ItemID != ""
+		}
+		if !scopeValid {
 			return Config{}, errors.New("知识归属配置无效")
 		}
 		if blockedMaterial(entry.Title) || blockedMaterial(entry.Question) || blockedMaterial(entry.Answer) {

@@ -180,6 +180,9 @@ const Settings: React.FC = () => {
                     {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+                <p className="text-xs text-gray-500">
+                  {settings.ai_api_key_configured ? '密钥已安全保存到系统，留空会保留原密钥；仅更换时需填写新密钥并保存。' : '首次填写密钥后点击保存配置，之后无需重复输入。'}
+                </p>
               </div>
 
               <div className="space-y-3">

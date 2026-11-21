@@ -83,6 +83,43 @@ describe('useChat', /* 当前回调处理聊天加载、分页、发送和实时
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
   });
 
+  test('账号未读数字能打开最近未读会话并解除遮挡它的筛选，不会误跳至已读会话',
+    // 导航测试验证原账号会话选择、搜索和未读筛选不影响红色数字的直达操作。
+    async () => {
+      // alreadyRead 是默认打开的已读会话，即使最近发送时间更晚也不能作为未读跳转目标。
+      const alreadyRead = { ...sessionFixture, unread_count: 0, last_message_at: 200 };
+      // unreadChat 是真正需要跳转的未读会话。
+      const unreadChat = { ...sessionFixture, chat_id: 'chat-unread', peer_user_id: 'buyer-2', unread_count: 2, last_message_at: 100 };
+      getSessionPageMock.mockResolvedValue({ sessions: [alreadyRead, unreadChat], has_more: false });
+      getMessagePageMock.mockImplementation(/* accountID、chatID 分别定位读取消息的账号和会话。 */ async (accountID, chatID) => ({
+        messages: [{ ...messageFixture, account_id: accountID, chat_id: chatID }],
+        has_more: false,
+        session: chatID === unreadChat.chat_id ? unreadChat : alreadyRead,
+      }));
+      // hook 挂载包含两条会话的实际聊天状态管理。
+      const hook = renderHook(/* unreadNavigationHookFactory 创建包含最新未读会话的聊天 Hook。 */ () => useChat());
+      await waitFor(/* initialChatAssertion 等待已读会话成为默认选中项。 */ () => expect(hook.result.current.activeChatID).toBe('chat-1'));
+      await waitFor(/* unreadBadgeAssertion 等待账号未读数加载完毕。 */ () => expect(hook.result.current.unreadForAccount('account-1')).toBe(2));
+      act(/* hideUnreadAction 模拟用户正在搜索其他内容并开启未读筛选。 */ () => {
+        hook.result.current.setSearch('完全不匹配');
+        hook.result.current.setUnreadOnly(true);
+      });
+      expect(hook.result.current.filteredSessions).toHaveLength(0);
+      // targetChatID 保存点击徽标后选中的会话标识。
+      let targetChatID: string | undefined;
+      act(/* navigateUnreadAction 模拟点击账号的红色未读数。 */ () => {
+        targetChatID = hook.result.current.jumpToUnreadConversation('account-1');
+      });
+      expect(targetChatID).toBe('chat-unread');
+      expect(hook.result.current.activeChatID).toBe('chat-unread');
+      expect(hook.result.current.search).toBe('');
+      expect(hook.result.current.unreadOnly).toBe(false);
+      await waitFor(/* markReadAssertion 等待目标聊天加载和未读清零。 */ () => expect(hook.result.current.unreadForAccount('account-1')).toBe(0));
+      expect(hook.result.current.jumpToUnreadConversation('unknown-account')).toBeUndefined();
+      expect(hook.result.current.activeChatID).toBe('chat-unread');
+      hook.unmount();
+    });
+
   test('加载账号、会话和消息后可以发送文字与图片', /* 当前回调验证聊天 Hook 成功加载和发送路径。 */ async () => {
     // hook 是聊天 Hook 的渲染结果。
     const hook = renderHook(

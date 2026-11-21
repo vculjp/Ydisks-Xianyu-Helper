@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"xianyu-go/internal/db"
 	"xianyu-go/internal/logging"
@@ -20,8 +21,8 @@ import (
 // CookieName 是会话 Cookie 名。
 const CookieName = "session"
 
-// CookieMaxAge 会话有效期（24 小时）。
-const CookieMaxAge = 24 * 60 * 60
+// CookieMaxAge 与数据库长期登录的闲置有效期保持一致。
+const CookieMaxAge = int(db.SessionTTL / time.Second)
 
 // ctxKey 上下文键类型，避免冲突。
 type ctxKey int
@@ -127,6 +128,13 @@ func (s *Service) Middleware(next http.Handler) http.Handler {
 		// ctx 用于本次流程后续判断的ctx
 		ctx := WithSession(r.Context(), sess)
 		if sess != nil {
+			// 临近过期时续期数据库会话并刷新 HttpOnly Cookie；从不在浏览器保存密码。
+			renewed, renewErr := s.Store.Sessions.RenewIfExpiring(r.Context(), sess.SessionID, sess.ExpiresAt)
+			if renewErr != nil {
+				s.Logger.Warn("续期管理员会话失败", "err", renewErr)
+			} else if renewed {
+				s.SetSessionCookie(w, sess.SessionID)
+			}
 			// 下游日志通过 context 自动携带 user_id，便于按操作者检索。
 			ctx = logging.With(ctx, slog.Int64("user_id", sess.UserID))
 		}

@@ -26,7 +26,7 @@ const Chat: React.FC<ChatProps> = ({ libraryImageChooser: LibraryChooser }) => {
     hasMoreContacts, emojiOpen, sending, error, sendNotice, liveState, pendingImage, scrollRef, imageInputRef, setActiveAccountID,
     setActiveChatID, setSearch, setUnreadOnly, setDraft, setEmojiOpen, reloadSessions, loadMoreContacts,
     loadOlderMessages, handleMessageScroll, handleSend, handleQuickReply, handleQuickReplyImage, handleLibraryImage, handleImage, handlePastedImages, confirmSendImage, closeImagePreview, retrySend, retryAvailable,
-    deletingChatID, deleteError, deleteConversation, clearDeleteError, acceptOutgoingMessage, unreadForAccount, emojiURL, xianyuEmojis, renderXianyuText, formatClock, messageTime,
+    deletingChatID, deleteError, deleteConversation, clearDeleteError, acceptOutgoingMessage, unreadForAccount, jumpToUnreadConversation, emojiURL, xianyuEmojis, renderXianyuText, formatClock, messageTime,
   } = useChat();
 
 
@@ -48,6 +48,32 @@ const Chat: React.FC<ChatProps> = ({ libraryImageChooser: LibraryChooser }) => {
   const [itemPickerOpen, setItemPickerOpen] = React.useState(false);
 	// deleteTarget 保存等待用户确认清空的会话，空值表示确认框关闭。
 	const [deleteTarget, setDeleteTarget] = React.useState<ChatSession | null>(null);
+
+  // pendingUnreadJump 保存点击红色数字后等待定位的账号与会话；其他普通切换不触发滚动。
+  const [pendingUnreadJump, setPendingUnreadJump] = React.useState<{
+    /** accountID 限定未读定位只发生在用户点击的店铺账号内。 */
+    accountID: string;
+    /** chatID 是该账号最新未读会话的稳定标识，用于匹配滚动目标。 */
+    chatID: string;
+  } | null>(null);
+  // unreadJumpRowRef 仅指向当前待定位的未读会话行，不保持其他会话的 DOM 引用。
+  const unreadJumpRowRef = React.useRef<HTMLDivElement | null>(null);
+
+  /** 点击账号未读数字时打开该账号最新未读会话，并在筛选解除后的下一次渲染中定位会话行。 */
+  const handleUnreadJump = React.useCallback(/* accountID 表示被点击未读数字所属的账号。 */ (accountID: string): void => {
+    // chatID 是 Hook 确认存在未读的目标会话；空值时不能误跳到其他账号。
+    const chatID = jumpToUnreadConversation(accountID);
+    if (chatID) setPendingUnreadJump({ accountID, chatID });
+  }, [jumpToUnreadConversation]);
+
+  React.useLayoutEffect(/* 当前副作用仅在用户明确点击未读数字且目标会话可见时，将列表滚动到该行。 */ () => {
+    if (!pendingUnreadJump || activeAccountID !== pendingUnreadJump.accountID || activeChatID !== pendingUnreadJump.chatID) return;
+    // row 保存本轮目标会话实际渲染的列表行；异步切换或列表暂未出现时继续等待。
+    const row = unreadJumpRowRef.current;
+    if (!row) return;
+    row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    setPendingUnreadJump(null);
+  }, [activeAccountID, activeChatID, filteredSessions, pendingUnreadJump]);
 
   React.useEffect(/* 当前副作用在账号或会话变化时关闭旧上下文中的商品弹窗。 */ () => {
     setItemPickerOpen(false);
@@ -100,12 +126,20 @@ const Chat: React.FC<ChatProps> = ({ libraryImageChooser: LibraryChooser }) => {
             // online 响应当前用户操作（line）。
             const online = account.runtime_state === 'online';
             return (
-              <button key={account.id} type="button" role="tab" aria-selected={active} onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => setActiveAccountID(account.id)}
-                className={`relative flex h-11 shrink-0 items-center gap-2 border-b-2 px-3 text-sm font-extrabold transition-colors ${active ? 'border-sky-500 text-sky-700' : 'border-transparent text-slate-500 hover:text-slate-900'}`}>
-                <span className={`h-2 w-2 rounded-full ${online ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                <span className="max-w-36 truncate">{account.nickname || account.remark || account.id}</span>
-                {unread > 0 && <span aria-label={`未读消息 ${unreadLabel} 条`} className={unreadBadgeClassName(unread)}>{unreadLabel}</span>}
-              </button>
+              <div key={account.id} role="presentation" className={`relative flex h-11 shrink-0 items-center border-b-2 transition-colors ${active ? 'border-sky-500 text-sky-700' : 'border-transparent text-slate-500'}`}>
+                <button type="button" role="tab" aria-selected={active} onClick={/* 当前回调只切换账号，保留原来点击账号名称的行为。 */ () => setActiveAccountID(account.id)}
+                  className="flex h-full items-center gap-2 px-3 text-sm font-extrabold hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-sky-500">
+                  <span className={`h-2 w-2 rounded-full ${online ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                  <span className="max-w-36 truncate">{account.nickname || account.remark || account.id}</span>
+                </button>
+                {unread > 0 && (
+                  <button type="button" aria-label={`查看${account.nickname || account.remark || account.id}的${unread}条未读消息`}
+                    title="点击跳转到最近未读会话" onClick={/* 当前回调只处理点击红色未读数字的导航，不触发账号标签按钮。 */ () => handleUnreadJump(account.id)}
+                    className="mr-1 inline-flex h-11 min-w-11 items-center justify-center rounded-lg focus-visible:outline-2 focus-visible:outline-sky-500">
+                    <span aria-hidden="true" className={unreadBadgeClassName(unread)}>{unreadLabel}</span>
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
@@ -138,7 +172,9 @@ const Chat: React.FC<ChatProps> = ({ libraryImageChooser: LibraryChooser }) => {
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {filteredSessions.map(/* 当前回调处理集合中的单个元素。 */ session => (
-				<ConversationListItem key={session.chat_id} session={session} active={session.chat_id === activeChatID} formatClock={formatClock} onSelect={/* 当前回调切换当前聊天。 */ () => setActiveChatID(session.chat_id)} onDelete={/* 当前回调打开会话删除确认框且不触发选择按钮。 */ () => openDeleteDialog(session)} deleteDisabled={sending && session.chat_id === activeChatID} />
+                <div key={session.chat_id} ref={pendingUnreadJump?.accountID === activeAccountID && pendingUnreadJump.chatID === session.chat_id ? unreadJumpRowRef : undefined}>
+				  <ConversationListItem session={session} active={session.chat_id === activeChatID} formatClock={formatClock} onSelect={/* 当前回调切换当前聊天。 */ () => setActiveChatID(session.chat_id)} onDelete={/* 当前回调打开会话删除确认框且不触发选择按钮。 */ () => openDeleteDialog(session)} deleteDisabled={sending && session.chat_id === activeChatID} />
+                </div>
               ))}
               {filteredSessions.length === 0 && <div className="px-6 py-16 text-center text-sm text-slate-400">当前账号暂无匹配会话</div>}
               {hasMoreContacts && !search && !unreadOnly && <div className="flex justify-center p-4">

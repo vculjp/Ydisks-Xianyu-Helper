@@ -1,6 +1,6 @@
 import { expect,test } from 'vitest';
 import type { ChatMessage,ChatSession } from './api';
-import { collectChatReadReceipts,filterChatSessions,formatClock,isChatAbortError,isCurrentChatRequest,markOutgoingMessagesReadByIncoming,mergeLiveMessage,mergeOlderMessages,messageTime,unreadBadgeClassName,unreadBadgeLabel } from './state';
+import { collectChatReadReceipts,filterChatSessions,formatClock,isChatAbortError,isCurrentChatRequest,markOutgoingMessagesReadByIncoming,mergeLiveMessage,mergeOlderMessages,messageTime,newestUnreadChat,unreadBadgeClassName,unreadBadgeLabel } from './state';
 
 // sessionFixture 是覆盖搜索、未读筛选和联系人隔离的最小会话数据。
 const sessionFixture: ChatSession[] = [
@@ -32,6 +32,22 @@ test('Chat 会话筛选和历史消息合并保持账号内顺序',
     expect(filterChatSessions(sessionFixture, '张三', false)).toHaveLength(1);
     expect(filterChatSessions(sessionFixture, '', true)).toEqual([sessionFixture[0]]);
     expect(mergeOlderMessages([messageFixture], [{ ...messageFixture, id: 0, message_key: 'm0', content: '更早' }])).toHaveLength(2);
+  });
+
+test('点击账号未读数只定位该账号最新的未读会话，且没有未读时不选中其他会话',
+  // 未读导航测试覆盖列表非时间顺序、跨账号数据混入、已读会话和相同时间的稳定选择。
+  () => {
+    // sessions 模拟包含已读、新旧未读、另一个账号未读和同时间未读的联系人列表。
+    const sessions: ChatSession[] = [
+      { ...sessionFixture[0], chat_id: 'old', last_message_at: 10 },
+      { ...sessionFixture[0], chat_id: 'read', unread_count: 0, last_message_at: 100 },
+      { ...sessionFixture[0], chat_id: 'latest', last_message_at: 20 },
+      { ...sessionFixture[0], chat_id: 'same-time', last_message_at: 20 },
+      { ...sessionFixture[0], account_id: 'a2', chat_id: 'other-account', last_message_at: 999 },
+    ];
+    expect(newestUnreadChat(sessions, 'a1')?.chat_id).toBe('latest');
+    expect(newestUnreadChat(sessions, 'a3')).toBeUndefined();
+    expect(newestUnreadChat(sessions.map(/* session 生成全已读场景。 */ session => ({ ...session, unread_count: 0 })), 'a1')).toBeUndefined();
   });
 test('Chat 实时消息替换同键记录并拒绝过期请求',
   // 请求边界测试验证实时回执不会产生重复消息，切换会话后的旧请求不能写入。

@@ -4,7 +4,7 @@ import { emojiURL,renderXianyuText,xianyuEmojis } from '../../../chatEmojis';
 import type { AccountDetail,ChatMessage,ChatSession } from './api';
 import { confirmedOutgoingMessageFromError,deleteChatSession,getAccountDetails,getAccountRuntimeStatuses,getChatMessagePage,getChatSessionPage,markChatRead,sendChatImage,sendChatLibraryImage,sendChatMessage,uncertainOutgoingMessageFromError } from './api';
 import { publishChatUnreadStatus,subscribeToChatLiveEvents } from './liveEvents';
-import { collectChatReadReceipts,filterChatSessions,formatClock,isChatAbortError,isCurrentChatRequest,markOutgoingMessagesReadByIncoming,mergeChatSessions,mergeLiveMessage,mergeOlderMessages,messageTime } from './state';
+import { collectChatReadReceipts,filterChatSessions,formatClock,isChatAbortError,isCurrentChatRequest,markOutgoingMessagesReadByIncoming,mergeChatSessions,mergeLiveMessage,mergeOlderMessages,messageTime,newestUnreadChat } from './state';
 import type { ChatFeatureState,ChatLiveState,SessionsByAccount } from './types';
 import { libraryImageContentUrl,type LibraryImageChoice } from '../../../shared/ui/imageSource';
 
@@ -88,6 +88,8 @@ export type UseChatResult = ChatFeatureState & {
 	acceptOutgoingMessage: (message: ChatMessage, notice?: string) => void;
   /** 列出指定账号的未读总数。 */
   unreadForAccount: (accountID: string) => number;
+  /** 点击账号未读徽标后切换到该账号最新未读会话；无未读时不改变选择。 */
+  jumpToUnreadConversation: (accountID: string) => string | undefined;
   /** 表情资源导出，保持页面兼容入口。 */
   emojiURL: typeof emojiURL;
   /** 闲鱼表情列表导出，保持页面兼容入口。 */
@@ -600,6 +602,18 @@ export const useChat = (): UseChatResult => {
   // unreadForAccount unreadFor账号，负责当前功能中的对应处理。
   const unreadForAccount = useCallback(/* 当前回调处理集合中的单个元素。 */ (accountID: string) => (sessionsByAccount[accountID] || []).reduce(/* 当前回调处理集合中的单个元素。 */ (sum, session) => sum + session.unread_count, 0), [sessionsByAccount]);
 
+  /** 从已加载列表中定位账号最近的未读聊天，并解除会遮挡目标会话的搜索与筛选。 */
+  const jumpToUnreadConversation = useCallback(/* accountID 是用户点击红色未读数字所属的账号。 */ (accountID: string): string | undefined => {
+    // target 是当前账号内最后收到消息的未读会话，不增加平台请求。
+    const target = newestUnreadChat(sessionsByAccount[accountID] || [], accountID);
+    if (!target) return undefined;
+    setSearch('');
+    setUnreadOnly(false);
+    setActiveAccountID(accountID);
+    setActiveChatID(target.chat_id);
+    return target.chat_id;
+  }, [sessionsByAccount]);
+
   /** 加载当前账号下一页联系人。 */
   const loadMoreContacts = useCallback(/* 当前回调封装可复用的交互处理逻辑。 */ async (): Promise<void> => {
     if (!activeAccountID || sessionReloadingRef.current || deletingAccountIDRef.current === activeAccountID || contactsLoading || !(platformHasMoreContacts[activeAccountID] || storedHasMoreContacts[activeAccountID])) return;
@@ -891,7 +905,7 @@ export const useChat = (): UseChatResult => {
   return {
     accounts, activeAccountID, activeSessions, selectedSession, activeAccount, messages, search, unreadOnly, draft, loading, messagesLoading, olderLoading, hasOlder, contactsLoading, hasMoreContacts: platformHasMoreContacts[activeAccountID] === true || storedHasMoreContacts[activeAccountID] === true, emojiOpen, sending, error, sendNotice, liveState, pendingImage,
     activeChatID, filteredSessions, scrollRef, imageInputRef, setActiveAccountID, setActiveChatID, setSearch, setUnreadOnly, setDraft, setEmojiOpen,
-		reloadSessions, loadMoreContacts, loadOlderMessages, handleMessageScroll, handleSend, handleQuickReply, handleQuickReplyImage, handleLibraryImage, handleImage, handlePastedImages, confirmSendImage, closeImagePreview, retrySend, retryAvailable: Boolean(retryText || retryImage), deletingChatID, deleteError, deleteConversation, clearDeleteError, acceptOutgoingMessage, unreadForAccount,
+		reloadSessions, loadMoreContacts, loadOlderMessages, handleMessageScroll, handleSend, handleQuickReply, handleQuickReplyImage, handleLibraryImage, handleImage, handlePastedImages, confirmSendImage, closeImagePreview, retrySend, retryAvailable: Boolean(retryText || retryImage), deletingChatID, deleteError, deleteConversation, clearDeleteError, acceptOutgoingMessage, unreadForAccount, jumpToUnreadConversation,
     emojiURL, xianyuEmojis, renderXianyuText, formatClock, messageTime,
   };
 };

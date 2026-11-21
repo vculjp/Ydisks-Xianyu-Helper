@@ -67,6 +67,11 @@ describe('useSettings', /* 当前回调处理系统设置、模型和凭据请�
     );
     expect(updateSettingsMock).toHaveBeenCalledWith(expect.objectContaining({ ai_api_url: settingsFixture.ai_api_url }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(window.alert).toHaveBeenCalledWith('系统配置已保存');
+    expect(hook.result.current.settings?.ai_api_key).toBe('');
+    expect(hook.result.current.settings?.ai_api_key_configured).toBe(true);
+    await act(/* saveAgain 确保再次保存不会把已脱敏的空密钥传给服务端。 */ async () => hook.result.current.handleSave());
+    expect(updateSettingsMock).toHaveBeenCalledTimes(2);
+    expect(updateSettingsMock.mock.calls[1][0]).not.toHaveProperty('ai_api_key');
   });
 
   test('模型发现失败时清空列表并展示错误', /* 当前回调验证模型接口错误路径。 */ async () => {

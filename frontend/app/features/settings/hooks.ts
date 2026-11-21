@@ -278,8 +278,18 @@ export const useSettings = (): UseSettingsResult => {
     setSaving(true);
     setSaveError('');
     try {
-      await updateSystemSettings(buildPersistableSettings(settings), { signal: controller.signal });
+      // result 由后端确认实际持久化是否成功，不能只以 HTTP 请求返回作为保存成功依据。
+      const result = await updateSystemSettings(buildPersistableSettings(settings), { signal: controller.signal });
       if (!isCurrentSettingsRequest(requestSequence.current, sequence, controller.signal)) return;
+      if (!result.success) throw new Error(result.message || '保存配置失败');
+      // 保存后立刻擦除表单中的明文密钥，仅保留已配置标记。下次进入由数据库恢复设置，空输入不再清除它。
+      setSettings(/* savedSettings 回显保存状态而不让密钥明文停留在页面内存。 */ previous => previous ? {
+        ...previous,
+        ai_api_key: previous.ai_api_key === settings.ai_api_key ? '' : previous.ai_api_key,
+        ai_api_key_configured: previous.ai_api_key_configured === true || Boolean(settings.ai_api_key?.trim()),
+        'captcha.remote_secret_key': previous['captcha.remote_secret_key'] === settings['captcha.remote_secret_key'] ? '' : previous['captcha.remote_secret_key'],
+        'captcha.remote_secret_key_configured': previous['captcha.remote_secret_key_configured'] === true || Boolean(settings['captcha.remote_secret_key']?.trim()),
+      } : previous);
       window.alert('系统配置已保存');
     } catch (/* error 保存系统设置提交请求的失败原因；过期响应不会覆盖当前表单。 */ error) {
       if (!isCurrentSettingsRequest(requestSequence.current, sequence, controller.signal) || isSettingsAbortError(error)) return;

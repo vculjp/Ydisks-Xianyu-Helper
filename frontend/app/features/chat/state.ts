@@ -43,6 +43,15 @@ export const filterChatSessions = (sessions: ChatSession[], search: string, unre
   });
 };
 
+/** 从指定账号已加载的会话中选出最近收到消息的未读会话；相同时间保留原列表顺序，绝不跳往其他账号。 */
+export const newestUnreadChat = (sessions: ChatSession[], accountID: string): ChatSession | undefined => {
+  // candidates 只包含该账号确有未读数的会话，避免将已读聊天错误打开。
+  const candidates = sessions.filter(/* session 是当前检查的账号内聊天记录。 */ session => session.account_id === accountID && session.unread_count > 0);
+  return candidates.reduce<ChatSession | undefined>(/* latest、session 分别是当前最近未读会话和待比较会话。 */ (latest, session) => (
+    !latest || session.last_message_at > latest.last_message_at ? session : latest
+  ), undefined);
+};
+
 /** 合并历史消息并按消息键去重。 */
 export const mergeOlderMessages = (current: ChatMessage[], older: ChatMessage[]): ChatMessage[] => {
   // keys keys，负责当前功能中的对应处理。

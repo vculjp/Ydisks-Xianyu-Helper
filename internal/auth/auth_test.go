@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"xianyu-go/internal/db"
 )
@@ -35,6 +36,60 @@ func newAuth(t *testing.T) (*Service, func()) {
 
 // testLogger 封装testLogger业务协调。
 func testLogger() *slog.Logger { return slog.Default() }
+
+// TestPersistentLoginTTL 确认登录 Cookie 与数据库会话的长期有效期一致，不再隔天要求登录。
+func TestPersistentLoginTTL(t *testing.T) {
+	if CookieMaxAge != int(db.SessionTTL.Seconds()) || db.SessionTTL < 30*24*time.Hour {
+		t.Fatalf("cookie=%d session=%s; 应至少允许 30 天持久登录并保持期限一致", CookieMaxAge, db.SessionTTL)
+	}
+}
+
+// TestPersistentSessionRenewsOnActivity 验证旧会话在临期访问时续期且仍使用 HttpOnly Cookie。
+func TestPersistentSessionRenewsOnActivity(t *testing.T) {
+	svc, cleanup := newAuth(t)
+	defer cleanup()
+	ctx := context.Background()
+	sid, _, err := svc.Login(ctx, "admin", "pw")
+	if err != nil || sid == "" {
+		t.Fatalf("无法建立测试会话: %v", err)
+	}
+	nearExpiry := time.Now().Add(6 * 24 * time.Hour).Unix()
+	if _, err := svc.Store.DB.ExecContext(ctx, `UPDATE sessions SET expires_at=? WHERE session_id=?`, nearExpiry, sid); err != nil {
+		t.Fatal(err)
+	}
+	protected := svc.Middleware(RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/session", nil)
+	req.AddCookie(&http.Cookie{Name: CookieName, Value: sid})
+	rec := httptest.NewRecorder()
+	protected.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("自动续期后的状态码: %d", rec.Code)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value != sid || !cookies[0].HttpOnly || cookies[0].MaxAge != CookieMaxAge {
+		t.Fatalf("续期未正确刷新安全 Cookie: %+v", cookies)
+	}
+	updated, err := svc.Store.Sessions.Get(ctx, sid)
+	if err != nil || updated.ExpiresAt < time.Now().Add(29*24*time.Hour).Unix() {
+		t.Fatalf("会话续期未持久化: session=%+v err=%v", updated, err)
+	}
+	// 刷新后的会话不应在每次访问时再次改写 Cookie。
+	rec = httptest.NewRecorder()
+	protected.ServeHTTP(rec, req)
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatal("非临期会话不应重复续期")
+	}
+	if err := svc.Store.Sessions.Delete(ctx, sid); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	protected.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("注销会话不得被自动续期: status=%d cookies=%v", rec.Code, rec.Result().Cookies())
+	}
+}
 
 // TestLoginAndMiddleware 封装Test登录AndMiddleware业务协调。
 func TestLoginAndMiddleware(t *testing.T) {

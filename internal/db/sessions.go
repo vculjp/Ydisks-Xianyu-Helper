@@ -11,8 +11,11 @@ import (
 	"encoding/base64"
 )
 
-// SessionTTL 是 24 小时的会话有效期。
-const SessionTTL = 24 * time.Hour
+// SessionTTL 是长期登录的最长闲置期；活跃会话仅在临近失效时续期。
+const SessionTTL = 30 * 24 * time.Hour
+
+// SessionRenewWindow 在最后一周续期，避免每次请求都更新数据库。
+const SessionRenewWindow = 7 * 24 * time.Hour
 
 // Sessions 会话表操作（HttpOnly Cookie 会话）。
 type Sessions struct {
@@ -145,6 +148,22 @@ func (s *Sessions) Get(ctx context.Context, sessionID string) (*Session, error) 
 		return nil, ErrNotFound
 	}
 	return &sess, nil
+}
+
+// RenewIfExpiring 只为已验证且即将过期的会话续期，不会复活已注销或已过期的会话。
+func (s *Sessions) RenewIfExpiring(ctx context.Context, sessionID string, expiresAt int64) (bool, error) {
+	now := time.Now().Unix()
+	if sessionID == "" || expiresAt <= now || expiresAt > now+int64(SessionRenewWindow.Seconds()) {
+		return false, nil
+	}
+	result, err := s.DB.ExecContext(ctx,
+		`UPDATE sessions SET expires_at=? WHERE session_id=? AND expires_at=? AND expires_at>?`,
+		now+int64(SessionTTL.Seconds()), sessionID, expiresAt, now)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count > 0, err
 }
 
 // Delete 删除会话（登出）。

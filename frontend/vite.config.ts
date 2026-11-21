@@ -2,6 +2,9 @@ import path from 'path';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
+// backendProxyTarget 默认对应 go run 的标准 59188 端口；可显式切到 start-local.cmd 使用的 48188。
+const backendProxyTarget = process.env.XIANYU_DEV_API_TARGET || 'http://localhost:59188';
+
 export default defineConfig({
   base: '/static/',
   server: {
@@ -10,12 +13,12 @@ export default defineConfig({
     proxy: {
       // 代理API请求到后端
       '/api': {
-        target: 'http://localhost:59188',
+        target: backendProxyTarget,
         changeOrigin: true,
 		ws: true,
       },
       '/health': {
-        target: 'http://localhost:59188',
+        target: backendProxyTarget,
         changeOrigin: true,
       },
     },
@@ -121,6 +124,10 @@ export default defineConfig({
             modulePath.includes('/app/features/items/amapLocation.')
           ) {
             return 'item-location-picker';
+          }
+          // 商品管理的编辑、上下架与发布操作单独打包，避免组合功能挤占 ItemList 页面分片预算。
+          if (modulePath.includes('/app/features/items/itemActions.')) {
+            return 'item-actions';
           }
           if (!modulePath.includes('/node_modules/')) {
             return undefined;

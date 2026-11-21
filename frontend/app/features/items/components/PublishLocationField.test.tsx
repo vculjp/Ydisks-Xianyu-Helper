@@ -21,7 +21,7 @@ const stubGeolocation = (success: boolean, code = 1): void => {
 
 describe('PublishLocationField', /* 定位、手动选点、候选改选与失败。 */ () => {
   beforeEach(/* 重置请求替身。 */ () => vi.clearAllMocks());
-  afterEach(/* 卸载渲染树。 */ () => cleanup());
+  afterEach(/* 卸载渲染树并清理浏览器发货地记忆。 */ () => { cleanup(); window.localStorage.clear(); });
 
   test('定位成功默认选中第一项并可改选；手动选点回传完整地点；可清除', /* 成功路径。 */ async () => {
     stubGeolocation(true);

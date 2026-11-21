@@ -29,6 +29,12 @@ Add Product creates a local association for a product that already exists on Xia
 
 Single-specification products use one total inventory value. Multi-specification inventory is the sum of combination inventory. After publishing, associate paid-delivery, review-gift, or review-reminder rules in Automation.
 
+### Remembered shipping origin
+
+- Single listing, bulk listing, and library template publishing automatically reuse the last shipping origin selected in the same browser. You can change or clear it at any time.
+- In the manual location picker, selecting a province, city, and district is enough when AMap supplies a valid district-center coordinate. Searching for a detailed POI is optional; selecting one preserves its details.
+- Virtual listings may omit the shipping origin. The preference is stored only in the current browser, contains no account credentials, and does not sync between browsers. Xianyu ultimately decides whether a district-only address is accepted for publication.
+
 ### Postage mode
 
 A single listing offers four modes: **free shipping**, **by distance**, **fixed postage** (enter an amount greater than 0) and **no shipping needed** (typical for virtual goods). Product templates and bulk listing support the same modes; see [Bulk Listing](Bulk-Listing) for the table values.

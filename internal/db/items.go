@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 )
@@ -142,6 +143,7 @@ func (i *Items) UpsertBasicTx(ctx context.Context, tx *sql.Tx, r *ItemInfoRow) e
 // 远端列表只提供商品基础信息，因此保留本地的描述和多数量发货设置；基础字段
 // （标题、分类、价格、详情）由远端非空值覆盖，多规格标记由本次远端探测结果覆盖。整个 reconcile
 // 在一个事务内完成，只有在全部远端商品写入成功后，才会逻辑删除本次全集中不存在的本地商品及其商品级自动化规则。
+// 已明确由本助手下架的商品不在平台在售列表中，但仍保留其本地记录和商品级发货配置，供重新上架后恢复使用。
 // SyncFromRemote 同步FromRemote。
 func (i *Items) SyncFromRemote(ctx context.Context, cookieID string, rows []ItemInfoRow) (ItemSyncResult, error) {
 	cookieID = strings.TrimSpace(cookieID)
@@ -190,6 +192,34 @@ func (i *Items) SyncFromRemote(ctx context.Context, cookieID string, rows []Item
 			boolToInt(validRows[index].IsMultiSpec), cookieID, validRows[index].ItemID); err != nil {
 			return rollback(err)
 		}
+	}
+	// protectedRows 保存本地明确下架的商品，使平台在售列表缺失时不会误删其发货规则。
+	protectedRows, protectedErr := tx.QueryContext(ctx, `SELECT item_id, COALESCE(item_detail,'') FROM item_info WHERE cookie_id=? AND deleted_at IS NULL`, cookieID)
+	if protectedErr != nil {
+		return rollback(protectedErr)
+	}
+	// protectedRow 遍历当前账号的本地商品，只读取非敏感货架状态字段。
+	for protectedRows.Next() {
+		// itemID 和 detailJSON 分别是原有商品 ID 及非敏感扩展字段。
+		var itemID, detailJSON string
+		// err 是当前本地商品扩展信息读取失败的原因。
+		if err := protectedRows.Scan(&itemID, &detailJSON); err != nil {
+			_ = protectedRows.Close()
+			return rollback(err)
+		}
+		// detail 是本地商品扩展 JSON；解析失败意味着无法确认下架状态，维持原同步行为。
+		var detail struct {
+			ShelfState string `json:"shelf_state"`
+		}
+		if json.Unmarshal([]byte(detailJSON), &detail) == nil && detail.ShelfState == "off" {
+			remoteIDs[itemID] = struct{}{}
+		}
+	}
+	// scanErr 是本地状态枚举失败原因，查询须在执行后续更新前关闭。
+	scanErr := protectedRows.Err()
+	_ = protectedRows.Close()
+	if scanErr != nil {
+		return rollback(scanErr)
 	}
 
 	// args 用于本次流程后续判断的args

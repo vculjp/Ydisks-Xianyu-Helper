@@ -1,15 +1,16 @@
 // @vitest-environment jsdom
-import { act, renderHook } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { AMapDistrict } from './amapLocation';
 import { useManualLocation } from './manualLocation';
+import { ManualLocationPicker } from './components/ManualLocationPicker';
 
 // province 是手动选择 Hook 使用的省级高德样本。
 const province: AMapDistrict = { adcode: 'p1', name: '浙江省', districtList: [{ adcode: 'c1', name: '杭州市' }] };
 // city 是手动选择 Hook 使用的城市级高德样本。
 const city: AMapDistrict = { adcode: 'c1', name: '杭州市', districtList: [{ adcode: 'd1', name: '西湖区' }] };
 // district 是手动选择 Hook 使用的区县级高德样本。
-const district: AMapDistrict = { adcode: 'd1', name: '西湖区' };
+const district: AMapDistrict = { adcode: 'd1', name: '西湖区', center: { lng: 120.12, lat: 30.26 } };
 // location 是手动选择 Hook 使用的完整高德 POI 样本。
 const location = { area: '西湖区', city: '杭州市', division_id: 'd1', longitude: 120.12, latitude: 30.26, poi_id: 'poi-1', poi_name: '西湖文化广场', province: '浙江省' };
 
@@ -50,7 +51,24 @@ describe('useManualLocation', /* manualLocationHookDescribeCallback 验证手动
   });
 
   afterEach(/* manualLocationHookAfterEach 清理高德全局替身。 */ () => {
+    cleanup();
     Reflect.deleteProperty(window, 'AMap');
+  });
+
+  test('手动发货地只选择省市区即可确认，不要求搜索和勾选详细地点', /* 测试真实弹窗的地区确认操作。 */ async () => {
+    // onConfirm 用于记录用户选择的区县中心，不会发出真实平台发布请求。
+    const onConfirm = vi.fn();
+    render(<ManualLocationPicker open={true} onClose={vi.fn()} onConfirm={onConfirm} />);
+    // selects 是省份、城市、区县三级真实选择框。
+    const selects = screen.getAllByRole('combobox');
+    await waitFor(/* 等待省级行政区加载。 */ () => expect(screen.getByRole('option', { name: '浙江省' })).toBeTruthy());
+    fireEvent.change(selects[0], { target: { value: 'p1' } });
+    await waitFor(/* 等待城市级行政区加载。 */ () => expect(screen.getByRole('option', { name: '杭州市' })).toBeTruthy());
+    fireEvent.change(selects[1], { target: { value: 'c1' } });
+    await waitFor(/* 等待区县级行政区加载。 */ () => expect(screen.getByRole('option', { name: '西湖区' })).toBeTruthy());
+    fireEvent.change(selects[2], { target: { value: 'd1' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认发货地' }));
+    expect(onConfirm).toHaveBeenCalledWith({ ...location, poi_id: '', poi_name: '' });
   });
 
   test('级联选择区县并搜索后可确认高德 POI', /* manualLocationSuccessTestCallback 验证手动地点的完整用户路径。 */ async () => {
@@ -64,6 +82,8 @@ describe('useManualLocation', /* manualLocationHookDescribeCallback 验证手动
     act(/* citySelectionAction 选择高德城市并触发区县查询。 */ () => hook.result.current.selectCity(hook.result.current.cities[0]));
     await act(/* districtFlushAction 等待区县查询完成。 */ async () => Promise.resolve());
     act(/* districtSelectionAction 选择高德区县并准备 POI 搜索。 */ () => hook.result.current.selectDistrict(hook.result.current.districts[0]));
+    // 只选择区县时已有完整有效的发货地，无需执行后续 POI 搜索。
+    expect(hook.result.current.selectedLocation).toEqual({ ...location, poi_id: '', poi_name: '' });
     act(/* keywordInputAction 写入具体地点关键词。 */ () => hook.result.current.setKeyword('文化广场'));
     await act(/* poiSearchAction 等待区县内 POI 搜索完成。 */ async () => hook.result.current.searchLocations());
     expect(hook.result.current.locations).toHaveLength(1);

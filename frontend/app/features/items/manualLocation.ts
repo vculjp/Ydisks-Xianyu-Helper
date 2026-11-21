@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PublishLocation } from './models';
-import { getPublishDistricts, searchPublishLocationsByKeyword, type AMapDistrict } from './amapLocation';
+import { districtToPublishLocation, getPublishDistricts, searchPublishLocationsByKeyword, type AMapDistrict } from './amapLocation';
 
 // ManualLocationState 描述高德手动选择发货地的级联数据、搜索结果和异步状态。
 export interface ManualLocationState {
@@ -22,7 +22,7 @@ export interface ManualLocationState {
   setKeyword: (keyword: string) => void;
   // locations 保存当前区县内高德 PlaceSearch 返回的有效 POI。
   locations: PublishLocation[];
-  // selectedLocation 保存用户最终确认的发货地 POI。
+  // selectedLocation 保存用户选择的 POI 或已选区县的高德中心位置。
   selectedLocation: PublishLocation | null;
   // districtLoading 表示省市区级联请求是否正在执行。
   districtLoading: boolean;
@@ -184,7 +184,7 @@ export const useManualLocation = (open: boolean): ManualLocationState => {
     void loadDistrictChildren(city, 'districts');
   }, [loadDistrictChildren]);
 
-  // selectDistrict 写入区县并要求用户重新搜索具体地点。
+  // selectDistrict 选定区县后即可使用其真实中心坐标确认发货地，POI 搜索为选填。
   const selectDistrict = useCallback(/* selectDistrictCallback 处理区县选择并重置 POI 候选。 */ (district: AMapDistrict) => {
     cancelRequest();
     setSelectedDistrict(district);
@@ -236,5 +236,7 @@ export const useManualLocation = (open: boolean): ManualLocationState => {
     setError('');
   }, []);
 
-  return { provinces, cities, districts, selectedProvince, selectedCity, selectedDistrict, keyword, setKeyword, locations, selectedLocation, districtLoading, searchLoading, error, selectProvince, selectCity, selectDistrict, searchLocations, selectLocation };
+  // confirmedLocation 优先使用明确选中的 POI；没有选具体地点时使用高德区县中心。
+  const confirmedLocation = selectedLocation || (selectedProvince && selectedCity && selectedDistrict ? districtToPublishLocation(selectedProvince, selectedCity, selectedDistrict) : null);
+  return { provinces, cities, districts, selectedProvince, selectedCity, selectedDistrict, keyword, setKeyword, locations, selectedLocation: confirmedLocation, districtLoading, searchLoading, error, selectProvince, selectCity, selectDistrict, searchLocations, selectLocation };
 };

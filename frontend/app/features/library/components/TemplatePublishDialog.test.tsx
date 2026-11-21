@@ -13,7 +13,7 @@ const template = { id: 1, name: '模板A' } as ProductTemplate;
 const accounts = [{ id: 'a1', label: '店铺1' }, { id: 'a2', label: '店铺2' }];
 
 describe('TemplatePublishDialog', /* 先预检再确认的发布流程。 */ () => {
-  beforeEach(/* 重置请求替身。 */ () => { vi.clearAllMocks(); });
+  beforeEach(/* 重置请求替身与发货地记忆，避免其他测试的浏览器缓存影响未选址场景。 */ () => { vi.clearAllMocks(); window.localStorage.clear(); });
   afterEach(/* 卸载渲染树。 */ () => cleanup());
 
   test('未生成预检前不能确认；预检后展示行并可启动批次', /* 成功路径。 */ async () => {

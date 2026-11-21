@@ -82,6 +82,8 @@ type Services struct {
 	itemCatalog *itemapp.CatalogService
 	// itemCatalogMutation 是商品创建、更新、删除和交付开关应用服务。
 	itemCatalogMutation *itemapp.CatalogMutationService
+	// itemRemoteManage 是已有商品的平台编辑、上架和下架应用服务。
+	itemRemoteManage *itemapp.RemoteItemService
 	// itemAISettings 是商品级 AI 配置应用服务。
 	itemAISettings *itemapp.ItemAISettingsService
 	// accountLogin 是账号登录应用服务。
@@ -343,6 +345,7 @@ type TransportPorts struct {
 	ItemSync                    *itemapp.SyncService
 	ItemCatalog                 *itemapp.CatalogService
 	ItemCatalogMutation         *itemapp.CatalogMutationService
+	ItemRemoteManage            *itemapp.RemoteItemService
 	ItemAISettings              *itemapp.ItemAISettingsService
 	AccountLogin                AccountLogin
 	QRLogin                     adapter.QRLoginService
@@ -377,9 +380,9 @@ type TransportPorts struct {
 	Library *libraryapp.Service
 	// Collector 是全站商品采集应用服务。
 	Collector *collectorapp.Service
-	Keywords *keywordsapp.Service
-	Settings *settingsapp.Service
-	Admin    *adminapp.Service
+	Keywords  *keywordsapp.Service
+	Settings  *settingsapp.Service
+	Admin     *adminapp.Service
 	// RuntimeLogs 是管理员运行日志查询用例。
 	RuntimeLogs *logsapp.Service
 }
@@ -394,7 +397,7 @@ func (services *Services) TransportPorts() TransportPorts {
 		ItemBatchPreview: services.itemBatchPreview, ItemBatchManagement: services.itemBatchManagement,
 		ItemCategoryRecommendation: services.itemCategoryRecommendation, ItemBatchPreviewPersistence: services.itemBatchPreviewPersistence,
 		ItemBatchLocalPublish: services.itemBatchLocalPublish, ItemSync: services.itemSync, ItemCatalog: services.itemCatalog,
-		ItemCatalogMutation: services.itemCatalogMutation, ItemAISettings: services.itemAISettings, AccountLogin: services.accountLogin, QRLogin: services.qrLogin,
+		ItemCatalogMutation: services.itemCatalogMutation, ItemRemoteManage: services.itemRemoteManage, ItemAISettings: services.itemAISettings, AccountLogin: services.accountLogin, QRLogin: services.qrLogin,
 		PlatformCredentials: services.platformCredentials, Authentication: services.authentication, LoginAudit: services.loginAudit,
 		PasswordLogin: services.passwordLogin, AccountDelete: services.accountDelete, AccountProfile: services.accountProfile,
 		AccountLongLogin: services.accountLongLogin, AccountSettings: services.accountSettings, AccountRuntime: services.accountRuntime,
@@ -546,6 +549,7 @@ func New(dependencies Dependencies) (*Services, error) {
 		})),
 		itemCatalog:            catalogServices.catalog,
 		itemCatalogMutation:    catalogServices.mutation,
+		itemRemoteManage:       catalogServices.remoteManage,
 		itemAISettings:         catalogServices.aiSettings,
 		accountLogin:           &accountLoginService{cookieWriterFactory: cookieWriterFactory, cookieUpdaterFactory: cookieUpdaterFactory, sessionPort: accountRepository, createApplication: accountLoginCreate, qrApplication: accountQRLogin, qrSessions: qrSessionRegistry},
 		loginAudit:             loginAudit,

@@ -10,6 +10,7 @@ retryFailedItemPublishBatch,
 startItemPublishBatch,
 } from './api';
 import { canRetryBatch,categoryCandidatesOf,toBatchFallbackCategory,canStartBatch,isBatchInProgress,isCurrentBatchRequest,selectActivePublishBatch } from './batchState';
+import { readLastPublishLocation } from '../../../shared/browser/publishLocationPreference';
 import type {
 BatchFallbackCategory,
 BatchPhase,
@@ -47,7 +48,7 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
   // batchLocations 保存批量任务可选的发货地列表。
   const [batchLocations, setBatchLocations] = useState<NonNullable<ItemPublishBatchState['batchLocations']>>([]);
   // batchLocation 保存批量任务当前选中的发货地。
-  const [batchLocation, setBatchLocation] = useState<ItemPublishBatchState['batchLocation']>(null);
+  const [batchLocation, setBatchLocation] = useState<ItemPublishBatchState['batchLocation']>(readLastPublishLocation);
   // batchPublishIntervalSeconds 保存当前批量任务的最终发布最小间隔，默认五秒。
   const [batchPublishIntervalSeconds, setBatchPublishIntervalSeconds] = useState(5);
   // batchLoading 表示批量任务请求是否正在执行。
@@ -99,7 +100,8 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
     setBatchCategoryKeyword('');
     setBatchFallbackCategory({ catId: '', catName: '', channelCatId: '', tbCatId: '' });
     setBatchLocations([]);
-    setBatchLocation(null);
+    // 本次批量发布默认继承上次实际选中的发货地，不清空浏览器偏好。
+    setBatchLocation(readLastPublishLocation());
     setBatchPublishIntervalSeconds(5);
     setShowBatchModal(true);
     setBatchLoading(true);

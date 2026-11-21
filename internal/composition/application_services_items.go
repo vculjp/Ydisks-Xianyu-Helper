@@ -92,6 +92,8 @@ type itemCatalogServices struct {
 	catalog *itemapp.CatalogService
 	// mutation 提供商品写入服务。
 	mutation *itemapp.CatalogMutationService
+	// remoteManage 提供确认后同步编辑、上架和下架的单商品管理服务。
+	remoteManage *itemapp.RemoteItemService
 	// aiSettings 提供商品级 AI 配置服务。
 	aiSettings *itemapp.ItemAISettingsService
 	// categoryRecommendation 提供平台类目推荐服务。
@@ -125,6 +127,11 @@ func buildItemCatalogServices(dependencies Dependencies, sessionRecovery adapter
 	itemPublishPort := dependencies.ItemDependencies.NewItemPublishPort(dependencies.MTopClient, dependencies.Logger, dependencies.UpdateRunningCookie, func(ctx context.Context, cookieID string, err error) bool {
 		return sessionRecovery != nil && sessionRecovery(ctx, cookieID, err)
 	})
+	// itemRemoteManage 为现有商品复用受控凭证的平台发布适配器，并在成功后局部更新商品目录。
+	itemRemoteManage, itemRemoteManageErr := itemapp.NewRemoteItemService(itemCatalogRepository, itemPublishPort)
+	if itemRemoteManageErr != nil {
+		return itemCatalogServices{}, fmt.Errorf("构造商品远端管理服务失败: %w", itemRemoteManageErr)
+	}
 	// itemCategoryRecommendation 复用商品发布端口承载类目推荐和响应会话写回。
 	itemCategoryRecommendation, itemCategoryRecommendationErr := itemapp.NewCategoryRecommendationService(itemPublishPort)
 	if itemCategoryRecommendationErr != nil {
@@ -143,5 +150,5 @@ func buildItemCatalogServices(dependencies Dependencies, sessionRecovery adapter
 	if itemSinglePublishErr != nil {
 		return itemCatalogServices{}, fmt.Errorf("构造单商品发布服务失败: %w", itemSinglePublishErr)
 	}
-	return itemCatalogServices{catalog: itemCatalog, mutation: itemCatalogMutation, aiSettings: itemAISettings, categoryRecommendation: itemCategoryRecommendation, previewPersistence: itemBatchPreviewPersistence, singlePublish: itemSinglePublish}, nil
+	return itemCatalogServices{catalog: itemCatalog, mutation: itemCatalogMutation, remoteManage: itemRemoteManage, aiSettings: itemAISettings, categoryRecommendation: itemCategoryRecommendation, previewPersistence: itemBatchPreviewPersistence, singlePublish: itemSinglePublish}, nil
 }

@@ -38,6 +38,8 @@ export interface AMapDistrict {
   name?: string;
 // level 是高德返回的行政区层级，用于级联选择和诊断。
   level?: string;
+// center 是高德返回的行政区中心，可能是 LngLat 对象或经纬度文本；不从名称推测坐标。
+  center?: AMapLocationValue | { /** getLng 读取高德中心点经度。 */ getLng(): number; /** getLat 读取高德中心点纬度。 */ getLat(): number } | string;
 // districtList 是当前行政区的直接下级节点，由高德按需返回。
   districtList?: AMapDistrict[];
 }
@@ -160,6 +162,40 @@ const loadAMap = (): Promise<AMapAPI> => {
 }; /* loadAMap 表示loadAMap。 */
 
 const validCoordinate = (value: number): boolean => Number.isFinite(value) && value !== 0; /* validCoordinate 表示validCoordinate。 */
+
+// districtToPublishLocation 使用高德区县中心构造没有 POI 的发货地；中心缺失时不伪造坐标。
+export const districtToPublishLocation = (province: AMapDistrict, city: AMapDistrict, district: AMapDistrict): PublishLocation | null => {
+  // center 是高德 DistrictSearch 给出的坐标对象或经纬度字符串。
+  const center = district.center;
+  if (!center) return null;
+  // longitude、latitude 是高德行政区中心坐标，兼容 JS API 的 LngLat 和普通对象。
+  // longitude 是按地图返回类型读取的区县中心经度。
+  let longitude: number;
+  // latitude 是按地图返回类型读取的区县中心纬度。
+  let latitude: number;
+  if (typeof center === 'string') {
+    // parts 保留高德返回的逗号分隔经纬度，不自动补充缺失字段。
+    const parts = center.split(',');
+    if (parts.length !== 2 || !parts.every(/* 验证经纬度均为真实数值字符串。 */ part => part.trim() !== '')) return null;
+    [longitude, latitude] = parts.map(/* 将高德字符串坐标转换为数值。 */ part => Number(part));
+  } else if ('getLng' in center && typeof center.getLng === 'function') {
+    longitude = center.getLng();
+    latitude = center.getLat();
+  } else if ('lng' in center && 'lat' in center) {
+    longitude = Number(center.lng);
+    latitude = Number(center.lat);
+  } else {
+    return null;
+  }
+  if (!validCoordinate(longitude) || !validCoordinate(latitude) || longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) return null;
+  // location 只包含区县编码与真实中心坐标；不把区县名伪造为 POI 名称或 ID。
+  const location: PublishLocation = {
+    province: String(province.name || '').trim(), city: String(city.name || '').trim(),
+    area: String(district.name || '').trim(), division_id: String(district.adcode || '').trim(),
+    longitude, latitude, poi_id: '', poi_name: '',
+  };
+  return location.province && location.city && location.area && location.division_id ? location : null;
+};
 
 // 字段映射与闲鱼网页版发布页一致：adcode → divisionId，name → poi，pname/cityname/adname → 行政区。
 export const amapPOIToPublishLocation = (poi: AMapPOI): PublishLocation | null => {

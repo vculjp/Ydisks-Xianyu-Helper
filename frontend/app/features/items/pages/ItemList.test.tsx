@@ -42,7 +42,7 @@ vi.mock('../itemActions', /* itemActionsMockFactory 提供关闭状态的商品�
     publishLocation: null, setPublishLocation: vi.fn(), publishCategoryKeyword: '', setPublishCategoryKeyword: vi.fn(), publishCategoryLoading: false,
     publishCategory: null, setPublishCategory: vi.fn(), selectedItem: null, editForm: {}, setEditForm: vi.fn(), addForm: {}, setAddForm: vi.fn(),
     publishForm: { cookie_id: '', title: '', description: '', price: '', original_price: '', quantity: '1', postage_mode: 'free', postage: '', images: [], specs: [], skuRows: [] },
-    setPublishForm: vi.fn(), publishImagePreviews: [], handleSync: vi.fn(), handleEdit: vi.fn(), handleSaveEdit: vi.fn(), handleDelete: vi.fn(),
+    setPublishForm: vi.fn(), publishImagePreviews: [], handleSync: vi.fn(), handleEdit: vi.fn(), handleSaveEdit: vi.fn(), handleSaveRemoteEdit: vi.fn(), remoteItemBusy: null, handleSetShelf: vi.fn(), handleDelete: vi.fn(),
     handleAddItem: vi.fn(), handlePublishItem: vi.fn(), handleRecommendPublishCategory: vi.fn(), downloadPublishTemplate: vi.fn(), openAddModal: vi.fn(),
     openPublishModal: vi.fn(), locateForPublish: vi.fn(),
   }),
@@ -60,6 +60,7 @@ const itemFixture: Item = { id: 'item-1', cookie_id: 'account-1', item_id: 'item
 describe('ItemList 商品级 AI 入口', /* itemListAISuite 验证列表摘要、按需读取和保存后局部更新。 */ () => {
   beforeEach(/* itemListMockReset 恢复商品列表和 AI 配置默认响应。 */ () => {
     vi.clearAllMocks();
+    window.localStorage.removeItem('ydisks.items.selected_account');
     itemListMocks.getAccountDetails.mockResolvedValue([{ id: 'account-1', enabled: true, auto_confirm: false, remark: '测试账号' }]);
     itemListMocks.getItems.mockResolvedValue([itemFixture]);
     itemListMocks.getShippingRules.mockResolvedValue([]);
@@ -69,6 +70,46 @@ describe('ItemList 商品级 AI 入口', /* itemListAISuite 验证列表摘要�
   });
 
   afterEach(/* itemListCleanup 清理页面 DOM。 */ () => cleanup());
+
+  test('商品管理只保留一个账号选择且能够记住上次选择', /* singleAccountPickerCase 验证单一入口与刷新恢复。 */ async () => {
+    render(<ItemList onConfigureDelivery={vi.fn()} />);
+    await waitFor(/* waitAccountPicker 等待账号下拉框加载。 */ () => expect(screen.getByRole('combobox', { name: '当前账号' })).toBeTruthy());
+    expect(screen.queryByRole('combobox', { name: '按账号筛选商品列表' })).toBeNull();
+    expect(screen.getByRole('button', { name: '同步商品' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: '发布商品' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.change(screen.getByRole('combobox', { name: '当前账号' }), { target: { value: 'account-1' } });
+    await waitFor(/* waitPreferenceSaved 等待浏览器记忆保存。 */ () => expect(window.localStorage.getItem('ydisks.items.selected_account')).toBe('account-1'));
+    expect(screen.getByRole('button', { name: '同步商品' }).hasAttribute('disabled')).toBe(false);
+    cleanup();
+    render(<ItemList onConfigureDelivery={vi.fn()} />);
+    await waitFor(/* waitRememberedAccount 等待记忆账号回显。 */ () => expect((screen.getByRole('combobox', { name: '当前账号' }) as HTMLSelectElement).value).toBe('account-1'));
+  });
+
+  test('已删除的记忆账号回退到全部账号并阻止发布', /* invalidAccountFallbackCase 验证失效账号安全回退。 */ async () => {
+    window.localStorage.setItem('ydisks.items.selected_account', 'deleted-account');
+    render(<ItemList onConfigureDelivery={vi.fn()} />);
+    await waitFor(/* waitInvalidation 等待加载后清除旧账号。 */ () => expect(window.localStorage.getItem('ydisks.items.selected_account')).toBe(''));
+    expect((screen.getByRole('combobox', { name: '当前账号' }) as HTMLSelectElement).value).toBe('');
+    expect(screen.getByRole('button', { name: '同步商品' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: '发布商品' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  test('切换唯一账号只筛选本地商品，不自动请求闲鱼同步', /* accountFilterFollowsSelectionCase 验证账号切换不产生平台操作。 */ async () => {
+    // otherAccountItem 是与主账号不同的本地商品，用于验证列表筛选。
+    const otherAccountItem: Item = { ...itemFixture, id: 'item-2', item_id: 'item-2', cookie_id: 'account-2', item_title: '第二账号商品' };
+    itemListMocks.getAccountDetails.mockResolvedValue([
+      { id: 'account-1', enabled: true, auto_confirm: false, remark: '测试账号' },
+      { id: 'account-2', enabled: true, auto_confirm: false, remark: '备用账号' },
+    ]);
+    itemListMocks.getItems.mockResolvedValue([itemFixture, otherAccountItem]);
+    render(<ItemList onConfigureDelivery={vi.fn()} />);
+    await waitFor(/* waitBothAccountItems 等待初次显示两个账号的商品。 */ () => expect(screen.getByText('第二账号商品')).toBeTruthy());
+    fireEvent.change(screen.getByRole('combobox', { name: '当前账号' }), { target: { value: 'account-1' } });
+    expect(screen.getByText('测试商品')).toBeTruthy();
+    expect(screen.queryByText('第二账号商品')).toBeNull();
+    expect(itemListMocks.getItems).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: '同步商品' }).hasAttribute('disabled')).toBe(false);
+  });
 
   test('列表不逐商品读取，点击 Bot 入口后才加载并更新卡片状态', /* lazyItemAISettingsCase 验证按需请求边界。 */ async () => {
     render(<ItemList onConfigureDelivery={vi.fn()} itemAISettingsModal={ItemAISettingsModal} />);

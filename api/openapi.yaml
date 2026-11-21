@@ -3990,6 +3990,59 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  "/api/v1/items/{cookie_id}/{item_id}/remote-edit":
+    post:
+      operationId: postApiV1ItemRemoteEdit
+      summary: 用户确认后修改闲鱼现有商品，平台确认成功后保存本地
+      parameters:
+        - {name: cookie_id, in: path, required: true, schema: {type: string}}
+        - {name: item_id, in: path, required: true, schema: {type: string}}
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ItemRemoteEditRequest'}
+      responses:
+        '200': {description: 平台及本地均已完成, content: {application/json: {schema: {$ref: '#/components/schemas/ItemRemoteActionResponse'}}}}
+        '400': {description: 参数错误, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 未登录, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 无权限, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: 商品不存在, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 平台已操作但本地保存失败, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: 平台拒绝或结果未知, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/items/{cookie_id}/{item_id}/downshelf":
+    post:
+      operationId: postApiV1ItemDownShelf
+      summary: 用户确认后下架单件闲鱼商品
+      parameters:
+        - {name: cookie_id, in: path, required: true, schema: {type: string}}
+        - {name: item_id, in: path, required: true, schema: {type: string}}
+      security: [{cookieAuth: []}]
+      responses:
+        '200': {description: 下架已确认, content: {application/json: {schema: {$ref: '#/components/schemas/ItemRemoteActionResponse'}}}}
+        '400': {description: 参数错误, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 未登录, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 无权限, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: 商品不存在, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 本地状态保存失败, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: 平台拒绝或结果未知, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/items/{cookie_id}/{item_id}/reshelf":
+    post:
+      operationId: postApiV1ItemReshelf
+      summary: 用户确认后通过原始商品详情尝试重新上架
+      parameters:
+        - {name: cookie_id, in: path, required: true, schema: {type: string}}
+        - {name: item_id, in: path, required: true, schema: {type: string}}
+      security: [{cookieAuth: []}]
+      responses:
+        '200': {description: 重新上架已确认, content: {application/json: {schema: {$ref: '#/components/schemas/ItemRemoteActionResponse'}}}}
+        '400': {description: 参数错误, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 未登录, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 无权限, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: 商品不存在, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 本地状态保存失败, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: 平台拒绝或结果未知, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   "/api/v1/items/{cookie_id}/{item_id}/ai-settings":
     get:
       operationId: getApiV1ItemsBycookie_idByitem_idAiSettings
@@ -9382,6 +9435,21 @@ components:
         success:
           type: boolean
       description: 统一响应的稳定字段；业务成功字段由各阶段 operation schema 收紧。
+    ItemRemoteEditRequest:
+      type: object
+      description: 只允许显式修改标题、描述与售价，不接受平台原始详情和用户 Cookie
+      properties:
+        item_title: {type: string}
+        item_description: {type: string}
+        item_price: {type: string}
+      additionalProperties: false
+    ItemRemoteActionResponse:
+      type: object
+      required: [success, message, shelf_state]
+      properties:
+        success: {type: boolean}
+        message: {type: string}
+        shelf_state: {type: string, enum: ["", "on", "off"]}
     DeliveryTemplateMessageRequest:
       type: object
       required: [content]

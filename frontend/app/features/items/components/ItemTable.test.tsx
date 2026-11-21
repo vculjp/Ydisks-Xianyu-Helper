@@ -15,8 +15,8 @@ afterEach(cleanup);
 // renderTable 渲染列表视图并返回各回调的记录函数。
 const renderTable = (items: Item[], rules: ShippingRule[]) => {
   // handlers 记录表格触发的全部用户操作回调。
-  const handlers = { onConfigureDelivery: vi.fn(), onOpenAISettings: vi.fn(), onEdit: vi.fn(), onDelete: vi.fn() };
-  render(<ItemTable items={items} rules={rules} accountNickname={/* 返回固定昵称。 */ () => '店铺A'} formatPrice={/* 原样返回价格。 */ price => `¥${price}`} aiStatusText={{ inherit: '继承账号', enabled: '已启用', disabled: '已停用' }} emptyText="暂无商品" {...handlers} />);
+  const handlers = { onConfigureDelivery: vi.fn(), onOpenAISettings: vi.fn(), onEdit: vi.fn(), onSetShelf: vi.fn(), onDelete: vi.fn() };
+  render(<ItemTable items={items} rules={rules} accountNickname={/* 返回固定昵称。 */ () => '店铺A'} formatPrice={/* 原样返回价格。 */ price => `¥${price}`} aiStatusText={{ inherit: '继承账号', enabled: '已启用', disabled: '已停用' }} emptyText="暂无商品" remoteItemBusy={null} {...handlers} />);
   return handlers;
 };
 
@@ -28,10 +28,12 @@ describe('ItemTable', /* 覆盖列表视图渲染与操作回调。 */ () => {
     expect(screen.getAllByText('未配置')).toHaveLength(3);
     fireEvent.click(screen.getByText('发货规则'));
     fireEvent.click(screen.getByLabelText('编辑'));
+    fireEvent.click(screen.getByLabelText('下架商品：示例商品'));
     fireEvent.click(screen.getByLabelText('删除'));
     fireEvent.click(screen.getByLabelText('配置商品 AI 客服：示例商品'));
     expect(handlers.onConfigureDelivery).toHaveBeenCalledWith(itemFixture);
     expect(handlers.onEdit).toHaveBeenCalledWith(itemFixture);
+    expect(handlers.onSetShelf).toHaveBeenCalledWith(itemFixture);
     expect(handlers.onDelete).toHaveBeenCalledWith(itemFixture);
     expect(handlers.onOpenAISettings).toHaveBeenCalledWith(itemFixture);
   });
@@ -39,5 +41,13 @@ describe('ItemTable', /* 覆盖列表视图渲染与操作回调。 */ () => {
   test('renders the empty text when there are no items', /* 无商品时只显示提示。 */ () => {
     renderTable([], []);
     expect(screen.getByText('暂无商品')).toBeTruthy();
+  });
+  test('平台确认下架的商品只能显示重新上架按钮', /* offShelfButtonCase 验证状态操作和文案一致。 */ () => {
+    // offItem 是已有下架回执的本地商品。
+    const offItem = { ...itemFixture, item_detail: '{"shelf_state":"off"}' };
+    // handlers 是复用表格操作回调的模拟器。
+    const handlers = renderTable([offItem], []);
+    fireEvent.click(screen.getByLabelText('上架商品：示例商品'));
+    expect(handlers.onSetShelf).toHaveBeenCalledWith(offItem);
   });
 });

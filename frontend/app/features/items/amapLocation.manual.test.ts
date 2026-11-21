@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { getPublishDistricts, searchPublishLocationsByKeyword } from './amapLocation';
+import { districtToPublishLocation, getPublishDistricts, searchPublishLocationsByKeyword } from './amapLocation';
 
 // province 是高德省级行政区测试样本。
 const province = { adcode: 'p1', name: '浙江省', level: 'province' };
 // city 是高德城市级行政区测试样本。
 const city = { adcode: 'c1', name: '杭州市', level: 'city' };
 // district 是高德区县级行政区测试样本。
-const district = { adcode: 'd1', name: '西湖区', level: 'district' };
+const district = { adcode: 'd1', name: '西湖区', level: 'district', center: { lng: 120.12, lat: 30.26 } };
 // poi 是高德返回的完整地点测试样本。
 const poi = { id: 'poi-1', name: '西湖文化广场', adname: '西湖区', cityname: '杭州市', adcode: 'd1', pname: '浙江省', location: { lng: 120.12, lat: 30.26 } };
 
@@ -66,8 +66,21 @@ describe('高德手动发货地查询', /* manualLocationDescribeCallback 组织
     expect(provinces).toEqual([{ ...province }]);
     expect(cities).toEqual([{ ...city }]);
     expect(districts).toEqual([{ ...district }]);
+    expect(districtToPublishLocation(province, city, districts[0])).toEqual({
+      province: '浙江省', city: '杭州市', area: '西湖区', division_id: 'd1',
+      longitude: 120.12, latitude: 30.26, poi_id: '', poi_name: '',
+    });
     expect(locations).toEqual([expect.objectContaining({ division_id: 'd1', poi_id: 'poi-1', poi_name: '西湖文化广场' })]);
     expect(amapStub.placeSearch).toHaveBeenCalledWith({ city: 'd1', citylimit: true, extensions: 'all', pageSize: 10 });
+  });
+
+  test('区县坐标可采用高德 LngLat 方法，但绝不猜测缺失或无效坐标', /* 覆盖行政区无 POI 时的最小发货地校验。 */ () => {
+    // amapLngLatDistrict 是高德 JS API 返回 LngLat 对象的区县示例。
+    const amapLngLatDistrict = { ...district, center: { getLng: /* 获取区县中心经度。 */ () => 120.15, getLat: /* 获取区县中心纬度。 */ () => 30.27 } };
+    expect(districtToPublishLocation(province, city, amapLngLatDistrict)?.longitude).toBe(120.15);
+    expect(districtToPublishLocation(province, city, { ...district, center: '120.16,30.28' })?.latitude).toBe(30.28);
+    expect(districtToPublishLocation(province, city, { ...district, center: undefined })).toBeNull();
+    expect(districtToPublishLocation(province, city, { ...district, center: { lng: 0, lat: 0 } })).toBeNull();
   });
 
   test('空关键词和空区县会在请求前被拒绝', /* invalidManualSearchTestCallback 验证手动搜索的输入边界。 */ async () => {

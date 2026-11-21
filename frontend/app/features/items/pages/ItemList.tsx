@@ -1,4 +1,4 @@
-import { ArrowRight,Bot,Box,CheckCircle2,CircleDashed,Edit,Filter,Link2,LocateFixed,PackagePlus,Plus,RefreshCw,Save,Search,ShoppingBag,Trash2,UploadCloud,User,X } from 'lucide-react';
+import { ArrowRight,Bot,Box,CheckCircle2,CircleDashed,Edit,Link2,LocateFixed,PackagePlus,Plus,RefreshCw,Save,Search,ShoppingBag,Trash2,UploadCloud,User,X } from 'lucide-react';
 import React,{ Suspense,useCallback,useEffect,useMemo,useRef,useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AccountDetail,Item,ItemAIOverride,ItemAISettings,PublishLocation,ShippingRule } from '../api';
@@ -14,8 +14,11 @@ import { CategoryCandidatePicker } from '../components/CategoryCandidatePicker';
 import ItemTable from '../components/ItemTable';
 import { ManualLocationPicker } from '../components/ManualLocationPicker';
 import { consumeSelectedFile } from '../../../../shared/browser/fileInput';
+import { saveLastPublishLocation } from '../../../../shared/browser/publishLocationPreference';
 import { useItemPublishBatch } from '../hooks';
 import { useItemActions } from '../itemActions';
+import { itemShelfState } from '../itemShelfState';
+import { readItemAccountPreference, saveItemAccountPreference, validItemAccountPreference } from '../accountSelectionPreference';
 import { matchesRuleCoverageFilter,paginateItems,TRADE_AUTOMATION_TRIGGERS,type RuleCoverageFilter } from '../ruleCoverage';
 import type { ItemListProps } from '../types';
 import { PageHeader } from '../../../../shared/ui/PageHeader';
@@ -27,6 +30,9 @@ const formatItemPrice = (price?: string) => {
   if (!value) return '-';
   return /^[¥￥]/.test(value) ? value : `¥${value}`;
 };
+
+// publishLocationText 将已确认的高德省市区与可选地点合并显示，避免多个发布入口重复拼接。
+const publishLocationText = (location: PublishLocation): string => [location.province, location.city, location.area, location.poi_name].filter(Boolean).join(' ');
 
 // ITEM_VIEW_MODE_KEY 是浏览器本地保存商品页视图偏好的存储键，只属于当前浏览器，不写入服务端。
 const ITEM_VIEW_MODE_KEY = 'ydisks.items.view_mode';
@@ -67,10 +73,10 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
   const [shippingRules, setShippingRules] = useState<ShippingRule[]>([]);
   // [accounts, 解构得到当前 Hook 返回的状态和操作函数。
   const [accounts, setAccounts] = useState<AccountDetail[]>([]);
-  // [selectedAccount, 解构得到当前 Hook 返回的状态和操作函数。
-  const [selectedAccount, setSelectedAccount] = useState<string>('');
-  // [accountFilter, 解构得到当前 Hook 返回的状态和操作函数。
-  const [accountFilter, setAccountFilter] = useState<string>('');
+  // selectedAccount 是筛选、同步和发布共用的账号；初值恢复当前浏览器的上次选择。
+  const [selectedAccount, setSelectedAccount] = useState<string>(readItemAccountPreference);
+  // accountsReady 标记账号列表已经成功加载，用于校验是否存在过期的记忆账号。
+  const [accountsReady, setAccountsReady] = useState(false);
   // ruleFilter 保存用户选择的交易自动化覆盖筛选，空串表示不筛选；可见商品由它与规则列表推导，不存副本。
   const [ruleFilter, setRuleFilter] = useState<RuleCoverageFilter>('');
   // viewMode 是用户选择的商品展示模式，初值读取本地偏好。
@@ -182,6 +188,9 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
     handleSync,
     handleEdit,
     handleSaveEdit,
+    handleSaveRemoteEdit,
+    remoteItemBusy,
+    handleSetShelf,
     handleDelete,
     handleAddItem,
     handlePublishItem,
@@ -196,8 +205,8 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
   type ManualLocationTarget = 'publish' | 'batch';
   // manualLocationTarget 保存当前手动地点弹窗服务的发布场景。
   const [manualLocationTarget, setManualLocationTarget] = useState<ManualLocationTarget | null>(null);
-  // confirmManualLocation 将用户选中的高德 POI 写回对应发布表单。
-  const confirmManualLocation = useCallback(/* confirmManualLocationCallback 将已确认的高德 POI 写入对应发布场景。 */ (location: PublishLocation) => {
+  // confirmManualLocation 把区县中心或可选 POI 写回发布表单并记住上次选择。
+  const confirmManualLocation = useCallback(/* confirmManualLocationCallback 将已确认的高德发货地写入对应发布场景。 */ (location: PublishLocation) => {
     if (manualLocationTarget === 'publish') {
       setPublishLocations([location]);
       setPublishLocation(location);
@@ -205,6 +214,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
       setBatchLocations([location]);
       setBatchLocation(location);
     }
+    saveLastPublishLocation(location);
     setManualLocationTarget(null);
   }, [manualLocationTarget, setBatchLocation, setBatchLocations, setPublishLocation, setPublishLocations]);
 
@@ -220,6 +230,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
       .then(/* 当前回调处理异步操作结果。 */ ([accountList, itemList, ruleList, batches]) => {
         if (!active || controller.signal.aborted || initialItemsGeneration !== itemsRequestGeneration.current || initialRulesGeneration !== shippingRulesRequestGeneration.current) return;
         setAccounts(accountList);
+        setAccountsReady(true);
         setItems(itemList);
         setShippingRules(ruleList);
         // recoverable 可恢复任务。
@@ -236,6 +247,20 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
     };
   }, []);
 
+  // 选择账号时记住偏好，并回到商品列表第一页；切换账号不会自动调用闲鱼同步接口。
+  useEffect(/* persistAccountEffect 持久化唯一账号选择。 */ () => {
+    saveItemAccountPreference(selectedAccount);
+    setListPage(1);
+  }, [selectedAccount]);
+
+  // 首屏账号加载后校验记忆账号是否仍然存在；失效时回退到“全部账号（仅查看）”。
+  useEffect(/* validateAccountEffect 清理已删除账号的旧偏好。 */ () => {
+    if (!accountsReady) return;
+    // validAccount 是当前账户列表中仍然有效的选择。
+    const validAccount = validItemAccountPreference(selectedAccount, accounts.map(/* account 是可选账号。 */ account => account.id));
+    if (validAccount !== selectedAccount) setSelectedAccount(validAccount);
+  }, [accounts, accountsReady, selectedAccount]);
+
   // rulesForItem 规则列表For商品，负责当前功能中的对应处理。
   const rulesForItem = (item: Item) => shippingRules.filter(/* 当前回调处理集合中的单个元素。 */ rule =>
     rule.cookie_id === item.cookie_id && rule.item_id === item.item_id
@@ -250,8 +275,8 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
   );
   // visibleItems 可见商品列表。
   const visibleItems = useMemo(
-    /* 先按账号再按交易自动化覆盖情况筛选商品。 */ () => items.filter(/* item 是待判断的商品。 */ item => (!accountFilter || item.cookie_id === accountFilter) && matchesRuleCoverageFilter(item, ruleFilter, shippingRules)),
-    [accountFilter, ruleFilter, items, shippingRules],
+    /* 统一账号选择同时作为列表筛选条件。 */ () => items.filter(/* item 是待判断的商品。 */ item => (!selectedAccount || item.cookie_id === selectedAccount) && matchesRuleCoverageFilter(item, ruleFilter, shippingRules)),
+    [selectedAccount, ruleFilter, items, shippingRules],
   );
   // pagedItems 是列表模式当前页的分页结果，由可见商品与页码推导。
   const pagedItems = useMemo(/* 按请求页码切分可见商品。 */ () => paginateItems(visibleItems, listPage), [visibleItems, listPage]);
@@ -294,19 +319,19 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
       <PageHeader title="商品管理" description="监控并管理所有账号下的闲鱼商品。">
         <div className="flex flex-wrap items-end gap-3">
             <div className="flex min-w-[200px] flex-col gap-1.5">
-              <label htmlFor="item-sync-account" className="px-1 text-[11px] font-extrabold tracking-wide text-gray-500">
-                同步商品账号
+              <label htmlFor="item-current-account" className="px-1 text-[11px] font-extrabold tracking-wide text-gray-500">
+                当前账号
               </label>
               <div className="relative">
                 <User className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                 <select
-                  id="item-sync-account"
-                  aria-label="选择要同步商品的账号"
+                  id="item-current-account"
+                  aria-label="当前账号"
                   className="ios-input w-full pl-10 pr-9 py-3 rounded-xl text-sm"
                   value={selectedAccount}
-                  onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setSelectedAccount(e.target.value)}
+                  onChange={/* 账号切换仅影响列表与后续操作，不自动执行平台同步。 */ e => setSelectedAccount(e.target.value)}
                 >
-                  <option value="">请选择账号</option>
+                  <option value="">全部账号（仅查看）</option>
                   {accounts.map(/* 当前回调处理集合中的单个元素。 */ acc => (
                       <option key={acc.id} value={acc.id}>{accountName(acc.id)}</option>
                   ))}
@@ -315,7 +340,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
             </div>
             <button
                 onClick={handleSync}
-                disabled={loading || !selectedAccount}
+                disabled={loading || !selectedAccount || !accountMap.has(selectedAccount)}
                 className="ios-btn-primary flex items-center gap-2 px-6 py-3 rounded-2xl font-bold shadow-lg shadow-blue-200 disabled:opacity-50"
             >
                 <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -323,21 +348,24 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
             </button>
             <button
               onClick={openAddModal}
-              className="px-5 py-3 rounded-2xl font-bold bg-gray-900 text-white hover:bg-gray-800 transition-colors flex items-center gap-2 shadow-lg"
+              disabled={!selectedAccount || !accountMap.has(selectedAccount)}
+              className="px-5 py-3 rounded-2xl font-bold bg-gray-900 text-white hover:bg-gray-800 transition-colors flex items-center gap-2 shadow-lg disabled:opacity-50"
             >
               <Plus className="w-4 h-4" />
               添加商品
             </button>
             <button
               onClick={openPublishModal}
-              className="px-5 py-3 rounded-2xl font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors flex items-center gap-2 shadow-lg shadow-emerald-100"
+              disabled={!selectedAccount || !accountMap.has(selectedAccount)}
+              className="px-5 py-3 rounded-2xl font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors flex items-center gap-2 shadow-lg shadow-emerald-100 disabled:opacity-50"
             >
               <PackagePlus className="w-4 h-4" />
               发布商品
             </button>
             <button
               onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => void openBatchModal()}
-              className="px-5 py-3 rounded-2xl font-bold bg-brand text-white hover:bg-brand-highlight transition-colors flex items-center gap-2 shadow-lg shadow-blue-100"
+              disabled={!selectedAccount || !accountMap.has(selectedAccount)}
+              className="px-5 py-3 rounded-2xl font-bold bg-brand text-white hover:bg-brand-highlight transition-colors flex items-center gap-2 shadow-lg shadow-blue-100 disabled:opacity-50"
             >
               <UploadCloud className="w-4 h-4" />
               {recentBatch && ['running', 'canceling'].includes(recentBatch.status) ? '继续批量任务' : '批量铺货'}
@@ -354,26 +382,6 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
       </PageHeader>
 
       <div className="flex flex-wrap items-end gap-3">
-            <div className="flex min-w-[200px] flex-col gap-1.5">
-              <label htmlFor="item-account-filter" className="px-1 text-[11px] font-extrabold tracking-wide text-gray-500">
-                商品列表筛选
-              </label>
-              <div className="relative">
-                <Filter className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                <select
-                  id="item-account-filter"
-                  aria-label="按账号筛选商品列表"
-                  className="ios-input w-full pl-10 pr-9 py-3 rounded-xl text-sm"
-                  value={accountFilter}
-                  onChange={/* 切换账号筛选并回到列表第一页。 */ event => { setAccountFilter(event.target.value); setListPage(1); }}
-                >
-                  <option value="">全部账号</option>
-                  {accounts.map(/* 当前回调处理集合中的单个元素。 */ account => (
-                    <option key={account.id} value={account.id}>{accountName(account.id)}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
             <div className="flex min-w-[200px] flex-col gap-1.5">
               <label htmlFor="item-rule-filter" className="px-1 text-[11px] font-extrabold tracking-wide text-gray-500">
                 自动化规则筛选
@@ -416,8 +424,10 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
             onConfigureDelivery={onConfigureDelivery}
             onOpenAISettings={setItemAISettingsTarget}
             onEdit={handleEdit}
+            onSetShelf={handleSetShelf}
+            remoteItemBusy={remoteItemBusy}
             onDelete={handleDelete}
-            emptyText={ruleFilter ? '没有符合该规则筛选条件的商品' : accountFilter ? '该账号暂无商品数据' : '暂无商品数据，请选择账号进行同步'}
+            emptyText={ruleFilter ? '没有符合该规则筛选条件的商品' : selectedAccount ? '该账号暂无商品数据' : '暂无商品数据，请选择账号进行同步'}
           />
           {pagedItems.totalPages > 1 && (
             <div className="flex items-center justify-center gap-3 text-sm text-gray-600">
@@ -438,6 +448,8 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
             const deliveryRuleCount = linkedRules.filter(/* rule 是关联规则。 */ rule => rule.trigger_type === 'order_paid').length;
             // aiOverride 是列表 DTO 提供的商品级 AI 摘要状态，缺省时按继承账号处理。
             const aiOverride = item.ai_override || 'inherit';
+            // shelfState 是经平台确认的上/下架状态，历史未知状态不直接猜测。
+            const shelfState = itemShelfState(item);
             return (
               <div key={`${item.cookie_id}-${item.item_id}`} className="ios-card p-3 rounded-2xl hover:shadow-lg transition-all group relative flex flex-col">
                   <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
@@ -469,6 +481,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
                       </div>
                   </div>
                   <h3 className="font-bold text-gray-900 line-clamp-2 text-xs mb-1.5 h-8 leading-4">{item.item_title}</h3>
+                  <span className={`mb-2 text-[10px] font-bold ${shelfState === 'off' ? 'text-amber-700' : 'text-gray-400'}`}>{shelfState === 'off' ? '已下架（平台确认）' : shelfState === 'on' ? '已上架（平台确认）' : '货架状态未核实'}</span>
                   <div className="mb-2 inline-flex min-w-0 max-w-full items-center gap-1 self-start rounded-md bg-blue-50 px-2 py-1 text-[10px] font-extrabold text-blue-700" title={accountNickname(item.cookie_id)}>
                     <User className="h-3 w-3 shrink-0" />
                     <span className="min-w-0 truncate whitespace-nowrap">{accountNickname(item.cookie_id)}</span>
@@ -481,6 +494,9 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
                       </span>
                   </div>
                   <div className="space-y-2 mt-auto">
+                      <button type="button" disabled={remoteItemBusy !== null} onClick={/* 点击上架或下架时要求二次确认。 */ () => void handleSetShelf(item)} className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40" aria-label={`${shelfState === 'off' ? '上架' : '下架'}商品：${item.item_title}`}>
+                        {remoteItemBusy === `${item.cookie_id}:${item.item_id}` ? '平台处理中…' : shelfState === 'off' ? '重新上架到闲鱼' : '下架闲鱼商品'}
+                      </button>
                       <button
                         type="button"
                         onClick={/* itemAISettingsOpenHandler 仅在用户点击时打开弹窗并触发详情读取。 */ () => setItemAISettingsTarget(item)}
@@ -505,7 +521,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
           {visibleItems.length === 0 && (
              <div className="col-span-full py-20 text-center text-gray-400">
                  <ShoppingBag className="w-12 h-12 mx-auto mb-4 opacity-30" />
-                 {ruleFilter ? '没有符合该规则筛选条件的商品' : accountFilter ? '该账号暂无商品数据' : '暂无商品数据，请选择账号进行同步'}
+                  {ruleFilter ? '没有符合该规则筛选条件的商品' : selectedAccount ? '该账号暂无商品数据' : '暂无商品数据，请选择账号进行同步'}
              </div>
           )}
       </div>
@@ -524,15 +540,19 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
               </button>
             </div>
             <div className="modal-body space-y-4">
+              <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">「仅保存本地」不会修改闲鱼；「同步修改到闲鱼」只同步实际改动的标题、价格和描述，分类及发货规则暂不支持平台编辑。虚拟商品可能受平台限制。</p>
               <input className="w-full ios-input px-4 py-3 rounded-xl" placeholder="商品标题" value={editForm.item_title || ''} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setEditForm({...editForm, item_title: e.target.value})} />
               <input className="w-full ios-input px-4 py-3 rounded-xl" placeholder="价格" value={editForm.item_price || ''} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setEditForm({...editForm, item_price: e.target.value})} />
               <input className="w-full ios-input px-4 py-3 rounded-xl" placeholder="分类" value={editForm.item_category || ''} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setEditForm({...editForm, item_category: e.target.value})} />
               <textarea className="w-full ios-input px-4 py-3 rounded-xl h-28 resize-none" placeholder="描述" value={editForm.item_description || ''} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setEditForm({...editForm, item_description: e.target.value})} />
             </div>
             <div className="modal-footer">
-              <button onClick={handleSaveEdit} className="w-full ios-btn-primary px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2">
+              <button disabled={remoteItemBusy !== null} onClick={handleSaveEdit} className="flex-1 rounded-xl bg-gray-100 px-4 py-3 font-bold text-gray-800 hover:bg-gray-200 disabled:opacity-40">
                 <Save className="w-4 h-4" />
-                保存
+                仅保存本地
+              </button>
+              <button disabled={remoteItemBusy !== null} onClick={handleSaveRemoteEdit} className="ios-btn-primary flex-1 rounded-xl px-4 py-3 font-bold disabled:opacity-40">
+                {remoteItemBusy ? '正在同步…' : '同步修改到闲鱼'}
               </button>
             </div>
           </div>
@@ -554,10 +574,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
             <div className="modal-body space-y-5">
               <div className="space-y-2">
                 <label className="block text-sm font-bold text-gray-700">所属账号</label>
-                <select className="w-full ios-input px-4 py-3 rounded-xl" value={addForm.cookie_id} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setAddForm({...addForm, cookie_id: e.target.value})}>
-                  <option value="">选择账号</option>
-                  {accounts.map(/* 当前回调处理集合中的单个元素。 */ acc => <option key={acc.id} value={acc.id}>{accountName(acc.id)}</option>)}
-                </select>
+                <div className="w-full ios-input px-4 py-3 rounded-xl bg-gray-50 text-gray-700" aria-label="商品所属账号">{accountName(selectedAccount)}</div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -606,16 +623,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
               </div>
               <div className="space-y-2">
                 <label className="block text-sm font-bold text-gray-700">发布账号</label>
-                <select className="w-full ios-input px-4 py-3 rounded-xl" value={publishForm.cookie_id} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => {
-				  setPublishForm({...publishForm, cookie_id: e.target.value});
-				  setPublishCategoryKeyword('');
-				  setPublishCategory(null);
-				  setPublishLocations([]);
-				  setPublishLocation(null);
-				}}>
-                  <option value="">选择账号</option>
-                  {accounts.map(/* 当前回调处理集合中的单个元素。 */ acc => <option key={acc.id} value={acc.id}>{accountName(acc.id)}</option>)}
-                </select>
+                <div className="w-full ios-input px-4 py-3 rounded-xl bg-gray-50 text-gray-700" aria-label="商品发布账号">{accountName(selectedAccount)}</div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -678,7 +686,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
               )}
 			  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 space-y-3">
 				<div className="flex items-center justify-between gap-3">
-				  <div><div className="text-sm font-extrabold text-gray-900">发货地（可选）</div><p className="mt-1 text-xs text-sky-800">虚拟商品无需发货地；发布失败时可再定位并作为补充信息提交。</p></div>
+				  <div><div className="text-sm font-extrabold text-gray-900">发货地（可选）</div><p className="mt-1 text-xs text-sky-800">记住上次地址，选到区即可；详细地点选填。</p></div>
 					<div className="flex flex-wrap justify-end gap-2">
 					  <button type="button" disabled={locationLoading || !publishForm.cookie_id} onClick={/* currentLocationClickAction 获取设备当前位置附近的高德发货地。 */ () => void locateForPublish(false)} className="ios-btn-primary flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold disabled:opacity-50">
 					    <LocateFixed className="h-4 w-4" />{locationLoading ? '定位中...' : '获取当前位置'}
@@ -688,9 +696,15 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
 					  </button>
 					</div>
 				</div>
-				{publishLocations.length > 0 && <select className="w-full ios-input rounded-xl bg-white px-4 py-3" value={String(Math.max(0, publishLocations.indexOf(publishLocation!)))} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setPublishLocation(publishLocations[Number(e.target.value)] || null)}>
-				  {publishLocations.map(/* 当前回调处理集合中的单个元素。 */ (item, index) => <option key={`${item.division_id}-${item.poi_id}-${index}`} value={String(index)}>{[item.province, item.city, item.area, item.poi_name].filter(Boolean).join(' ')}</option>)}
+				{publishLocations.length > 1 && <select className="w-full ios-input rounded-xl bg-white px-4 py-3" value={String(Math.max(0, publishLocations.indexOf(publishLocation!)))} onChange={/* 用户改选附近发货地后更新浏览器偏好。 */ e => {
+                  // location 是本次用户改选的发货地。
+                  const location = publishLocations[Number(e.target.value)] || null;
+                  setPublishLocation(location);
+                  saveLastPublishLocation(location);
+                }}>
+				  {publishLocations.map(/* 当前回调处理集合中的单个元素。 */ (item, index) => <option key={`${item.division_id}-${item.poi_id}-${index}`} value={String(index)}>{publishLocationText(item)}</option>)}
 				</select>}
+				{publishLocation && <div className="flex items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-xs text-sky-800"><span>当前发货地：{publishLocationText(publishLocation)}</span><button type="button" onClick={/* 清除当前及上次记忆的地址。 */ () => { setPublishLocation(null); setPublishLocations([]); saveLastPublishLocation(null); }} className="shrink-0 font-bold text-red-600">清除</button></div>}
 			  </div>
               {ImagesEditor && <ImagesEditor images={publishForm.images} previews={publishImagePreviews} onPickFromLibrary={LibraryPicker ? /* 打开图片库选择器。 */ () => setLibraryPickerOpen(true) : undefined} onChange={/* publishImagesChangeAction 将图片追加、删除或排序后的列表写回发布草稿。 */ (images) => setPublishForm(/* previous 保存上一次发布草稿状态。 */ previous => ({ ...previous, images }))} />}
               {LibraryPicker && <LibraryPicker open={libraryPickerOpen} maxSelect={Math.max(1, 9 - publishForm.images.length)} onClose={/* 关闭图片库选择器。 */ () => setLibraryPickerOpen(false)} onPick={/* 图片库文件追加到发布草稿，最多 9 张。 */ files => { setPublishForm(/* previous 是追加前的发布草稿。 */ previous => ({ ...previous, images: [...previous.images, ...files].slice(0, 9) })); setLibraryPickerOpen(false); }} />}
@@ -741,19 +755,8 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
 
                   <div className="space-y-2">
                     <label className="block text-sm font-bold text-gray-700">默认发布账号</label>
-                    <select
-                      className="w-full ios-input px-4 py-3 rounded-xl"
-                      value={selectedAccount}
-                      onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => {
-						setSelectedAccount(e.target.value);
-						setBatchLocations([]);
-						setBatchLocation(null);
-					  }}
-                    >
-                      <option value="">选择账号</option>
-                      {accounts.map(/* 当前回调处理集合中的单个元素。 */ acc => <option key={acc.id} value={acc.id}>{accountName(acc.id)}</option>)}
-                    </select>
-                    <p className="text-xs text-gray-500">表格中“账号ID”为空时，会使用这里选择的账号。</p>
+                    <div className="w-full ios-input px-4 py-3 rounded-xl bg-gray-50 text-gray-700" aria-label="批量发布账号">{accountName(selectedAccount)}</div>
+                    <p className="text-xs text-gray-500">表格中“账号ID”为空时，默认使用顶部选择的账号；明确填写的账号 ID 仍按表格处理。</p>
                   </div>
 
                   <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 space-y-3">
@@ -816,7 +819,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
 
 				  <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 space-y-3">
 					<div className="flex items-center justify-between gap-3">
-					  <div><div className="text-sm font-extrabold text-gray-900">批次发货地（可选）</div><p className="mt-1 text-xs text-sky-800">虚拟商品可留空；填写后整个批次使用同一个发货地，并随任务保存用于恢复和重试。</p></div>
+					  <div><div className="text-sm font-extrabold text-gray-900">批次发货地（可选）</div><p className="mt-1 text-xs text-sky-800">沿用上次地址，选到区即可；详细地点选填。</p></div>
 					<div className="flex flex-wrap justify-end gap-2">
 					  <button type="button" disabled={locationLoading || !selectedAccount} onClick={/* currentBatchLocationClickAction 获取批量发布使用的设备当前位置。 */ () => void locateForPublish(true)} className="ios-btn-primary flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold disabled:opacity-50">
 						<LocateFixed className="h-4 w-4" />{locationLoading ? '定位中...' : '获取当前位置'}
@@ -826,9 +829,15 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
 					  </button>
 					</div>
 					</div>
-					{batchLocations.length > 0 && <select className="w-full ios-input rounded-xl bg-white px-4 py-3" value={String(Math.max(0, batchLocations.indexOf(batchLocation!)))} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setBatchLocation(batchLocations[Number(e.target.value)] || null)}>
-					  {batchLocations.map(/* 当前回调处理集合中的单个元素。 */ (item, index) => <option key={`${item.division_id}-${item.poi_id}-${index}`} value={String(index)}>{[item.province, item.city, item.area, item.poi_name].filter(Boolean).join(' ')}</option>)}
+					{batchLocations.length > 1 && <select className="w-full ios-input rounded-xl bg-white px-4 py-3" value={String(Math.max(0, batchLocations.indexOf(batchLocation!)))} onChange={/* 用户改选批次发货地后更新浏览器偏好。 */ e => {
+                      // location 是用户改选的批次发货地。
+                      const location = batchLocations[Number(e.target.value)] || null;
+                      setBatchLocation(location);
+                      saveLastPublishLocation(location);
+                    }}>
+					  {batchLocations.map(/* 当前回调处理集合中的单个元素。 */ (item, index) => <option key={`${item.division_id}-${item.poi_id}-${index}`} value={String(index)}>{publishLocationText(item)}</option>)}
 					</select>}
+					{batchLocation && <div className="flex items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-xs text-sky-800"><span>当前发货地：{publishLocationText(batchLocation)}</span><button type="button" onClick={/* 清除批次发货地和浏览器历史选择。 */ () => { setBatchLocation(null); setBatchLocations([]); saveLastPublishLocation(null); }} className="shrink-0 font-bold text-red-600">清除</button></div>}
 					  </div>
 
 					  <div className="rounded-xl border border-violet-200 bg-violet-50 p-4 space-y-2">
@@ -869,26 +878,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
                       <p className="text-xs text-gray-500 mt-1">照着下面的“什么时候填写”处理即可。预检发现问题时，会指出具体哪一行需要修改。</p>
                     </div>
 
-                    <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-xs text-blue-950">
-                      <div className="text-sm font-extrabold">“付款后发送的卡密”怎么填</div>
-                      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
-                        <div className="rounded-lg bg-white/80 p-3">
-                          <code className="font-bold text-blue-700">101</code>
-                          <p className="mt-1 leading-5">从卡密组 101 立即发送 1 份。卡密组 ID 可以在“卡密库存”页面查看。</p>
-                        </div>
-                        <div className="rounded-lg bg-white/80 p-3">
-                          <code className="font-bold text-blue-700">101:2</code>
-                          <p className="mt-1 leading-5">每购买 1 件，就从卡密组 101 发送 2 份。买家购买 3 件时会发送 6 份。</p>
-                        </div>
-                        <div className="rounded-lg bg-white/80 p-3">
-                          <code className="font-bold text-blue-700">101:1:0;102:2:3</code>
-                          <p className="mt-1 leading-5">先立即发送卡密组 101 的 1 份，再等待 3 秒发送卡密组 102 的 2 份。</p>
-                        </div>
-                      </div>
-                      <p className="mt-3 leading-5 text-blue-800">
-                        每一组依次写“卡密组 ID : 每件发送几份 : 等待几秒”。份数不写时按 1 份处理，等待时间不写时立即发送。需要发送多种卡密时，用英文分号 <code className="font-bold">;</code> 隔开。
-                      </p>
-                    </div>                    <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white">
+                    <div className="overflow-x-auto rounded-xl border border-gray-100 bg-white">
                       <table className="w-full text-left text-xs">
                         <thead className="bg-gray-50 text-gray-500">
                           <tr>
@@ -913,11 +903,10 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
                             ['频道类目ID', '覆盖类目时必填', '必须填写闲鱼返回的准确频道类目 ID'],
                             ['淘宝类目ID', '按闲鱼返回填写', '“电子资料”无淘宝类目 ID，保持为空'],
                             ['付款发货启用', '需要付款后自动发货时填写', '填“是”表示开启；不需要时填“否”或留空'],
-                            ['付款发货内容', '“付款发货启用”填“是”时填写', '从“卡密库存”页面取得卡密组 ID，按上方示例填写；每个商品发不同链接时，填共用发货模板 T模板ID（如 T1、T1:30），链接写在“变量.xxx”列，导入不会新建卡密或模板'],
+                            ['付款发货内容', '“付款发货启用”填“是”时填写', '填写发货模板 T模板ID（如 T1、T1:30），每个商品的不同链接填写在“变量.xxx”列'],
                             ['评价赠品启用', '需要评价赠品时填写', '填“是”表示开启；不需要时填“否”或留空'],
-                            ['评价赠品内容', '“评价赠品启用”填“是”时填写', '格式和付款发货内容相同，也可以同时发送多个卡密组或使用 T模板ID'],
+                            ['评价赠品内容', '“评价赠品启用”填“是”时填写', '格式和付款发货内容相同，填写 T模板ID'],
                             ['变量.xxx', '使用的发货模板含 {{custom.xxx}} 时填写', '表头写“变量.”加变量名，例如 变量.link；每行填本商品的取值，如网盘链接，可包含冒号和分号'],
-                            ['模板卡密.xxx', '使用的发货模板含 {{cards.xxx}} 时填写', '表头写“模板卡密.”加变量名；每行填“卡密组ID:每件份数”，例如 101:1'],
                             ['求评价启用', '需要自动求评价时填写', '填“是”表示开启；不需要时填“否”或留空'],
                             ['求评价等待小时', '“求评价启用”填“是”时填写', '填写等待小时数；留空按 72 小时处理'],
                             ['求评价文案', '“求评价启用”填“是”时填写', '填写要发送给买家的求评价消息'],

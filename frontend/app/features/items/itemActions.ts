@@ -1,11 +1,13 @@
 import { useCallback,useEffect,useRef,useState,type Dispatch,type SetStateAction } from 'react';
 import type { Item } from './api';
 import type { PublishLocation } from './api';
-import { createItem,deleteItem,getPublishLocations,itemErrorMessage,publishItem,recommendPublishCategory as recommendItemPublishCategory,syncItemsFromAccount,updateItem } from './api';
+import { createItem,deleteItem,getPublishLocations,itemErrorMessage,publishItem,remoteEditItem,recommendPublishCategory as recommendItemPublishCategory,setItemShelf,syncItemsFromAccount,updateItem } from './api';
+import { itemShelfState } from './itemShelfState';
 import type { PublishSkuRow, PublishSpec } from '../../../shared/ui/publish/publishSpecs';
 import { downloadCsv } from '../../../shared/browser/csvDownload';
 import { categoryCandidatesOf } from './batchState';
 import type { PublishCategory } from './types';
+import { readLastPublishLocation, saveLastPublishLocation } from '../../../shared/browser/publishLocationPreference';
 
 // AddItemForm 描述手动添加商品弹窗的表单字段。
 export interface AddItemForm {
@@ -133,6 +135,12 @@ export interface ItemActionsState {
   handleEdit: (item: Item) => void;
   // handleSaveEdit 保存当前商品编辑草稿。
   handleSaveEdit: () => Promise<void>;
+  // handleSaveRemoteEdit 将明确变化的标题、描述和价格提交到闲鱼。
+  handleSaveRemoteEdit: () => Promise<void>;
+  // remoteItemBusy 保存当前正在等待平台确认的商品 ID，不允许重复提交。
+  remoteItemBusy: string | null;
+  // handleSetShelf 执行用户确认后的单件上下架，失败不修改本地状态。
+  handleSetShelf: (item: Item) => Promise<void>;
   // handleDelete 删除指定商品并更新本地列表。
   handleDelete: (item: Item) => Promise<void>;
   // handleAddItem 创建手动添加的商品关联。
@@ -163,6 +171,8 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
   const [loading, setLoading] = useState(false);
   // publishing 表示普通商品发布请求是否正在执行。
   const [publishing, setPublishing] = useState(false);
+  // remoteItemBusy 防止同一页面同时操作两件平台商品，避免重复执行或回执交错。
+  const [remoteItemBusy, setRemoteItemBusy] = useState<string | null>(null);
   // showEditModal 表示编辑商品弹窗是否打开。
   const [showEditModal, setShowEditModal] = useState(false);
   // showAddModal 表示添加商品弹窗是否打开。
@@ -174,7 +184,7 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
   // publishLocations 保存普通发布可选发货地。
   const [publishLocations, setPublishLocations] = useState<PublishLocation[]>([]);
   // publishLocation 保存普通发布当前发货地。
-  const [publishLocation, setPublishLocation] = useState<PublishLocation | null>(null);
+  const [publishLocation, setPublishLocation] = useState<PublishLocation | null>(readLastPublishLocation);
   // publishCategoryKeyword 保存当前普通发布类目搜索词。
   const [publishCategoryKeyword, setPublishCategoryKeyword] = useState('');
   // publishCategoryLoading 表示当前普通发布类目推荐请求是否运行中。
@@ -298,6 +308,60 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
       alert('更新失败，请重试');
     }
   }, [editForm, loadItems, loadShippingRules, selectedItem]);
+
+  // handleSaveRemoteEdit 显示字段变化确认后同步到真实闲鱼，并仅在平台确认后刷新本地商品。
+  const handleSaveRemoteEdit = useCallback(/* saveRemoteEditAction 执行经用户确认的真实平台商品编辑。 */ async () => {
+    if (!selectedItem || remoteItemBusy) return;
+    // changed 是用户实际修改的独立商品字段，不包含本地分类和发货规则。
+    const changed: {
+      /** item_title 是真实商品标题的新值。 */ item_title?: string;
+      /** item_description 是真实商品描述的新值。 */ item_description?: string;
+      /** item_price 是真实商品售价的新值。 */ item_price?: string;
+    } = {};
+    if ((editForm.item_title || '').trim() !== (selectedItem.item_title || '').trim()) changed.item_title = (editForm.item_title || '').trim();
+    if ((editForm.item_description || '').trim() !== (selectedItem.item_description || '').trim()) changed.item_description = (editForm.item_description || '').trim();
+    if ((editForm.item_price || '').trim() !== (selectedItem.item_price || '').trim()) changed.item_price = (editForm.item_price || '').trim();
+    // names 是确认弹窗中展示的操作字段，帮助用户特别留意真实商品价格变更。
+    const names = [changed.item_title !== undefined && '标题', changed.item_description !== undefined && '描述', changed.item_price !== undefined && '价格'].filter(Boolean).join('、');
+    if (!names) return alert('标题、描述和售价都没有变化；分类修改仅支持本地保存');
+    if (!confirm(`即将在真实闲鱼商品「${selectedItem.item_title}」中修改：${names}。\n当前商品 ID：${selectedItem.item_id}\n平台可能不支持虚拟类目编辑，失败时不会自动重试。确认提交吗？`)) return;
+    // itemKey 是本次远端操作的唯一商品标识，直到请求和本地刷新都完成才能释放。
+    const itemKey = `${selectedItem.cookie_id}:${selectedItem.item_id}`;
+    setRemoteItemBusy(itemKey);
+    try {
+      // result 是平台及本地均确认成功的非敏感回执。
+      const result = await remoteEditItem(selectedItem.cookie_id, selectedItem.item_id, changed);
+      await loadItems();
+      setShowEditModal(false);
+      setSelectedItem(null);
+      alert(result.message);
+    } catch (/* error 是平台拒绝、会话失效或结果未确认的原因。 */ error: unknown) {
+      alert(itemErrorMessage(error, '闲鱼编辑未确认成功，请到闲鱼核对后再操作'));
+    } finally {
+      setRemoteItemBusy(null);
+    }
+  }, [editForm, loadItems, remoteItemBusy, selectedItem]);
+
+  // handleSetShelf 经用户明确确认后将单件商品下架或尝试恢复上架，保留本地发货配置。
+  const handleSetShelf = useCallback(/* setShelfAction 执行用户主动触发的单件上下架。 */ async (item: Item) => {
+    if (remoteItemBusy) return;
+    // operation 是根据本地明确确认过的下架状态选择的平台操作，未知状态默认仅提供下架。
+    const operation = itemShelfState(item) === 'off' ? 'reshelf' : 'downshelf';
+    // caption 是用户即将执行的真实平台操作名称。
+    const caption = operation === 'reshelf' ? '重新上架' : '下架';
+    if (!confirm(`确定在闲鱼${caption}商品「${item.item_title}」（ID：${item.item_id}）吗？\n发货规则保留不删除；虚拟类目可能不支持重新上架。此操作将立即影响真实商品。`)) return;
+    setRemoteItemBusy(`${item.cookie_id}:${item.item_id}`);
+    try {
+      // result 为后端在平台成功且本地状态写入后给出的回执。
+      const result = await setItemShelf(item.cookie_id, item.item_id, operation);
+      await loadItems();
+      alert(result.message);
+    } catch (/* error 是平台结果未知或明确拒绝的错误，不能在这里自动再次请求。 */ error: unknown) {
+      alert(itemErrorMessage(error, '平台未确认商品上下架，请在闲鱼检查实际状态'));
+    } finally {
+      setRemoteItemBusy(null);
+    }
+  }, [loadItems, remoteItemBusy]);
 
   // handleDelete 删除指定商品并从当前列表移除。
   const handleDelete = useCallback(/* deleteAction 删除商品并更新列表。 */ async (item: Item) => {
@@ -423,6 +487,9 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
   // openPublishModal 打开普通发布弹窗并回填当前账号。
   const openPublishModal = useCallback(/* openPublishAction 打开普通发布弹窗。 */ () => {
     setPublishForm(/* currentForm 回填普通发布账号。 */ previous => ({ ...previous, cookie_id: selectedAccount || previous.cookie_id }));
+    // 每次打开读取最后选中的发货地，发布成功后的表单重置不影响下次选择。
+    setPublishLocation(readLastPublishLocation());
+    setPublishLocations([]);
     setShowPublishModal(true);
   }, [selectedAccount]);
 
@@ -460,6 +527,8 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
         setPublishLocations(locations);
         setPublishLocation(locations[0]);
       }
+      // 用户主动定位得到的地点也作为下一次发布的默认发货地。
+      saveLastPublishLocation(locations[0]);
     } catch (/* error 表示发货地查询异常。 */ error: unknown) {
       if (controller.signal.aborted || generation !== locationGeneration.current) return;
       if (typeof error === 'object' && error !== null && 'code' in error) {
@@ -477,5 +546,5 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
     }
   }, [cancelLocationLookup, publishForm.cookie_id, selectedAccount, setBatchLocation, setBatchLocations]);
 
-  return { selectedAccount, setSelectedAccount, loading, publishing, showEditModal, setShowEditModal, showAddModal, setShowAddModal, showPublishModal, setShowPublishModal, locationLoading, publishLocations, setPublishLocations, publishLocation, setPublishLocation, publishCategoryKeyword, setPublishCategoryKeyword, publishCategoryLoading, publishCategoryCandidates, publishCategory, setPublishCategory, selectedItem, editForm, setEditForm, addForm, setAddForm, publishForm, setPublishForm, publishImagePreviews, handleSync, handleEdit, handleSaveEdit, handleDelete, handleAddItem, handlePublishItem, handleRecommendPublishCategory, downloadPublishTemplate, openAddModal, openPublishModal, locateForPublish };
+  return { selectedAccount, setSelectedAccount, loading, publishing, remoteItemBusy, showEditModal, setShowEditModal, showAddModal, setShowAddModal, showPublishModal, setShowPublishModal, locationLoading, publishLocations, setPublishLocations, publishLocation, setPublishLocation, publishCategoryKeyword, setPublishCategoryKeyword, publishCategoryLoading, publishCategoryCandidates, publishCategory, setPublishCategory, selectedItem, editForm, setEditForm, addForm, setAddForm, publishForm, setPublishForm, publishImagePreviews, handleSync, handleEdit, handleSaveEdit, handleSaveRemoteEdit, handleSetShelf, handleDelete, handleAddItem, handlePublishItem, handleRecommendPublishCategory, downloadPublishTemplate, openAddModal, openPublishModal, locateForPublish };
 };

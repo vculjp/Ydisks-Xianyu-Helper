@@ -1,7 +1,8 @@
-import { CheckCircle2,CircleDashed,Edit,Link2,Trash2 } from 'lucide-react';
+import { CheckCircle2,CircleDashed,Edit,Link2,PackageCheck,PackageX,Trash2 } from 'lucide-react';
 import React from 'react';
 import type { Item,ItemAIOverride,ShippingRule } from '../api';
 import { countTriggerRules,TRADE_AUTOMATION_TRIGGERS } from '../ruleCoverage';
+import { itemShelfState } from '../itemShelfState';
 
 /** ItemTableProps 描述商品列表视图需要的数据与回调。 */
 export interface ItemTableProps {
@@ -21,6 +22,10 @@ export interface ItemTableProps {
   onOpenAISettings: (item: Item) => void;
   /** onEdit 打开商品编辑弹窗。 */
   onEdit: (item: Item) => void;
+  /** onSetShelf 在用户确认后请求单件商品上下架。 */
+  onSetShelf: (item: Item) => void;
+  /** remoteItemBusy 指示当前平台正在处理的商品，避免重复操作。 */
+  remoteItemBusy: string | null;
   /** onDelete 删除商品。 */
   onDelete: (item: Item) => void;
   /** emptyText 是没有商品时的提示文案。 */
@@ -28,7 +33,7 @@ export interface ItemTableProps {
 }
 
 /** ItemTable 以表格形式展示商品，并逐列标出四类交易自动化规则的配置数量。 */
-const ItemTable: React.FC<ItemTableProps> = ({ items, rules, accountNickname, formatPrice, aiStatusText, onConfigureDelivery, onOpenAISettings, onEdit, onDelete, emptyText }) => {
+const ItemTable: React.FC<ItemTableProps> = ({ items, rules, accountNickname, formatPrice, aiStatusText, onConfigureDelivery, onOpenAISettings, onEdit, onSetShelf, remoteItemBusy, onDelete, emptyText }) => {
   if (items.length === 0) return <div className="py-20 text-center text-gray-400">{emptyText}</div>;
   return (
     <div className="ios-card overflow-x-auto rounded-2xl">
@@ -49,6 +54,7 @@ const ItemTable: React.FC<ItemTableProps> = ({ items, rules, accountNickname, fo
               <td className="max-w-[280px] px-4 py-3">
                 <div className="line-clamp-2 font-bold text-gray-900">{item.item_title}</div>
                 <div className="mt-1 select-all text-[10px] text-gray-400">ID: {item.item_id}</div>
+                <span className={`mt-1 inline-block text-[10px] font-bold ${itemShelfState(item) === 'off' ? 'text-amber-700' : 'text-gray-400'}`}>{itemShelfState(item) === 'off' ? '已下架（平台确认）' : itemShelfState(item) === 'on' ? '已上架（平台确认）' : '货架状态未核实'}</span>
               </td>
               <td className="px-4 py-3 text-gray-600">{accountNickname(item.cookie_id)}</td>
               <td className="px-4 py-3 text-gray-700">{formatPrice(item.item_price)}</td>
@@ -73,6 +79,10 @@ const ItemTable: React.FC<ItemTableProps> = ({ items, rules, accountNickname, fo
                 <div className="flex justify-end gap-1.5">
                   <button type="button" onClick={/* 点击打开该商品的发货规则配置。 */ () => onConfigureDelivery(item)} className="inline-flex items-center gap-1 rounded-lg bg-gray-900 px-2.5 py-1.5 font-bold text-white hover:bg-black"><Link2 className="h-3 w-3" />发货规则</button>
                   <button type="button" onClick={/* 点击编辑商品。 */ () => onEdit(item)} className="rounded-lg bg-gray-100 p-1.5 text-gray-600 hover:bg-brand hover:text-white" title="编辑" aria-label="编辑"><Edit className="h-3.5 w-3.5" /></button>
+                  <button type="button" disabled={remoteItemBusy !== null} onClick={/* 点击要求用户确认当前商品上下架。 */ () => onSetShelf(item)} className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1.5 font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-40" aria-label={`${itemShelfState(item) === 'off' ? '上架' : '下架'}商品：${item.item_title}`}>
+                    {itemShelfState(item) === 'off' ? <PackageCheck className="h-3 w-3"/> : <PackageX className="h-3 w-3"/>}
+                    {itemShelfState(item) === 'off' ? '上架' : '下架'}
+                  </button>
                   <button type="button" onClick={/* 点击删除商品。 */ () => onDelete(item)} className="rounded-lg bg-gray-100 p-1.5 text-red-500 hover:bg-red-100" title="删除" aria-label="删除"><Trash2 className="h-3.5 w-3.5" /></button>
                 </div>
               </td>

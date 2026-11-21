@@ -516,6 +516,22 @@ func validPublishLocation(loc PublishLocation) bool {
 	return loc.DivisionID != "" && loc.Province != "" && loc.City != "" && loc.Longitude >= -180 && loc.Longitude <= 180 && loc.Latitude >= -90 && loc.Latitude <= 90 && !(loc.Longitude == 0 && loc.Latitude == 0)
 }
 
+// publishAddressDTO 将高德区县或 POI 转为平台发货地结构；具体兴趣点非必填，缺失时不提交空 poiId/poiName。
+func publishAddressDTO(location PublishLocation) map[string]any {
+	// address 是包含真实区县编码和高德经纬度的最小发货地载荷。
+	address := map[string]any{
+		"area": location.Area, "city": location.City, "divisionId": location.DivisionID,
+		// 闲鱼网页版发布页使用 latitude,longitude 顺序，区县中心和 POI 均保持一致。
+		"gps":  fmt.Sprintf("%s,%s", strconv.FormatFloat(location.Latitude, 'f', -1, 64), strconv.FormatFloat(location.Longitude, 'f', -1, 64)),
+		"prov": location.Province,
+	}
+	if strings.TrimSpace(location.POIID) != "" && strings.TrimSpace(location.POIName) != "" {
+		address["poiId"] = location.POIID
+		address["poiName"] = location.POIName
+	}
+	return address
+}
+
 // publishItemOnce 封装发布商品Once业务协调。
 func (c *ClientImpl) publishItemOnce(ctx context.Context, cookiesStr string, req PublishItemRequest, images, specImages []uploadedImage, category map[string]any) (*PublishItemResult, error) {
 	// imagePayloads 用于本次流程后续判断的图片Payloads
@@ -528,12 +544,13 @@ func (c *ClientImpl) publishItemOnce(ctx context.Context, cookiesStr string, req
 	cat := mapFromAny(category["categoryPredictResult"])
 	// data 用于本次流程后续判断的数据
 	data := map[string]any{
-		"freebies":         false,
-		"itemTypeStr":      "b",
-		"quantity":         strconv.Itoa(req.Quantity),
-		"simpleItem":       "true",
-		"imageInfoDOList":  imagePayloads,
-		"itemTextDTO":      map[string]any{"desc": req.Description, "title": req.Title, "titleDescSeparate": false},
+		"freebies":        false,
+		"itemTypeStr":     "b",
+		"quantity":        strconv.Itoa(req.Quantity),
+		"simpleItem":      "true",
+		"imageInfoDOList": imagePayloads,
+		// 标题和描述为两个独立输入；false 会使平台从描述中重新截取标题，忽略用户填写的 title。
+		"itemTextDTO":      map[string]any{"desc": req.Description, "title": req.Title, "titleDescSeparate": true},
 		"itemLabelExtList": publishLabels(category),
 		"itemPriceDTO":     publishPriceDTO(req),
 		"userRightsProtocols": []any{map[string]any{
@@ -565,12 +582,7 @@ func (c *ClientImpl) publishItemOnce(ctx context.Context, cookiesStr string, req
 		if !validPublishLocation(*req.Location) {
 			return nil, errors.New("发货地信息不完整，请重新定位并选择")
 		}
-		data["itemAddrDTO"] = map[string]any{
-			"area": req.Location.Area, "city": req.Location.City, "divisionId": req.Location.DivisionID,
-			// 闲鱼网页版发布页使用 latitude,longitude 的顺序。
-			"gps":   fmt.Sprintf("%s,%s", strconv.FormatFloat(req.Location.Latitude, 'f', -1, 64), strconv.FormatFloat(req.Location.Longitude, 'f', -1, 64)),
-			"poiId": req.Location.POIID, "poiName": req.Location.POIName, "prov": req.Location.Province,
-		}
+		data["itemAddrDTO"] = publishAddressDTO(*req.Location)
 	} else if !req.Virtual {
 		return nil, errors.New("发布实物商品前必须选择发货地")
 	}

@@ -11,21 +11,21 @@ export interface ManualLocationPickerProps {
   open: boolean;
   // onClose 负责关闭弹窗并终止其拥有的高德请求。
   onClose: () => void;
-  // onConfirm 将用户选中的完整高德 POI 交回普通或批量发布表单。
+  // onConfirm 将用户选中的省市区中心或可选 POI 交回发布表单。
   onConfirm: (location: PublishLocation) => void;
 }
 
 // districtLabel 生成行政区下拉框使用的展示文本。
 const districtLabel = (district: AMapDistrict): string => district.name || '未命名行政区';
 
-// locationLabel 生成 POI 候选的完整地址文本。
+// locationLabel 生成可选 POI 候选的完整地址文本。
 const locationLabel = (location: PublishLocation): string => [location.province, location.city, location.area, location.poi_name].filter(Boolean).join(' ');
 
 // ManualLocationPicker 渲染省市区级联、区县内 POI 搜索和确认操作。
 export const ManualLocationPicker: React.FC<ManualLocationPickerProps> = ({ open, onClose, onConfirm }) => {
   // locationState 保存弹窗拥有的高德行政区、POI 和异步状态。
   const locationState = useManualLocation(open);
-  // handleConfirm 只允许提交用户明确选中的高德 POI。
+  // handleConfirm 允许已选择区县且具有高德中心坐标时直接确认，详细地点非必填。
   const handleConfirm = () => {
     if (locationState.selectedLocation) onConfirm(locationState.selectedLocation);
   };
@@ -38,10 +38,10 @@ export const ManualLocationPicker: React.FC<ManualLocationPickerProps> = ({ open
           <div>
             <div className="mb-2 flex items-center gap-2 text-[11px] font-extrabold uppercase tracking-[0.18em] text-sky-600">
               <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-              AMap POI
+              高德行政区
             </div>
             <h3 id="manual-location-title" className="text-xl font-extrabold text-gray-900">手动选择发货地</h3>
-            <p className="mt-1 text-xs leading-5 text-gray-500">省市区和具体地点均来自高德，选择后会作为闲鱼发货地提交。</p>
+            <p className="mt-1 text-xs leading-5 text-gray-500">选择省、市、区县后即可确认发货地；具体地点选填。</p>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl p-2 transition-colors hover:bg-gray-100" title="关闭" aria-label="关闭手动选择发货地">
             <X className="h-5 w-5 text-gray-500" />
@@ -89,8 +89,8 @@ export const ManualLocationPicker: React.FC<ManualLocationPickerProps> = ({ open
             <div className="mb-3 flex items-center gap-2">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-600 text-white shadow-sm"><Search className="h-4 w-4" /></div>
               <div>
-                <div className="text-sm font-extrabold text-gray-900">搜索具体位置</div>
-                <div className="text-xs text-gray-500">例如：小区、街道、公司、商场或园区</div>
+                <div className="text-sm font-extrabold text-gray-900">具体地点（选填）</div>
+                <div className="text-xs text-gray-500">不需要详细地址可跳过；需要时可搜索小区、街道、公司或商场</div>
               </div>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -111,7 +111,7 @@ export const ManualLocationPicker: React.FC<ManualLocationPickerProps> = ({ open
 
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">
-              <div className="text-sm font-extrabold text-gray-900">高德地点结果</div>
+              <div className="text-sm font-extrabold text-gray-900">具体地点候选（选填）</div>
               {locationState.locations.length > 0 && <div className="text-xs font-bold text-gray-400">{locationState.locations.length} 个结果</div>}
             </div>
             {locationState.locations.length > 0 ? (
@@ -129,14 +129,14 @@ export const ManualLocationPicker: React.FC<ManualLocationPickerProps> = ({ open
                 })}
               </div>
             ) : (
-              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-400">选择区县并搜索后，地点结果会显示在这里</div>
+              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-400">只选区县也可以直接确认；需要具体地点时再搜索</div>
             )}
           </div>
         </div>
 
         <div className="modal-footer flex gap-3">
           <button type="button" onClick={onClose} className="flex-1 rounded-xl border border-gray-200 bg-white px-5 py-3.5 font-bold text-gray-700 transition-colors hover:bg-gray-50">取消</button>
-          <button type="button" onClick={handleConfirm} disabled={!locationState.selectedLocation} className="ios-btn-primary flex flex-[1.5] items-center justify-center gap-2 rounded-xl px-5 py-3.5 font-bold disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-4 w-4" />确认此发货地</button>
+          <button type="button" onClick={handleConfirm} disabled={!locationState.selectedLocation} className="ios-btn-primary flex flex-[1.5] items-center justify-center gap-2 rounded-xl px-5 py-3.5 font-bold disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-4 w-4" />确认发货地</button>
         </div>
       </div>
     </div>,

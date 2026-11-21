@@ -258,6 +258,38 @@ export const updateItem = async (cookieId: string, itemId: string, data: Partial
     return runContractRequest(/* signal 控制商品更新请求的取消和超时。 */ signal => contractClient.PUT('/api/v1/items/{cookie_id}/{item_id}', { params: { path: { cookie_id: cookieId, item_id: itemId } }, body: data as never, signal }));
 }
 
+// ItemRemoteActionResponse 是平台确认编辑/上下架且本地成功保存后的回执。
+export interface ItemRemoteActionResponse {
+  // success 只在两个步骤都完成时为 true。
+  success: boolean;
+  // message 是不含平台凭证的用户提示。
+  message: string;
+  // shelf_state 是本次明确确认的货架状态，编辑操作为空。
+  shelf_state: '' | 'on' | 'off';
+}
+
+// remoteEditItem 仅向闲鱼提交实际发生改变的标题、描述和售价。
+export const remoteEditItem = async (cookieId: string, itemId: string, fields: {
+  /** item_title 是可选的原始标题变更。 */ item_title?: string;
+  /** item_description 是可选的描述变更。 */ item_description?: string;
+  /** item_price 是可选的十进制人民币价格。 */ item_price?: string;
+}): Promise<ItemRemoteActionResponse> =>
+  runContractRequest(/* signal 控制用户确认的单件平台编辑请求。 */ signal => contractClient.POST('/api/v1/items/{cookie_id}/{item_id}/remote-edit', {
+    params: { path: { cookie_id: cookieId, item_id: itemId } }, body: fields, signal,
+  })) as Promise<ItemRemoteActionResponse>;
+
+// setItemShelf 只向平台发送一次明确确认的上架或下架请求，不自动重试。
+export const setItemShelf = async (cookieId: string, itemId: string, operation: 'downshelf' | 'reshelf'): Promise<ItemRemoteActionResponse> => {
+  if (operation === 'downshelf') {
+    return runContractRequest(/* signal 控制已确认的下架请求。 */ signal => contractClient.POST('/api/v1/items/{cookie_id}/{item_id}/downshelf', {
+      params: { path: { cookie_id: cookieId, item_id: itemId } }, signal,
+    })) as Promise<ItemRemoteActionResponse>;
+  }
+  return runContractRequest(/* signal 控制已确认的重新上架请求。 */ signal => contractClient.POST('/api/v1/items/{cookie_id}/{item_id}/reshelf', {
+    params: { path: { cookie_id: cookieId, item_id: itemId } }, signal,
+  })) as Promise<ItemRemoteActionResponse>;
+};
+
 /** 读取指定账号与商品的详情，用于编辑器恢复表单，并将生成传输 DTO 保持在 feature adapter 边界。 */
 export const getItemDetail = async (accountID: string, itemID: string): Promise<ItemDetailResponse> => {
   // response 保存已由 OpenAPI 路径类型约束的商品详情传输响应。

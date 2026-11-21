@@ -6,6 +6,7 @@ import { estimatePublishSeconds, formatDuration } from '../publishEstimate';
 import { selectionState, toggleAllVisible } from '../selection';
 import type { LibraryAccountOption, LibraryLocationFieldComponent, LibraryPublishLocation, LibraryPublishPreview, ProductTemplate } from '../types';
 import { SelectAllCheckbox } from './SelectAllCheckbox';
+import { readLastPublishLocation, saveLastPublishLocation } from '../../../../shared/browser/publishLocationPreference';
 
 /** TemplatePublishDialogProps 描述模板发布弹窗。 */
 export interface TemplatePublishDialogProps {
@@ -32,7 +33,7 @@ export const TemplatePublishDialog = ({ templates, accounts, locationField: Loca
   // onlyInvalid 为真时预检表只显示需修正的行，仅影响展示，不影响确认发布。
   const [onlyInvalid, setOnlyInvalid] = useState(false);
   // location 是用户选择的发货地，空表示不指定；更换后旧预检失效。
-  const [location, setLocation] = useState<LibraryPublishLocation | null>(null);
+  const [location, setLocation] = useState<LibraryPublishLocation | null>(readLastPublishLocation);
   // preview 是最近一次预检结果。
   const [preview, setPreview] = useState<LibraryPublishPreview | null>(null);
   // busy 表示预检或启动请求进行中。
@@ -144,9 +145,9 @@ export const TemplatePublishDialog = ({ templates, accounts, locationField: Loca
             <fieldset className="space-y-2">
               <legend className="text-sm font-extrabold text-gray-900">发货地</legend>
               <Suspense fallback={<p className="text-xs text-gray-500">加载中...</p>}>
-                <LocationField value={location} onChange={/* 更换发货地并使旧预检失效。 */ next => { setLocation(next); setPreview(null); }} />
+                <LocationField value={location} onChange={/* 用户明确更换发货地时保存偏好并使预检失效。 */ next => { setLocation(next); saveLastPublishLocation(next); setPreview(null); }} />
               </Suspense>
-              <p className="text-xs text-gray-500">发货地对本次全部商品生效，选择后带有经纬度与具体地点，与商品管理发布一致；不选则沿用账号平台默认。</p>
+              <p className="text-xs text-gray-500">自动沿用上次选择的地址；选到区县即可发布，详细地点选填。不需要发货地时可清除并沿用平台默认。</p>
             </fieldset>
           )}
           <p className="text-xs text-gray-500">将生成 {rowCount} 行（模板 × 账号），确认后逐个排队发布{rowCount > 1 ? `，按当前间隔${formatDuration(estimatePublishSeconds(rowCount, interval))}起` : ''}；遇到风控或登录失效会自动停止剩余发布。</p>

@@ -3,8 +3,9 @@ import { act,renderHook } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach,beforeEach,describe,expect,test,vi } from 'vitest';
 import type { Item } from './api';
-import { createItem,deleteItem,getPublishLocations,publishItem,recommendPublishCategory,syncItemsFromAccount,updateItem } from './api';
+import { createItem,deleteItem,getPublishLocations,publishItem,remoteEditItem,recommendPublishCategory,setItemShelf,syncItemsFromAccount,updateItem } from './api';
 import { useItemActions,type ItemActionsOptions } from './itemActions';
+import { readLastPublishLocation } from '../../../shared/browser/publishLocationPreference';
 
 vi.mock('./api', /* itemActionsApiMockFactory 提供商品动作 Hook 的确定性 API 替身。 */ () => ({
   createItem: vi.fn(),
@@ -12,6 +13,8 @@ vi.mock('./api', /* itemActionsApiMockFactory 提供商品动作 Hook 的确定�
   getPublishLocations: vi.fn(),
   itemErrorMessage: /* errorMessageMock 将测试动作中的异常转换为稳定回退文本。 */ (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback,
   publishItem: vi.fn(),
+  remoteEditItem: vi.fn(),
+  setItemShelf: vi.fn(),
   recommendPublishCategory: vi.fn(),
   syncItemsFromAccount: vi.fn(),
   updateItem: vi.fn(),
@@ -31,6 +34,10 @@ const recommendPublishCategoryMock = vi.mocked(recommendPublishCategory);
 const syncItemsMock = vi.mocked(syncItemsFromAccount);
 // updateItemMock 是商品编辑接口的可控替身。
 const updateItemMock = vi.mocked(updateItem);
+// remoteEditMock 是经二次确认的真实平台商品编辑请求替身。
+const remoteEditMock = vi.mocked(remoteEditItem);
+// shelfMock 是经二次确认的单件上下架请求替身。
+const shelfMock = vi.mocked(setItemShelf);
 
 // itemFixture 是商品动作 Hook 使用的商品样本。
 const itemFixture: Item = { id: 'item-1', cookie_id: 'account-1', item_id: 'item-1', item_title: '旧标题', item_price: '10', item_description: '', item_category: '', item_detail: '', item_image: '' } as Item;
@@ -63,6 +70,7 @@ const useItemActionsHarness = () => {
 describe('useItemActions', /* 当前回调验证商品普通操作、发布和定位边界。 */ () => {
   beforeEach(/* 当前回调重置商品动作 API 和浏览器交互替身。 */ () => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     createItemMock.mockResolvedValue({ success: true });
     deleteItemMock.mockResolvedValue({ success: true });
     locationsMock.mockResolvedValue([locationFixture]);
@@ -70,11 +78,13 @@ describe('useItemActions', /* 当前回调验证商品普通操作、发布和�
     recommendPublishCategoryMock.mockResolvedValue({ success: true, category: { cat_id: '5001', cat_name: '虚拟服务', channel_cat_id: '6001', tb_cat_id: '7001' } });
     syncItemsMock.mockResolvedValue({ success: true, message: '同步完成', total_count: 1, total_pages: 1, saved_count: 1, deleted_count: 0 });
     updateItemMock.mockResolvedValue({ success: true });
+    remoteEditMock.mockResolvedValue({ success: true, message: '编辑成功', shelf_state: '' });
+    shelfMock.mockResolvedValue({ success: true, message: '下架成功', shelf_state: 'off' });
     vi.stubGlobal('alert', vi.fn());
     vi.stubGlobal('confirm', vi.fn(() => true));
   });
 
-  afterEach(/* 当前回调清理商品动作测试的全局替身。 */ () => vi.unstubAllGlobals());
+  afterEach(/* 当前回调清理商品动作测试的全局替身及本地地址偏好。 */ () => { vi.unstubAllGlobals(); window.localStorage.clear(); });
 
   test('同步、编辑、添加和删除商品均刷新或更新列表', /* 当前回调验证商品 CRUD 动作协调。 */ async () => {
     // hook 是商品动作 Hook 的真实 React 状态实例。
@@ -94,6 +104,44 @@ describe('useItemActions', /* 当前回调验证商品普通操作、发布和�
     await act(/* 当前回调删除商品。 */ async () => hook.result.current.actions.handleDelete(itemFixture));
     expect(deleteItemMock).toHaveBeenCalledWith('account-1', 'item-1');
     expect(hook.result.current.items).toEqual([]);
+    hook.unmount();
+  });
+
+  test('同步编辑闲鱼只提交发生变化的字段，且不误用本地保存接口', /* remoteEditSingleItemCase 验证明确变更与确认机制。 */ async () => {
+    // hook 是独立商品编辑状态容器，不会调用真实平台。
+    const hook = renderHook(/* remoteEditHarnessFactory 创建平台商品编辑场景。 */ () => useItemActionsHarness());
+    act(/* openEditAction 打开原商品编辑草稿。 */ () => hook.result.current.actions.handleEdit(itemFixture));
+    act(/* changePriceAction 只修改商品售价。 */ () => hook.result.current.actions.setEditForm(current => ({ ...current, item_price: '9.90' })));
+    await act(/* confirmedEditAction 用户确认后执行真实平台编辑回调。 */ async () => hook.result.current.actions.handleSaveRemoteEdit());
+    expect(remoteEditMock).toHaveBeenCalledWith('account-1', 'item-1', { item_price: '9.90' });
+    expect(updateItemMock).not.toHaveBeenCalled();
+    expect(hook.result.current.loadItems).toHaveBeenCalled();
+    hook.unmount();
+  });
+
+  test('取消确认时不得编辑平台或下架商品', /* cancelRemoteActionCase 验证取消操作不会发真实请求。 */ async () => {
+    vi.stubGlobal('confirm', vi.fn(/* rejectConfirmation 模拟用户取消真实平台操作。 */ () => false));
+    // hook 是独立操作容器，所有 API 都使用 Vitest 替身。
+    const hook = renderHook(/* rejectedActionHarnessFactory 创建拒绝确认的商品管理场景。 */ () => useItemActionsHarness());
+    act(/* openEditAction 打开商品编辑弹窗。 */ () => hook.result.current.actions.handleEdit(itemFixture));
+    act(/* changeTitleAction 提供要取消提交的新标题。 */ () => hook.result.current.actions.setEditForm(current => ({ ...current, item_title: '拟修改但取消' })));
+    await act(/* cancelEditAction 用户取消同步编辑。 */ async () => hook.result.current.actions.handleSaveRemoteEdit());
+    await act(/* cancelDownShelfAction 用户取消下架。 */ async () => hook.result.current.actions.handleSetShelf(itemFixture));
+    expect(remoteEditMock).not.toHaveBeenCalled();
+    expect(shelfMock).not.toHaveBeenCalled();
+    hook.unmount();
+  });
+
+  test('下架与重新上架只在对应状态提交一次请求', /* explicitShelfActionsCase 验证上下架行为不混淆。 */ async () => {
+    // hook 是包含本地货架标记的独立操作场景。
+    const hook = renderHook(/* shelfHarnessFactory 创建上下架模拟请求场景。 */ () => useItemActionsHarness());
+    await act(/* downShelfAction 用户确认在售商品下架。 */ async () => hook.result.current.actions.handleSetShelf(itemFixture));
+    expect(shelfMock).toHaveBeenCalledWith('account-1', 'item-1', 'downshelf');
+    // offItem 是已经由平台确认下架的商品，本次可尝试恢复上架。
+    const offItem = { ...itemFixture, item_detail: '{"shelf_state":"off"}' };
+    await act(/* reshelfAction 用户确认重新上架。 */ async () => hook.result.current.actions.handleSetShelf(offItem));
+    expect(shelfMock).toHaveBeenCalledWith('account-1', 'item-1', 'reshelf');
+    expect(shelfMock).toHaveBeenCalledTimes(2);
     hook.unmount();
   });
 
@@ -152,6 +200,10 @@ describe('useItemActions', /* 当前回调验证商品普通操作、发布和�
     act(/* 当前回调设置定位使用的普通发布账号。 */ () => hook.result.current.actions.setPublishForm(current => ({ ...current, cookie_id: 'account-1' })));
     await act(/* 当前回调加载普通发布发货地。 */ async () => hook.result.current.actions.locateForPublish(false));
     expect(locationsMock).toHaveBeenCalledWith(120, 30, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(hook.result.current.actions.publishLocation).toEqual(locationFixture);
+    expect(readLastPublishLocation()).toEqual(locationFixture);
+    act(/* 重新打开普通发布弹窗前清除当前表单选择，模拟成功发布后的重置。 */ () => hook.result.current.actions.setPublishLocation(null));
+    act(/* 新一轮发布自动恢复之前定位得到的发货地。 */ () => hook.result.current.actions.openPublishModal());
     expect(hook.result.current.actions.publishLocation).toEqual(locationFixture);
     await act(/* 当前回调加载批量发布发货地。 */ async () => hook.result.current.actions.locateForPublish(true));
     expect(hook.result.current.actions.locationLoading).toBe(false);

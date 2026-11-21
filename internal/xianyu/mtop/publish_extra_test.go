@@ -24,6 +24,45 @@ type dispatchTransport struct {
 	handlers map[string]http.HandlerFunc
 }
 
+// TestPublishItemPreservesIndependentTitle 验证标题和描述不同时发布载荷明确启用标题分离，避免闲鱼用描述开头覆盖标题。
+func TestPublishItemPreservesIndependentTitle(t *testing.T) {
+	// expectedTitle 是用户单独填写的商品标题。
+	const expectedTitle = "2027年考研复习资料｜真题与笔记电子版"
+	// description 是与标题不同的商品详情，用于验证标题不会被描述覆盖。
+	const description = "这是一份电子资料合集，包含真题、笔记及使用说明，付款后交付。"
+	// publishedText 保存平台最终接收的文案字段。
+	var publishedText map[string]any
+	// transport 只模拟本地上传及发布响应，绝不请求真实闲鱼。
+	transport := &dispatchTransport{handlers: map[string]http.HandlerFunc{
+		"_upload": func(w http.ResponseWriter, _ *http.Request) {
+			fmt.Fprint(w, `{"object":{"url":"https://cdn.example/main.jpg","pix":"800x600"}}`)
+		},
+		"mtop.idle.pc.idleitem.publish": func(w http.ResponseWriter, r *http.Request) {
+			// payload 是本次发布请求的结构化数据，textDTO 是独立标题和描述。
+			payload, _ := parseDataURL(readBody(r))
+			publishedText, _ = payload["itemTextDTO"].(map[string]any)
+			fmt.Fprint(w, `{"ret":["SUCCESS::调用成功"],"data":{"itemId":"title-test-1"}}`)
+		},
+	}}
+	// client 使用测试传输，并传入已选定的类目以跳过推荐网络请求。
+	client := &ClientImpl{HTTPClient: &http.Client{Transport: transport}}
+	// result、err 保存不包含任何真实账号调用的发布结果。
+	result, err := client.PublishItem(context.Background(), consignCookies, PublishItemRequest{
+		Title: expectedTitle, Description: description, PriceCents: 990, Quantity: 1, Virtual: true,
+		PreferredCategory: &PublishCategory{CatID: "5001", CatName: "电子资料", ChannelCatID: "6001"},
+		Images:            []PublishImage{{Filename: "main.png", ContentType: "image/png", Data: tinyPNG(t)}},
+	})
+	if err != nil || result == nil || result.ItemID != "title-test-1" {
+		t.Fatalf("发布模拟应成功: result=%+v err=%v", result, err)
+	}
+	if publishedText["title"] != expectedTitle || publishedText["desc"] != description || publishedText["titleDescSeparate"] != true {
+		t.Fatalf("标题必须独立于描述，不能要求平台从描述生成标题: %+v", publishedText)
+	}
+	if result.Title != expectedTitle {
+		t.Fatalf("本地结果标题应保持原始标题: %q", result.Title)
+	}
+}
+
 // RoundTrip 封装RoundTrip业务协调。
 func (d *dispatchTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// rec 用于本次流程后续判断的rec

@@ -13,6 +13,7 @@ retryFailedItemPublishBatch,
 startItemPublishBatch,
 } from './api';
 import { useItemPublishBatch } from './hooks';
+import { saveLastPublishLocation } from '../../../shared/browser/publishLocationPreference';
 
 vi.mock('./api', /* itemsApiMockFactory 提供批量发布 Hook 的确定性 API 替身。 */ () => ({
   cancelItemPublishBatch: vi.fn(),
@@ -52,6 +53,7 @@ const failedBatchFixture: ItemPublishBatchResponse = { ...runningBatchFixture, s
 describe('useItemPublishBatch', /* 当前回调处理批量发布的表单、任务和异常状态。 */ () => {
   beforeEach(/* 当前回调重置批量 API 和浏览器交互替身。 */ () => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     getBatchesMock.mockResolvedValue([runningBatchFixture]);
     getBatchMock.mockResolvedValue(runningBatchFixture);
     recommendCategoryMock.mockResolvedValue({ success: true, category: { cat_id: 'cat-1', cat_name: '服饰', channel_cat_id: 'channel-1', tb_cat_id: 'tb-1' } } satisfies CategoryRecommendationResponse);
@@ -64,6 +66,18 @@ describe('useItemPublishBatch', /* 当前回调处理批量发布的表单、任
     vi.stubGlobal('alert', vi.fn());
     // confirmMock 默认允许继续执行危险操作。
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+  });
+
+  test('批量发布重新打开后自动使用上次选过的区县发货地', /* 验证跨发布入口的浏览器偏好回填。 */ async () => {
+    // districtLocation 是无需详细 POI 的高德区县中心测试值。
+    const districtLocation = { province: '浙江省', city: '杭州市', area: '西湖区', division_id: '330106', longitude: 120.12, latitude: 30.25, poi_id: '', poi_name: '' };
+    saveLastPublishLocation(districtLocation);
+    getBatchesMock.mockResolvedValueOnce([]);
+    // hook 是读取浏览器偏好并打开批量发布弹窗的真实状态容器。
+    const hook = renderHook(/* 批量发布恢复上次选址的测试 Hook。 */ () => useItemPublishBatch({ selectedAccount: 'account-1', loadItems: async () => undefined, loadShippingRules: async () => undefined }));
+    await act(/* 打开批量发布并完成最近任务检查。 */ async () => hook.result.current.openBatchModal());
+    expect(hook.result.current.batchLocation).toEqual(districtLocation);
+    hook.unmount();
   });
 
   test('可以恢复任务、预检、启动、取消和重试批量发布', /* 当前回调验证批量流程的主要成功路径。 */ async () => {

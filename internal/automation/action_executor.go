@@ -101,6 +101,11 @@ type consignWithDeliveryClient interface {
 	ConsignContextWithDelivery(context.Context, string, string, string, []string) (bool, []string, string, error)
 }
 
+// redFlowerClient 是原生求小红花的可选 MTOP 能力；没有实现该能力的旧测试客户端只影响显式求花规则。
+type redFlowerClient interface {
+	RequestRedFlowerContext(context.Context, string, string) (bool, []string, string, error)
+}
+
 // freeShippingClient 是砍价订单确认发货所需的可选 MTOP 能力；普通订单继续通过既有虚拟发货接口处理。
 type freeShippingClient interface {
 	FreeShippingContext(context.Context, string, string, string, string) (bool, []string, string, error)
@@ -129,6 +134,8 @@ func (e *automationActionExecutor) executeActionWithProof(ctx context.Context, t
 	switch action.ActionType {
 	case ActionConfirmShipment:
 		return actionExecutionResult{}, e.confirmShipmentWithProof(ctx, task, proof)
+	case ActionRequestRedFlower:
+		return actionExecutionResult{}, e.requestRedFlower(ctx, task)
 	case ActionAdjustPrice:
 		// sent、err 保存订单改价动作的结果数量和错误。
 		sent, err := e.adjustOrderPrice(ctx, task, action)

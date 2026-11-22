@@ -50,6 +50,11 @@ func TestParseReviewRuleConfig(t *testing.T) {
 	if cfg.AfterShippedHours != 72 || cfg.MaxAttempts != 1 {
 		t.Fatalf("非正值应忽略: %+v", cfg)
 	}
+	// 确认收货立即求评价的布尔开关应被读取。
+	cfg = parseReviewRuleConfig(`{"trigger_on_completed":true}`)
+	if !cfg.TriggerOnCompleted {
+		t.Fatalf("trigger_on_completed 未生效: %+v", cfg)
+	}
 }
 
 // TestSchedulerQuarantineSuccess 验证恢复任务成功隔离时返回 nil，并把运行状态写成 needs_review。
@@ -338,6 +343,41 @@ func TestReviewRequestRuleDueUsesRepeatIntervalAfterFirstAttempt(t *testing.T) {
 	order.LastReviewRequestAt = time.Now().UTC().Add(-25 * time.Hour).Format("2006-01-02 15:04:05")
 	if !reviewRequestRuleDue(order, rule) {
 		t.Fatal("repeat request should be due after repeat_interval_hours")
+	}
+}
+
+// TestReviewRequestRuleDueTriggeredOnCompleted 验证立即模式只在确认收货后触发首次求评价，后续提醒仍按重复间隔。
+func TestReviewRequestRuleDueTriggeredOnCompleted(t *testing.T) {
+	// rule 是确认收货后立即发送、最多两次的求评价规则。
+	rule := db.AutomationRule{ConfigJSON: `{"trigger_on_completed":true,"repeat_interval_hours":24,"max_attempts":2}`}
+	// unfinished 是尚未确认收货的订单，调度器不得提前发送。
+	unfinished := db.Order{
+		OrderID:       "completed-unfinished",
+		SystemShipped: true,
+		ShippedAt:     time.Now().UTC().Add(-96 * time.Hour).Format("2006-01-02 15:04:05"),
+	}
+	if reviewRequestRuleDue(unfinished, rule) {
+		t.Fatal("未确认收货时不应触发立即求评价")
+	}
+	// completed 是刚刚确认收货且尚未求评价的订单，应立即 due。
+	completed := db.Order{
+		OrderID:       "completed-now",
+		SystemShipped: true,
+		ShippedAt:     time.Now().UTC().Add(-96 * time.Hour).Format("2006-01-02 15:04:05"),
+		CompletedAt:   time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05"),
+	}
+	if !reviewRequestRuleDue(completed, rule) {
+		t.Fatal("确认收货后应立即 due")
+	}
+	// 已发送首次后必须等待重复间隔，不能因完成事件再次立即发送。
+	completed.ReviewRequestCount = 1
+	completed.LastReviewRequestAt = time.Now().UTC().Add(-23 * time.Hour).Format("2006-01-02 15:04:05")
+	if reviewRequestRuleDue(completed, rule) {
+		t.Fatal("首次求评价后未到重复间隔不应 due")
+	}
+	completed.LastReviewRequestAt = time.Now().UTC().Add(-25 * time.Hour).Format("2006-01-02 15:04:05")
+	if !reviewRequestRuleDue(completed, rule) {
+		t.Fatal("首次求评价后达到重复间隔应 due")
 	}
 }
 

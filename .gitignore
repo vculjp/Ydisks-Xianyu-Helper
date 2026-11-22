@@ -3,6 +3,7 @@
 /xianyu-server
 /xianyu-init-admin
 /init-admin
+/dist/
 *.exe
 *.exe~
 *.test

@@ -1,7 +1,7 @@
 import { Bell,Mail,MessageCircle,Send as Telegram,Webhook } from 'lucide-react';
 import { buildEmailChannelConfig,enableCustomSMTP,normalizeEmailChannelConfig } from '../../../notificationEmailConfig';
 import type { NotificationChannel,NotificationChannelType,NotificationEventType,SystemSettings } from './api';
-import type { NotificationChannelMeta,NotificationEventMeta,NotificationForm,NotificationPayload } from './types';
+import type { NotificationAction,NotificationChannelMeta,NotificationEventMeta,NotificationForm,NotificationPayload } from './types';
 import { normalizeNotificationEventTypes } from './models';
 
 // notificationChannelTypes 是所有通知渠道的静态字段、图标和使用指南。
@@ -97,6 +97,9 @@ export const normalizeNotificationForm = (channel: NotificationChannel, smtp: Sy
     : { ...(channel.config || {}) };
   return { name: channel.name, type: channel.type, enabled: channel.enabled, config, event_types: normalizeNotificationEventTypes(channel.event_types || []) };
 };
+
+/** notificationActionKey 生成跨按钮复用的渠道动作键，渠道 ID 与动作共同限定唯一请求。 */
+export const notificationActionKey = (channelId: string, action: NotificationAction): string => `${action}:${channelId}`;
 
 // validateNotificationForm 校验渠道名称、渠道字段和独立 SMTP 必填项。
 export const validateNotificationForm = (form: NotificationForm): string => {

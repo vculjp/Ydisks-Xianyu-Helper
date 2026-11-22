@@ -71,8 +71,11 @@ describe('online chat UI contract', () => {
 
 	test('sidebar exposes collapse control and chat primary navigation', () => {
 		const sidebar = source('shared/ui/Sidebar.tsx'); /* sidebar 表示sidebar。 */
-		expect(sidebar).toContain("id: 'chat'");
+		const navigation = source('shared/ui/consoleNavigation.ts'); /* navigation 是侧栏和面包屑共用的唯一导航元数据。 */
+		expect(navigation).toContain("id: 'chat'");
 		expect(sidebar).toContain('onToggleCollapsed');
-		expect(sidebar).toContain('collapsed ? \'w-16\' : \'w-64\'');
+		expect(sidebar).toContain('console-sidebar');
+		expect(sidebar).toContain("mobileOpen ? 'visible translate-x-0 is-mobile-open' : 'invisible -translate-x-full'");
+		expect(sidebar).toContain('is-mobile-open');
 	} /* 测试回调断言侧边栏折叠控制和聊天主导航入口。 */);
 } /* 测试套件回调汇总聊天页面结构契约。 */);

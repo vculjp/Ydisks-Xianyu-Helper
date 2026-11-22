@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
-import { describe, expect, test, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import Sidebar from './Sidebar';
 
 describe('Sidebar', /* 当前测试组验证全局聊天新消息状态在侧边栏中的可见标记。 */ () => {
+  afterEach(/* 当前回调清理每个用例挂载的侧边栏 DOM。 */ () => cleanup());
   test('发货模板入口位于自动化规则上方', /* 当前回调验证两个相关自动化入口保持连续且符合操作顺序。 */ () => {
     // navigationHandler 是侧边栏导航测试使用的无副作用回调。
     const navigationHandler = vi.fn();
@@ -15,6 +16,8 @@ describe('Sidebar', /* 当前测试组验证全局聊天新消息状态在侧边
     const buildInfo = { version: 'dev', commit: 'test' };
     render(<Sidebar activeTab="dashboard" collapsed={false} onToggleCollapsed={collapseHandler} onNavigate={navigationHandler} onLogout={logoutHandler} buildInfo={buildInfo} />);
 
+    // configurationToggle 是配置分组标题按钮，测试先展开分组再检查子入口顺序。
+    fireEvent.click(screen.getByRole('button', { name: '配置' }));
     // navigationLabels 保存侧边栏按钮的可见顺序，包含业务入口和底部操作入口。
     const navigationLabels = screen.getAllByRole('button').map(/* button 是当前侧边栏中的可见按钮。 */ button => button.textContent?.trim() || '');
     expect(navigationLabels.indexOf('发货模板')).toBe(navigationLabels.indexOf('自动化规则') - 1);
@@ -41,6 +44,8 @@ describe('Sidebar', /* 当前测试组验证全局聊天新消息状态在侧边
         hasUnreadChatMessage
       />,
     );
+    // chatGroupToggle 是客服分组标题按钮，展开后才能看到在线聊天入口及其未读标记。
+    fireEvent.click(screen.getByRole('button', { name: '客服' }));
     // unreadIndicator 表示挂载在聊天图标右上角的未读提示元素。
     const unreadIndicator = screen.getByLabelText('在线聊天有未读消息');
     expect(unreadIndicator).toBeTruthy();

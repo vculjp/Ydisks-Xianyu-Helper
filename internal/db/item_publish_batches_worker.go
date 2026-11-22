@@ -389,7 +389,7 @@ func (b *ItemPublishBatches) ResetFailed(ctx context.Context, batchID string) er
 		`UPDATE item_publish_batch_rows
 			    SET status='pending',error_message='',failure_kind='',worker_token='',updated_at=CURRENT_TIMESTAMP
 			  WHERE batch_id=? AND status='failed'
-			    AND COALESCE(failure_kind,'') NOT IN ('validation','uncertain_remote')`, batchID)
+			    AND COALESCE(failure_kind,'') NOT IN ('validation','uncertain_remote','pc_unsupported')`, batchID)
 	return err
 }
 

@@ -258,25 +258,31 @@ func parseMarketItemDetailData(data map[string]any, fallbackItemID string) (*Mar
 	// transportFee 判断邮费是否为 0（包邮/无需邮寄）。
 	transportFee := strings.TrimSpace(mtopString(itemDO["transportFee"]))
 
+	// area 是平台商品展示地区，并非当前发布账号的真实发货坐标。
+	area := strings.TrimSpace(firstNonEmptyString(mtopString(sellerDO["city"]), mtopString(itemDO["city"])))
+	// source 附带只读商品详情确认的发布元数据；部分字段缺失时保留待核实清单。
+	source := parseMarketSourceInfo(data, itemDO, itemID, area)
 	return &MarketCollectedItem{
-		ItemID:          itemID,
-		Title:           title,
-		Description:     description,
-		Price:           price,
-		OriginalPrice:   originalPrice,
-		PicURL:          picURL,
-		ImageURLs:       images,
-		Area:            strings.TrimSpace(firstNonEmptyString(mtopString(sellerDO["city"]), mtopString(itemDO["city"]))),
-		SellerID:        firstNonEmptyString(mtopString(sellerDO["sellerId"]), mtopString(itemDO["userId"])),
-		SellerNick:      firstNonEmptyString(mtopString(sellerDO["nick"]), mtopString(sellerDO["uniqueName"])),
-		WantCount:       extractWantCount(itemDO, nil, nil),
-		BrowseCount:     mtopInt(itemDO["browseCnt"]),
-		CategoryID:      firstNonEmptyString(mtopString(itemDO["categoryId"]), mtopString(itemDO["catId"])),
-		IsFreeShipping:  transportFee == "0" || transportFee == "0.00",
-		IsMultiSpec:     len(skuList) > 0,
-		HasFullDetail:   description != "" && len(images) > 0,
-		PublishTimeUnix: extractPublishTimeUnix(itemDO, nil, nil),
-		WebURL:          "https://www.goofish.com/item?id=" + itemID,
+		ItemID:           itemID,
+		Title:            title,
+		Description:      description,
+		Price:            price,
+		OriginalPrice:    originalPrice,
+		PicURL:           picURL,
+		ImageURLs:        images,
+		Area:             area,
+		SellerID:         firstNonEmptyString(mtopString(sellerDO["sellerId"]), mtopString(itemDO["userId"])),
+		SellerNick:       firstNonEmptyString(mtopString(sellerDO["nick"]), mtopString(sellerDO["uniqueName"])),
+		WantCount:        extractWantCount(itemDO, nil, nil),
+		BrowseCount:      mtopInt(itemDO["browseCnt"]),
+		BrowseCountKnown: optionalItemCount(itemDO["browseCnt"]) != nil,
+		CategoryID:       source.Category.CatID,
+		Source:           source,
+		IsFreeShipping:   transportFee == "0" || transportFee == "0.00",
+		IsMultiSpec:      len(source.Specs) > 0 || len(skuList) > 0 || lenArray(itemDO["itemSkuList"]) > 0,
+		HasFullDetail:    description != "" && len(images) > 0,
+		PublishTimeUnix:  extractPublishTimeUnix(itemDO, nil, nil),
+		WebURL:           "https://www.goofish.com/item?id=" + itemID,
 	}, nil
 }
 

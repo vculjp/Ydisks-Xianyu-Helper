@@ -1,8 +1,10 @@
 import {
+  AlertCircle,
 Check,
 ChevronDown,
 Database,
 Eye,EyeOff,
+  Loader2,
 LockKeyhole,
 RefreshCw,
 Save,
@@ -15,16 +17,17 @@ import React from 'react';
 import { DEFAULT_AI_API_URL,LOG_LEVELS } from '../constants';
 import { useNotificationSoundPreference } from '../../../../shared/browser/notificationSound';
 import { useSettings } from '../hooks';
+import { AsyncStateView } from '../../../../shared/ui/feedback';
 import { PageHeader } from '../../../../shared/ui/PageHeader';
 
 // Settings 展示系统配置、AI 模型和登录凭据编辑页面。
 const Settings: React.FC = () => {
   // featureState 是 Settings Hook 提供的状态与动作集合。
   const {
-    settings, loading, loadError, saving, saveError, aiModels, modelsLoading, modelError, modelDropdownOpen,
+    settings, loading, loadError, hasUnsavedChanges, saving, saveError, aiModels, modelsLoading, modelError, modelDropdownOpen,
     showApiKey, showCaptchaSecret, showCurrentPassword, showNewPassword, credentialsSaving, credentialsMessage,
     credentials, modelPickerRef, loadSettings, loadAIModels, testConnection, connectionTestLoading,
-    connectionTestMessage, handleSave, handleCredentialsSave,
+    connectionTestMessage, handleSave, handleRemoteCookieToggle, handleCredentialsSave,
     setSettings, setModelDropdownOpen, setShowApiKey, setShowCaptchaSecret, setShowCurrentPassword,
     setShowNewPassword, setCredentials,
   } = useSettings();
@@ -33,14 +36,15 @@ const Settings: React.FC = () => {
 
   if (!settings) {
     return (
-      <div className="p-8 text-center text-gray-400 space-y-3">
-        {loadError || (loading ? '加载配置中...' : '暂无配置')}
-        {!loading && loadError && (
-          <div>
-            <button type="button" className="ios-btn-primary px-4 py-2 rounded-xl" onClick={loadSettings}>重新加载</button>
-          </div>
-        )}
-      </div>
+      <AsyncStateView
+        loading={loading}
+        error={loadError || undefined}
+        empty={!loading && !loadError}
+        onRetry={/* 首次读取失败或空配置时允许用户重新请求系统设置。 */ () => void loadSettings()}
+        loadingText="正在加载系统配置"
+        emptyTitle="暂无系统配置"
+        emptyDescription="服务端尚未返回可编辑的系统配置。"
+      />
     );
   }
 
@@ -50,37 +54,52 @@ const Settings: React.FC = () => {
   const visibleAIModels = aiModels;
 
   return (
-    <div className="min-w-0 space-y-8 animate-fade-in">
+    <div className="min-w-0 space-y-6 animate-fade-in">
       <PageHeader title="系统设置" description="配置全局自动化规则与系统参数">
-        <button
-          onClick={loadSettings}
-          className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl font-bold text-gray-700 flex items-center gap-2 transition-colors"
-        >
-          <RefreshCw className="w-4 h-4" />
-          刷新
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {hasUnsavedChanges && <span className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">有未保存修改</span>}
+          <button
+            type="button"
+            onClick={/* 用户刷新远端配置时由 Hook 检查未保存草稿并请求确认。 */ () => void loadSettings()}
+            disabled={loading}
+            className="ios-btn-secondary inline-flex items-center gap-2 disabled:cursor-wait disabled:opacity-60"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {loading ? '刷新中...' : '刷新'}
+          </button>
+        </div>
       </PageHeader>
 
+      {loadError && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+          <span className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            刷新远端配置失败：{loadError}
+          </span>
+          <button type="button" className="ios-btn-secondary" onClick={/* 刷新失败后保留当前草稿并允许重试。 */ () => void loadSettings()}>重新加载</button>
+        </div>
+      )}
+
       {saveError && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
           <span>{saveError}</span>
           <button type="button" className="font-bold underline" onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => void handleSave()}>重试保存</button>
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Left Column */}
         <div className="space-y-8">
           {/* Basic Settings */}
           <section className="space-y-4">
-            <h3 className="text-lg font-extrabold text-gray-800 flex items-center gap-2">
+            <h3 className="flex items-center gap-2 text-[15px] font-semibold text-slate-900">
                 <div className="p-1.5 rounded-lg bg-gray-100 text-gray-600">
                     <Database className="w-4 h-4" />
                 </div>
                 基础设置
             </h3>
 
-            <div className="ios-card rounded-xl p-6 bg-white space-y-4">
+            <div className="ios-card space-y-4 rounded-lg bg-white p-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-3">
                   <label className="block text-sm font-bold text-gray-800">日志输出等级</label>
@@ -142,14 +161,14 @@ const Settings: React.FC = () => {
 
           {/* AI Configuration */}
           <section className="space-y-4">
-            <h3 className="text-lg font-extrabold text-gray-800 flex items-center gap-2">
+            <h3 className="flex items-center gap-2 text-[15px] font-semibold text-slate-900">
                 <div className="p-1.5 rounded-lg bg-brand text-white">
                     <Sparkles className="w-4 h-4" />
                 </div>
                 AI 智能回复配置
             </h3>
 
-            <div className="ios-card rounded-xl p-6 bg-white space-y-6">
+            <div className="ios-card space-y-5 rounded-lg bg-white p-5">
               <div className="space-y-3">
                 <label className="block text-sm font-bold text-gray-800">API 地址</label>
                 <input
@@ -213,7 +232,7 @@ const Settings: React.FC = () => {
                       <ChevronDown className={`w-4 h-4 transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
                     </button>
                     {modelDropdownOpen && (
-                      <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-40 max-h-64 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl shadow-gray-200/70 py-1">
+                      <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-40 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
                         {visibleAIModels.length > 0 ? (
                           visibleAIModels.map(/* 当前回调处理集合中的单个元素。 */ model => (
                             <button
@@ -268,7 +287,7 @@ const Settings: React.FC = () => {
                 )}
               </div>
 
-              <div className="p-3 bg-blue-50 rounded-xl text-xs text-blue-700">
+              <div className="rounded-lg bg-blue-50 p-3 text-xs text-blue-700">
                 <strong>常见 AI 服务:</strong>
                 <ul className="list-disc list-inside mt-1 space-y-0.5">
                   <li>阿里云通义千问: https://dashscope.aliyuncs.com/compatible-mode/v1</li>
@@ -282,14 +301,14 @@ const Settings: React.FC = () => {
         {/* Right Column */}
         <div className="space-y-8">
           <section className="space-y-4">
-            <h3 className="text-lg font-extrabold text-gray-800 flex items-center gap-2">
+            <h3 className="flex items-center gap-2 text-[15px] font-semibold text-slate-900">
               <div className="p-1.5 rounded-lg bg-amber-500 text-white">
                 <ShieldCheck className="w-4 h-4" />
               </div>
               远程过滑块配置
             </h3>
 
-            <div className="ios-card rounded-xl p-6 bg-white space-y-5">
+            <div className="ios-card space-y-4 rounded-lg bg-white p-5">
               <div className="space-y-2">
                 <label className="block text-sm font-bold text-gray-800">服务地址</label>
                 <input
@@ -327,7 +346,7 @@ const Settings: React.FC = () => {
                 <input
                   type="checkbox"
                   checked={String(settings['captcha.remote_pass_cookies'] || '').toLowerCase() === 'true'}
-                  onChange={/* 当前回调处理用户交互或异步状态变化。 */ event => setSettings({...settings, 'captcha.remote_pass_cookies': event.target.checked})}
+                  onChange={/* 切换远程 Cookie 传递前由 Hook 弹出危险确认。 */ event => void handleRemoteCookieToggle(event.target.checked)}
                   className="mt-0.5 w-4 h-4 rounded border-gray-300"
                 />
                 <span>
@@ -343,14 +362,14 @@ const Settings: React.FC = () => {
           </section>
 
           <section className="space-y-4">
-            <h3 className="text-lg font-extrabold text-gray-800 flex items-center gap-2">
+            <h3 className="flex items-center gap-2 text-[15px] font-semibold text-slate-900">
               <div className="p-1.5 rounded-lg bg-gray-900 text-white">
                 <LockKeyhole className="w-4 h-4" />
               </div>
               登录凭据
             </h3>
 
-            <form onSubmit={handleCredentialsSave} className="ios-card rounded-xl p-6 bg-white space-y-5">
+            <form onSubmit={handleCredentialsSave} className="ios-card space-y-4 rounded-lg bg-white p-5">
               <div className="space-y-2">
                 <label className="block text-sm font-bold text-gray-800">登录用户名</label>
                 <div className="relative">
@@ -413,7 +432,7 @@ const Settings: React.FC = () => {
               </div>
 
               {credentialsMessage && (
-                <div className={`flex items-start gap-2 rounded-xl px-3 py-2.5 text-sm font-medium ${credentialsMessage.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                <div className={`flex items-start gap-2 rounded-lg px-3 py-2.5 text-sm font-medium ${credentialsMessage.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
                   <ShieldCheck className="w-4 h-4 mt-0.5 flex-shrink-0" />
                   <span>{credentialsMessage.text}</span>
                 </div>
@@ -435,13 +454,21 @@ const Settings: React.FC = () => {
       </div>
 
       {/* Save Button */}
-      <div className="fixed bottom-10 right-10 z-30">
+      <div
+        className="fixed z-30"
+        style={/* 固定保存按钮避开移动端底部安全区和右侧手势区。 */ {
+          bottom: 'calc(1.25rem + env(safe-area-inset-bottom))',
+          right: 'max(1rem, env(safe-area-inset-right))',
+        }}
+      >
         <button
-            onClick={handleSave}
+            type="button"
+            onClick={/* 提交当前系统配置草稿并触发确认及全局提示。 */ () => void handleSave()}
             disabled={saving}
-            className="ios-btn-primary px-10 py-5 rounded-xl text-lg shadow-2xl shadow-blue-200 flex items-center gap-3 transform hover:scale-105 active:scale-95 transition-all disabled:opacity-70"
+            aria-busy={saving}
+            className="ios-btn-primary inline-flex items-center gap-2 rounded-lg px-5 py-3 text-sm shadow-lg disabled:cursor-wait disabled:opacity-70"
         >
-            <Save className="w-6 h-6" />
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             {saving ? '保存中...' : '保存所有配置'}
         </button>
       </div>

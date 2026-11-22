@@ -51,4 +51,18 @@ describe('DeliveryTemplates 页面组合行为', /* 当前回调验证模板编�
     fireEvent.click(cancelButton);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
+
+  test('页面只显示网盘发货模板，历史库存绑定模板不渲染可编辑入口', /* 页面隐藏历史库存资源但不调用删除接口。 */ async () => {
+    // cardTemplate 是包含库存变量的历史模板，不能出现在当前简化列表。
+    const cardTemplate = { id: 11, name: '历史卡密模板', enabled: true, keys: ['code'], custom_keys: [], messages: [{ id: 111, content: '{{cards.code}}' }] } as unknown as DeliveryTemplate;
+    // linkTemplate 是不依赖库存资源的可复用链接模板。
+    const linkTemplate = { id: 12, name: '网盘链接模板', enabled: true, keys: [], custom_keys: ['link'], messages: [{ id: 112, content: '链接：{{custom.link}}' }] } as unknown as DeliveryTemplate;
+    listDeliveryTemplatesMock.mockResolvedValueOnce([cardTemplate, linkTemplate]);
+    render(<DeliveryTemplates />);
+    await waitFor(/* visibleTemplateAssertion 等待合法模板出现。 */ () => expect(screen.getByText('网盘链接模板')).toBeTruthy());
+    expect(screen.queryByText('历史卡密模板')).toBeNull();
+    expect(screen.queryByText('{{cards.code}}')).toBeNull();
+    expect(screen.getByText('链接：{{custom.link}}')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '编辑' })).toHaveLength(1);
+  });
 });

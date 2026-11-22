@@ -62,7 +62,7 @@ test('隐藏库存绑定控件但保留发货模板选择', /* 库存能力继�
   const updateVariant = vi.fn();
   render(<TemplateVariantEditor index={0} variant={variantFixture} cards={cards} deliveryTemplates={[templateFixture]} updateVariant={updateVariant} />);
 
-  expect(screen.getByRole('option', { name: '订单通知' })).toBeTruthy();
+  expect(screen.queryByRole('option', { name: '订单通知' })).toBeNull();
   expect(screen.queryByRole('option', { name: '文本卡' })).toBeNull();
   expect(screen.queryByRole('option', { name: '批量卡' })).toBeNull();
   expect(screen.queryByRole('option', { name: '就绪 API 卡' })).toBeNull();
@@ -88,7 +88,7 @@ test('已有库存绑定隐藏，但编辑自定义变量不覆盖原绑定', /*
   expect(updateVariant).toHaveBeenCalledWith(0, { custom_variables: { remark: '订单已发货' } });
 });
 
-test('新增规则不展示无法配置库存绑定的模板，但仍保留当前历史模板', /* 不允许新规则选中隐藏了必填库存选择器的模板。 */ () => {
+test('新增与历史规则均不暴露需要库存绑定的模板选项', /* 历史绑定仍由上层数据保存，但精简视图不提供该编辑入口。 */ () => {
   // plainTemplate 是仅包含自定义变量、可以在当前界面完整配置的发货模板。
   const plainTemplate: DeliveryTemplate = { ...templateFixture, id: 10, name: '网盘链接', keys: [], messages: [{ id: 2, sort_order: 1, content: '{{custom.remark}}' }] };
   // updateVariant 是组件选择模板时的更新回调替身。
@@ -98,5 +98,5 @@ test('新增规则不展示无法配置库存绑定的模板，但仍保留当�
   expect(screen.getByRole('option', { name: '网盘链接' })).toBeTruthy();
   cleanup();
   render(<TemplateVariantEditor index={0} variant={variantFixture} cards={[]} deliveryTemplates={[templateFixture, plainTemplate]} updateVariant={updateVariant} />);
-  expect(screen.getByRole('option', { name: '订单通知' })).toBeTruthy();
+  expect(screen.queryByRole('option', { name: '订单通知' })).toBeNull();
 });

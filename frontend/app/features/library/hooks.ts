@@ -5,6 +5,7 @@ import {
 } from './api';
 import { draftFromTemplate, toRequest } from './templateDraft';
 import type { LibraryAccountOption, LibraryCardOption, LibraryDeliveryTemplateOption, LibraryImage, LibraryUploadResult, ProductTemplate } from './types';
+import { SHOW_CARD_UI } from '../../../shared/ui/featureVisibility';
 
 /** isAbort 判断错误是否来自主动取消，取消不应展示给用户。 */
 const isAbort = (error: unknown): boolean => error instanceof Error && error.message.includes('取消');
@@ -79,6 +80,8 @@ export const useLibraryImages = (): LibraryImagesState => {
   const controllerRef = useRef<AbortController | null>(null);
   // generationRef 标记最新列表请求代次。
   const generationRef = useRef(0);
+  // mutationPendingRef 是图片变更的同步锁，防止同一渲染帧内重复上传或删除。
+  const mutationPendingRef = useRef(false);
 
   /** reload 取消旧请求并只让最新代次写入状态。 */
   const reload = useCallback(/* 加载最新列表，过期代次的响应被丢弃。 */ async (): Promise<void> => {
@@ -107,6 +110,8 @@ export const useLibraryImages = (): LibraryImagesState => {
 
   /** upload 上传图片；全部失败时错误信息来自服务端。 */
   const upload = useCallback(/* 上传图片并刷新列表。 */ async (files: File[]): Promise<LibraryUploadResult[]> => {
+    if (mutationPendingRef.current) return [];
+    mutationPendingRef.current = true;
     setBusy(true);
     setError('');
     try {
@@ -116,14 +121,17 @@ export const useLibraryImages = (): LibraryImagesState => {
       return results;
     } catch (failure /* failure 是上传失败原因。 */) {
       setError(libraryErrorMessage(failure, '上传图片失败'));
-      return [];
+      throw failure;
     } finally {
+      mutationPendingRef.current = false;
       setBusy(false);
     }
   }, [reload]);
 
   /** remove 删除图片；被模板引用时保留图片并展示引用它的模板。 */
   const remove = useCallback(/* 删除目标并刷新列表。 */ async (id: number): Promise<boolean> => {
+    if (mutationPendingRef.current) return false;
+    mutationPendingRef.current = true;
     setBusy(true);
     setError('');
     try {
@@ -134,12 +142,15 @@ export const useLibraryImages = (): LibraryImagesState => {
       setError(libraryErrorMessage(failure, '删除图片失败'));
       return false;
     } finally {
+      mutationPendingRef.current = false;
       setBusy(false);
     }
   }, [reload]);
 
   /** removeMany 批量删除图片；失败原因逐项返回而不写入 error，由调用方汇总展示。 */
   const removeMany = useCallback(/* 串行删除并只刷新一次列表。 */ async (ids: number[], signal?: AbortSignal): Promise<BatchDeleteResult> => {
+    if (mutationPendingRef.current) return { deleted: [], failures: [] };
+    mutationPendingRef.current = true;
     setBusy(true);
     setError('');
     try {
@@ -148,6 +159,7 @@ export const useLibraryImages = (): LibraryImagesState => {
       if (result.deleted.length > 0 && !signal?.aborted) await reload();
       return result;
     } finally {
+      mutationPendingRef.current = false;
       setBusy(false);
     }
   }, [reload]);
@@ -191,6 +203,8 @@ export const useProductTemplates = (): ProductTemplatesState => {
   const controllerRef = useRef<AbortController | null>(null);
   // generationRef 标记最新列表请求代次。
   const generationRef = useRef(0);
+  // mutationPendingRef 是模板变更的同步锁，防止快速双击导致重复创建或删除。
+  const mutationPendingRef = useRef(false);
 
   /** reload 读取最新列表，过期响应被丢弃。 */
   const reload = useCallback(/* 加载最新列表，过期代次的响应被丢弃。 */ async (): Promise<void> => {
@@ -219,6 +233,8 @@ export const useProductTemplates = (): ProductTemplatesState => {
 
   /** save 保存模板后刷新列表。 */
   const save = useCallback(/* 创建或更新模板并刷新列表。 */ async (id: number | null, body: TemplateRequestTransport): Promise<boolean> => {
+    if (mutationPendingRef.current) return false;
+    mutationPendingRef.current = true;
     setBusy(true);
     setError('');
     try {
@@ -229,12 +245,15 @@ export const useProductTemplates = (): ProductTemplatesState => {
       setError(libraryErrorMessage(failure, '保存商品模板失败'));
       return false;
     } finally {
+      mutationPendingRef.current = false;
       setBusy(false);
     }
   }, [reload]);
 
   /** remove 删除模板后刷新列表。 */
   const remove = useCallback(/* 删除目标并刷新列表。 */ async (id: number): Promise<boolean> => {
+    if (mutationPendingRef.current) return false;
+    mutationPendingRef.current = true;
     setBusy(true);
     setError('');
     try {
@@ -245,12 +264,15 @@ export const useProductTemplates = (): ProductTemplatesState => {
       setError(libraryErrorMessage(failure, '删除商品模板失败'));
       return false;
     } finally {
+      mutationPendingRef.current = false;
       setBusy(false);
     }
   }, [reload]);
 
   /** removeMany 批量删除模板；失败原因逐项返回而不写入 error，由调用方汇总展示。 */
   const removeMany = useCallback(/* 串行删除并只刷新一次列表。 */ async (ids: number[], signal?: AbortSignal): Promise<BatchDeleteResult> => {
+    if (mutationPendingRef.current) return { deleted: [], failures: [] };
+    mutationPendingRef.current = true;
     setBusy(true);
     setError('');
     try {
@@ -259,12 +281,15 @@ export const useProductTemplates = (): ProductTemplatesState => {
       if (result.deleted.length > 0 && !signal?.aborted) await reload();
       return result;
     } finally {
+      mutationPendingRef.current = false;
       setBusy(false);
     }
   }, [reload]);
 
   /** duplicate 复用编辑器的草稿转换生成请求体，保证复制出的模板与手工保存的格式一致。 */
   const duplicate = useCallback(/* 复制模板并刷新列表。 */ async (template: ProductTemplate): Promise<boolean> => {
+    if (mutationPendingRef.current) return false;
+    mutationPendingRef.current = true;
     setBusy(true);
     setError('');
     try {
@@ -275,6 +300,7 @@ export const useProductTemplates = (): ProductTemplatesState => {
       setError(libraryErrorMessage(failure, '复制商品模板失败'));
       return false;
     } finally {
+      mutationPendingRef.current = false;
       setBusy(false);
     }
   }, [reload]);
@@ -302,7 +328,7 @@ export const useAutomationOptions = (enabled: boolean): AutomationOptions => {
     if (!enabled) return undefined;
     // controller 控制三条并行请求的取消。
     const controller = new AbortController();
-    void Promise.all([listCardOptions({ signal: controller.signal }), listDeliveryTemplateOptions({ signal: controller.signal }), listAccountOptions({ signal: controller.signal })])
+    void Promise.all([SHOW_CARD_UI ? listCardOptions({ signal: controller.signal }) : Promise.resolve([] as LibraryCardOption[]), listDeliveryTemplateOptions({ signal: controller.signal }), listAccountOptions({ signal: controller.signal })])
       .then(/* 三类选项全部成功后一次写入。 */ ([cards, deliveryTemplates, accounts]) => { if (!controller.signal.aborted) setOptions({ cards, deliveryTemplates, accounts, error: '' }); })
       .catch(/* 失败时展示原因，取消不提示。 */ (failure /* failure 是读取选项失败原因。 */) => { if (!controller.signal.aborted && !isAbort(failure)) setOptions(/* previous 是失败前的选项状态。 */ previous => ({ ...previous, error: libraryErrorMessage(failure, '读取发货选项失败') })); });
     return /* 清理时取消未完成请求。 */ () => controller.abort();

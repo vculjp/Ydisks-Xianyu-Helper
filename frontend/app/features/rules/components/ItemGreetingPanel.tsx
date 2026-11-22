@@ -7,6 +7,7 @@ import ItemMultiSelect from './ItemMultiSelect';
 import Toast from './Toast';
 import { ImageSourceField } from '../../../../shared/ui/ImageSourceField';
 import type { LibraryImageChooserComponent } from '../../../../shared/ui/imageSource';
+import { confirmAction } from '../../../../shared/ui/feedback';
 
 // ITEM_GREETING_TOAST_MS 是操作提示的自动消失时长（毫秒）。
 const ITEM_GREETING_TOAST_MS = 2500;
@@ -33,9 +34,28 @@ const ItemGreetingPanel: React.FC<ItemGreetingPanelProps> = ({ accountID, librar
     return /* 当前回调清理未触发的提示计时器。 */ () => window.clearTimeout(timer);
   }, [toast, dismissToast]);
 
-  // confirmDelete 在用户确认后删除规则。
-  const confirmDelete = (rule: ItemGreetingRule) => {
-    if (window.confirm(`确定删除首次回复规则“${rule.name || rule.reply_content.slice(0, 12)}”吗？`)) void greetings.remove(rule.id);
+  // confirmDelete 使用统一确认框确认后删除首次回复规则。
+  const confirmDelete = async (rule: ItemGreetingRule): Promise<void> => {
+    // confirmed 表示用户是否确认删除当前规则。
+    const confirmed = await confirmAction({
+      title: '删除首次回复',
+      message: `确定删除首次回复规则“${rule.name || rule.reply_content.slice(0, 12)}”吗？删除后无法恢复。`,
+      confirmText: '删除',
+      danger: true,
+    });
+    if (confirmed) await greetings.remove(rule.id);
+  };
+
+  // confirmClearRecords 使用统一确认框确认后清空账号首次回复发送记录。
+  const confirmClearRecords = async (cookieID: string): Promise<void> => {
+    // confirmed 表示用户是否确认清空发送记录。
+    const confirmed = await confirmAction({
+      title: '清空首次回复记录',
+      message: '清空后，买家下次咨询会再次收到首次回复，确定吗？',
+      confirmText: '清空记录',
+      danger: true,
+    });
+    if (confirmed) await greetings.clearRecords(cookieID);
   };
 
   return (
@@ -48,7 +68,7 @@ const ItemGreetingPanel: React.FC<ItemGreetingPanelProps> = ({ accountID, librar
         <div className="flex gap-2">
           {accountID && (
             <button
-              onClick={/* 当前回调清空该账号的首次回复发送记录。 */ () => { if (window.confirm('清空后，买家下次咨询会再次收到首次回复，确定吗？')) void greetings.clearRecords(accountID); }}
+              onClick={/* 当前回调清空该账号的首次回复发送记录。 */ () => { void confirmClearRecords(accountID); }}
               className="px-4 py-2.5 rounded-2xl text-sm font-bold text-blue-600 hover:bg-blue-50 transition-colors"
             >
               清空发送记录
@@ -82,7 +102,7 @@ const ItemGreetingPanel: React.FC<ItemGreetingPanelProps> = ({ accountID, librar
             <div className="flex items-center gap-3">
               <button onClick={/* 当前回调切换启停。 */ () => void greetings.toggle(rule)} className="px-3 py-2 text-xs font-bold text-gray-600 hover:bg-gray-100 rounded-xl transition-colors">{rule.enabled ? '停用' : '启用'}</button>
               <button onClick={/* 当前回调打开编辑器。 */ () => greetings.openEdit(rule)} className="p-2 text-gray-400 hover:text-black hover:bg-gray-100 rounded-xl transition-colors" title="编辑"><Edit className="w-4 h-4" /></button>
-              <button onClick={/* 当前回调确认后删除。 */ () => confirmDelete(rule)} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors" title="删除"><Trash2 className="w-5 h-5" /></button>
+              <button onClick={/* 当前回调确认后删除。 */ () => void confirmDelete(rule)} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors" title="删除"><Trash2 className="w-5 h-5" /></button>
             </div>
           </div>
         ))}

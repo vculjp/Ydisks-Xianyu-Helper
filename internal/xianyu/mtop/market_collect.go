@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"xianyu-go/internal/catalog"
 	"xianyu-go/internal/xianyu/protocol"
 )
 
@@ -60,8 +61,12 @@ type MarketCollectedItem struct {
 	WantCount int
 	// BrowseCount 是商品浏览次数，仅详情接口提供时非 0。
 	BrowseCount int
+	// BrowseCountKnown 区分详情明确提供的精确浏览次数与缺失字段；不能仅凭 BrowseCount==0 推断真实零值。
+	BrowseCountKnown bool
 	// CategoryID 是平台类目数字标识文本。
 	CategoryID string
+	// Source 保存原商品详情可验证的类目、规格、SKU、邮费及来源信息；仅详情接口有完整值。
+	Source catalog.SourceInfo
 	// IsFreeShipping 表示商品是否标记包邮。
 	IsFreeShipping bool
 	// IsMultiSpec 表示商品是否包含多规格 SKU。

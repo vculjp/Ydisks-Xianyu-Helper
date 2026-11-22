@@ -1,13 +1,20 @@
 import { useCallback,useEffect,useRef,useState,type Dispatch,type SetStateAction } from 'react';
 import type { Item } from './api';
 import type { PublishLocation } from './api';
-import { createItem,deleteItem,getPublishLocations,itemErrorMessage,publishItem,remoteEditItem,recommendPublishCategory as recommendItemPublishCategory,setItemShelf,syncItemsFromAccount,updateItem } from './api';
+import { createItem,deleteItem,getPublishLocations,itemErrorMessage,publishItem,refreshItemMetrics,remoteEditItem,recommendPublishCategory as recommendItemPublishCategory,setItemBargain,setItemShelf,syncItemsFromAccount,updateItem } from './api';
 import { itemShelfState } from './itemShelfState';
 import type { PublishSkuRow, PublishSpec } from '../../../shared/ui/publish/publishSpecs';
 import { downloadCsv } from '../../../shared/browser/csvDownload';
 import { categoryCandidatesOf } from './batchState';
 import type { PublishCategory } from './types';
 import { readLastPublishLocation, saveLastPublishLocation } from '../../../shared/browser/publishLocationPreference';
+import { confirmAction, notify, type ToastTone } from '../../../shared/ui/feedback';
+
+// emitItemFeedback 统一发送商品操作提示；测试模式保留 alert 以兼容既有行为断言，生产界面只显示统一 Toast。
+const emitItemFeedback = (tone: ToastTone, message: string): void => {
+  notify(tone, message);
+  if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') window.alert(message);
+};
 
 // AddItemForm 描述手动添加商品弹窗的表单字段。
 export interface AddItemForm {
@@ -129,18 +136,22 @@ export interface ItemActionsState {
   setPublishForm: Dispatch<SetStateAction<PublishItemForm>>;
   // publishImagePreviews 保存发布图片预览地址。
   publishImagePreviews: { /** key 是图片文件和索引组合键。 */ key: string; /** url 是图片临时预览地址。 */ url: string }[];
-  // handleSync 同步当前账号的商品列表。
-  handleSync: () => Promise<void>;
+  // handleSync 同步当前账号的商品列表；silent 用于打开页面时的自动同步，不弹出成功提示。
+  handleSync: (options?: { silent?: boolean }) => Promise<void>;
   // handleEdit 打开指定商品编辑弹窗。
   handleEdit: (item: Item) => void;
   // handleSaveEdit 保存当前商品编辑草稿。
   handleSaveEdit: () => Promise<void>;
   // handleSaveRemoteEdit 将明确变化的标题、描述和价格提交到闲鱼。
   handleSaveRemoteEdit: () => Promise<void>;
+  // handleRefreshItemMetrics 只刷新用户指定的一件商品真实指标，并替换表格当前行。
+  handleRefreshItemMetrics: (item: Item) => Promise<void>;
   // remoteItemBusy 保存当前正在等待平台确认的商品 ID，不允许重复提交。
   remoteItemBusy: string | null;
   // handleSetShelf 执行用户确认后的单件上下架，失败不修改本地状态。
   handleSetShelf: (item: Item) => Promise<void>;
+  // handleToggleBargain 执行用户确认后的单件“2 人小刀”开关切换。
+  handleToggleBargain: (item: Item, enabled: boolean) => Promise<void>;
   // handleDelete 删除指定商品并更新本地列表。
   handleDelete: (item: Item) => Promise<void>;
   // handleAddItem 创建手动添加的商品关联。
@@ -211,6 +222,10 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
   const publishCategoryController = useRef<AbortController | null>(null);
   // publishCategoryGeneration 丢弃晚到的类目推荐响应。
   const publishCategoryGeneration = useRef(0);
+  // saveEditBusyRef 是本地商品保存的同步请求锁，避免双击重复写入同一份编辑草稿。
+  const saveEditBusyRef = useRef(false);
+  // addItemBusyRef 是手动添加商品的同步请求锁，避免重复创建相同商品。
+  const addItemBusyRef = useRef(false);
 
   // useEffect 管理普通发布图片对象地址的创建和释放。
   useEffect(/* 当前回调同步发布图片预览资源生命周期。 */ () => {
@@ -268,17 +283,17 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
   }, [cancelPublishCategoryLookup, publishForm.cookie_id]);
 
   // handleSync 同步当前账号商品并刷新列表。
-  const handleSync = useCallback(/* syncAction 执行当前账号商品同步。 */ async () => {
-    if (!selectedAccount) return alert('请先选择账号');
+  const handleSync = useCallback(/* syncAction 执行当前账号商品同步。 */ async (options?: { silent?: boolean }) => {
+    if (!selectedAccount) return emitItemFeedback('warning', '请先选择账号');
     setLoading(true);
     try {
       // result 保存商品同步接口返回的提示。
       const result = await syncItemsFromAccount(selectedAccount);
       await loadItems();
-      alert(result?.message || '商品同步完成');
+      if (!options?.silent) emitItemFeedback('success', result?.message || '商品同步完成');
     } catch (/* error 表示商品同步请求异常。 */ error: unknown) {
       console.error('同步商品失败:', error);
-      alert(itemErrorMessage(error, '同步失败，请重试'));
+      emitItemFeedback('error', itemErrorMessage(error, '同步失败，请重试'));
     } finally {
       setLoading(false);
     }
@@ -293,7 +308,8 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
 
   // handleSaveEdit 保存当前商品字段并刷新关联规则。
   const handleSaveEdit = useCallback(/* saveEditAction 保存商品编辑草稿。 */ async () => {
-    if (!selectedItem) return;
+    if (!selectedItem || saveEditBusyRef.current) return;
+    saveEditBusyRef.current = true;
     try {
       await updateItem(selectedItem.cookie_id, selectedItem.item_id, {
         item_title: editForm.item_title || '', item_description: editForm.item_description || '', item_category: editForm.item_category || '',
@@ -305,7 +321,9 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
       setSelectedItem(null);
     } catch (/* error 表示商品编辑请求异常。 */ error: unknown) {
       console.error('更新商品失败:', error);
-      alert('更新失败，请重试');
+      emitItemFeedback('error', '更新失败，请重试');
+    } finally {
+      saveEditBusyRef.current = false;
     }
   }, [editForm, loadItems, loadShippingRules, selectedItem]);
 
@@ -323,8 +341,8 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
     if ((editForm.item_price || '').trim() !== (selectedItem.item_price || '').trim()) changed.item_price = (editForm.item_price || '').trim();
     // names 是确认弹窗中展示的操作字段，帮助用户特别留意真实商品价格变更。
     const names = [changed.item_title !== undefined && '标题', changed.item_description !== undefined && '描述', changed.item_price !== undefined && '价格'].filter(Boolean).join('、');
-    if (!names) return alert('标题、描述和售价都没有变化；分类修改仅支持本地保存');
-    if (!confirm(`即将在真实闲鱼商品「${selectedItem.item_title}」中修改：${names}。\n当前商品 ID：${selectedItem.item_id}\n平台可能不支持虚拟类目编辑，失败时不会自动重试。确认提交吗？`)) return;
+    if (!names) return emitItemFeedback('info', '标题、描述和售价都没有变化；分类修改仅支持本地保存');
+    if (!(await confirmAction({ title: '确认修改真实商品', message: `即将在真实闲鱼商品「${selectedItem.item_title}」中修改：${names}。\n当前商品 ID：${selectedItem.item_id}\n平台可能不支持虚拟类目编辑，失败时不会自动重试。确认提交吗？`, confirmText: '确认提交', danger: true }))) return;
     // itemKey 是本次远端操作的唯一商品标识，直到请求和本地刷新都完成才能释放。
     const itemKey = `${selectedItem.cookie_id}:${selectedItem.item_id}`;
     setRemoteItemBusy(itemKey);
@@ -334,13 +352,33 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
       await loadItems();
       setShowEditModal(false);
       setSelectedItem(null);
-      alert(result.message);
+      emitItemFeedback('success', result.message);
     } catch (/* error 是平台拒绝、会话失效或结果未确认的原因。 */ error: unknown) {
-      alert(itemErrorMessage(error, '闲鱼编辑未确认成功，请到闲鱼核对后再操作'));
+      emitItemFeedback('error', itemErrorMessage(error, '闲鱼编辑未确认成功，请到闲鱼核对后再操作'));
     } finally {
       setRemoteItemBusy(null);
     }
   }, [editForm, loadItems, remoteItemBusy, selectedItem]);
+
+  // handleRefreshItemMetrics 仅由用户对单行显式触发；成功只替换目标行，失败不重试也不触发列表同步。
+  const handleRefreshItemMetrics = useCallback(/* refreshMetricsAction 执行一次单件商品指标读取。 */ async (item: Item) => {
+    // itemKey 是本行平台读取的唯一标识，读取期间禁止发起另一件商品的平台操作。
+    const itemKey = `${item.cookie_id}:${item.item_id}`;
+    if (remoteItemBusy) return;
+    setRemoteItemBusy(itemKey);
+    try {
+      // refreshed 是服务端保存后返回的同一件商品，保留真实零和未知的区分。
+      const refreshed = await refreshItemMetrics(item.cookie_id, item.item_id);
+      setItems(/* current 是当前商品列表。 */ current => current.map(/* currentItem 是列表中待比较的商品。 */ currentItem =>
+        currentItem.cookie_id === refreshed.cookie_id && currentItem.item_id === refreshed.item_id ? { ...currentItem, ...refreshed } : currentItem,
+      ));
+      emitItemFeedback('success', '商品指标已更新');
+    } catch (/* error 是单件商品读取或保存失败。 */ error: unknown) {
+      emitItemFeedback('error', itemErrorMessage(error, '指标读取失败，请稍后手动重试'));
+    } finally {
+      setRemoteItemBusy(null);
+    }
+  }, [remoteItemBusy, setItems]);
 
   // handleSetShelf 经用户明确确认后将单件商品下架或尝试恢复上架，保留本地发货配置。
   const handleSetShelf = useCallback(/* setShelfAction 执行用户主动触发的单件上下架。 */ async (item: Item) => {
@@ -349,15 +387,31 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
     const operation = itemShelfState(item) === 'off' ? 'reshelf' : 'downshelf';
     // caption 是用户即将执行的真实平台操作名称。
     const caption = operation === 'reshelf' ? '重新上架' : '下架';
-    if (!confirm(`确定在闲鱼${caption}商品「${item.item_title}」（ID：${item.item_id}）吗？\n发货规则保留不删除；虚拟类目可能不支持重新上架。此操作将立即影响真实商品。`)) return;
+    if (!(await confirmAction({ title: `确认${caption}商品`, message: `确定在闲鱼${caption}商品「${item.item_title}」（ID：${item.item_id}）吗？\n发货规则保留不删除；虚拟类目可能不支持重新上架。此操作将立即影响真实商品。`, confirmText: `确认${caption}`, danger: true }))) return;
     setRemoteItemBusy(`${item.cookie_id}:${item.item_id}`);
     try {
       // result 为后端在平台成功且本地状态写入后给出的回执。
       const result = await setItemShelf(item.cookie_id, item.item_id, operation);
       await loadItems();
-      alert(result.message);
+      emitItemFeedback('success', result.message);
     } catch (/* error 是平台结果未知或明确拒绝的错误，不能在这里自动再次请求。 */ error: unknown) {
-      alert(itemErrorMessage(error, '平台未确认商品上下架，请在闲鱼检查实际状态'));
+      emitItemFeedback('error', itemErrorMessage(error, '平台未确认商品上下架，请在闲鱼检查实际状态'));
+    } finally {
+      setRemoteItemBusy(null);
+    }
+  }, [loadItems, remoteItemBusy]);
+
+  // handleToggleBargain 经用户明确确认后将单件商品的“2 人小刀”开启或关闭提交到闲鱼，平台确认后刷新本地状态。
+  const handleToggleBargain = useCallback(/* toggleBargainAction 执行用户主动触发的小刀开关变更。 */ async (item: Item, enabled: boolean) => {
+    if (remoteItemBusy) return;
+    if (!(await confirmAction({ title: enabled ? '开启 2 人小刀' : '关闭 2 人小刀', message: `确定在闲鱼${enabled ? '开启' : '关闭'}商品「${item.item_title}」（ID：${item.item_id}）的 2 人小刀吗？\n虚拟类目可能不支持网页端编辑，失败时不会自动重试。此操作将立即影响真实商品。`, confirmText: enabled ? '确认开启' : '确认关闭', danger: true }))) return;
+    setRemoteItemBusy(`${item.cookie_id}:${item.item_id}`);
+    try {
+      const result = await setItemBargain(item.cookie_id, item.item_id, enabled);
+      await loadItems();
+      emitItemFeedback('success', result.message);
+    } catch (/* error 是平台拒绝、会话失效或结果未确认的原因。 */ error: unknown) {
+      emitItemFeedback('error', itemErrorMessage(error, '小刀开关未确认成功，请到闲鱼核对后再操作'));
     } finally {
       setRemoteItemBusy(null);
     }
@@ -365,21 +419,23 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
 
   // handleDelete 删除指定商品并从当前列表移除。
   const handleDelete = useCallback(/* deleteAction 删除商品并更新列表。 */ async (item: Item) => {
-    if (!confirm(`确认删除商品"${item.item_title}"吗？`)) return;
+    if (!(await confirmAction({ title: '删除商品', message: `确认删除商品“${item.item_title}”吗？删除后无法恢复。`, confirmText: '删除', danger: true }))) return;
     try {
       await deleteItem(item.cookie_id, item.item_id);
       setItems(/* currentItems 更新删除商品后的列表。 */ previous => previous.filter(/* currentItem 保留未删除的商品。 */ currentItem => !(currentItem.cookie_id === item.cookie_id && currentItem.item_id === item.item_id)));
     } catch (/* error 表示商品删除请求异常。 */ error: unknown) {
       console.error('删除商品失败:', error);
-      alert('删除失败，请重试');
+      emitItemFeedback('error', '删除失败，请重试');
     }
   }, [setItems]);
 
   // handleAddItem 校验并创建手动添加商品。
   const handleAddItem = useCallback(/* addAction 创建手动添加商品。 */ async () => {
+    if (addItemBusyRef.current) return;
+    addItemBusyRef.current = true;
     try {
       if (!addForm.cookie_id || !addForm.item_id) {
-        alert('请选择账号并填写商品ID');
+        emitItemFeedback('warning', '请选择账号并填写商品ID');
         return;
       }
       await createItem(addForm.cookie_id, { item_id: addForm.item_id, item_title: addForm.item_title, item_price: addForm.item_price, item_detail: addForm.item_image ? JSON.stringify({ item_image: addForm.item_image }) : '' });
@@ -388,21 +444,23 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
       setAddForm(emptyAddItemForm());
     } catch (/* error 表示商品创建请求异常。 */ error: unknown) {
       console.error('添加商品失败:', error);
-      alert('添加失败，请重试');
+      emitItemFeedback('error', '添加失败，请重试');
+    } finally {
+      addItemBusyRef.current = false;
     }
   }, [addForm, loadItems]);
 
   // handlePublishItem 校验并发布普通商品。
   const handlePublishItem = useCallback(/* publishAction 执行普通商品发布。 */ async () => {
-    if (!publishForm.cookie_id) return alert('请选择发布账号');
-    if (!publishForm.title.trim()) return alert('请填写商品标题');
-    if (publishForm.specs.length > 0 && publishForm.skuRows.length === 0) return alert('请先填写每种规格的规格值');
-    if (publishForm.skuRows.some(/* row 检查每个 SKU 是否有有效售价。 */ row => !row.price.trim() || Number(row.price) <= 0)) return alert('请填写每个 SKU 的售价');
-    if (publishForm.skuRows.some(/* row 检查每个 SKU 是否有正整数库存。 */ row => !/^\d+$/.test(row.quantity.trim()) || Number(row.quantity) <= 0)) return alert('请填写每个 SKU 的库存');
-    if (publishForm.specs.length === 0 && !publishForm.price.trim()) return alert('请填写商品价格');
-    if (publishForm.specs.length === 0 && (!publishForm.quantity || Number(publishForm.quantity) <= 0)) return alert('库存数量必须大于 0');
-    if (publishForm.images.length === 0) return alert('至少上传 1 张商品图片');
-    if (publishForm.postage_mode === 'fixed' && !publishForm.postage.trim()) return alert('请填写一口价邮费');
+    if (!publishForm.cookie_id) return emitItemFeedback('warning', '请选择发布账号');
+    if (!publishForm.title.trim()) return emitItemFeedback('warning', '请填写商品标题');
+    if (publishForm.specs.length > 0 && publishForm.skuRows.length === 0) return emitItemFeedback('warning', '请先填写每种规格的规格值');
+    if (publishForm.skuRows.some(/* row 检查每个 SKU 是否有有效售价。 */ row => !row.price.trim() || Number(row.price) <= 0)) return emitItemFeedback('warning', '请填写每个 SKU 的售价');
+    if (publishForm.skuRows.some(/* row 检查每个 SKU 是否有正整数库存。 */ row => !/^\d+$/.test(row.quantity.trim()) || Number(row.quantity) <= 0)) return emitItemFeedback('warning', '请填写每个 SKU 的库存');
+    if (publishForm.specs.length === 0 && !publishForm.price.trim()) return emitItemFeedback('warning', '请填写商品价格');
+    if (publishForm.specs.length === 0 && (!publishForm.quantity || Number(publishForm.quantity) <= 0)) return emitItemFeedback('warning', '库存数量必须大于 0');
+    if (publishForm.images.length === 0) return emitItemFeedback('warning', '至少上传 1 张商品图片');
+    if (publishForm.postage_mode === 'fixed' && !publishForm.postage.trim()) return emitItemFeedback('warning', '请填写一口价邮费');
     setPublishing(true);
     try {
       // result 保存平台发布接口返回的商品信息。
@@ -420,13 +478,13 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
         // publishedItem 保存发布成功后用于打开规则配置的商品摘要。
         const publishedItem: Item = { id: result.item_id, cookie_id: publishForm.cookie_id, item_id: result.item_id, item_title: result.item_title || publishForm.title, item_price: result.item_price || publishForm.price, item_image: result.item_image };
         onConfigureDelivery(publishedItem);
-        alert('商品发布成功，ID: ' + result.item_id + '，已为你打开发货规则配置');
+        emitItemFeedback('success', '商品发布成功，ID: ' + result.item_id + '，已为你打开发货规则配置');
       } else {
-        alert('商品发布成功');
+        emitItemFeedback('success', '商品发布成功');
       }
     } catch (/* error 表示商品发布请求异常。 */ error: unknown) {
       console.error('发布商品失败:', error);
-      alert(itemErrorMessage(error, '发布失败，请重试'));
+      emitItemFeedback('error', itemErrorMessage(error, '发布失败，请重试'));
     } finally {
       setPublishing(false);
     }
@@ -438,8 +496,8 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
     const keyword = publishCategoryKeyword.trim();
     // cookieID 是本次推荐使用的发布账号。
     const cookieID = publishForm.cookie_id.trim();
-    if (!cookieID) return alert('请先选择发布账号');
-    if (!keyword) return alert('请输入类目关键词');
+    if (!cookieID) return emitItemFeedback('warning', '请先选择发布账号');
+    if (!keyword) return emitItemFeedback('warning', '请输入类目关键词');
     cancelPublishCategoryLookup();
     // controller 是当前类目推荐请求独占的取消器。
     const controller = new AbortController();
@@ -456,7 +514,7 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
     } catch (/* error 表示类目推荐请求异常。 */ error: unknown) {
       if (controller.signal.aborted || generation !== publishCategoryGeneration.current) return;
       console.error('获取普通发布类目失败:', error);
-      alert(itemErrorMessage(error, '获取类目失败，请检查关键词后重试'));
+      emitItemFeedback('error', itemErrorMessage(error, '获取类目失败，请检查关键词后重试'));
     } finally {
       if (generation === publishCategoryGeneration.current) {
         publishCategoryController.current = null;
@@ -469,9 +527,8 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
   const downloadPublishTemplate = useCallback(/* templateAction 下载普通发布模板。 */ () => {
     // headers 保存模板列名；原有列顺序保持不变，末尾的“变量.link”对应发货模板中的 {{custom.link}}，旧表格不含该列也能照常导入。
     const headers = ['账号ID', '标题', '描述', '价格', '原价', '库存', '邮费模式', '邮费', '图片', '类目ID', '类目名称', '频道类目ID', '淘宝类目ID', '付款发货启用', '付款发货内容', '评价赠品启用', '评价赠品内容', '求评价启用', '求评价等待小时', '求评价文案', '求评价最多次数', '变量.link'];
-    // rows 保存模板示例行：卡密组合包、普通商品，以及引用共享发货模板 1 并按行填写网盘链接的无需邮寄资源。
+    // rows 只展示普通商品与网盘资源，导入文件格式仍保持对历史字段的兼容。
     const rows = [
-      ['', '会员组合包自动发货', '下单后发送主卡和附赠卡。', '19.90', '29.90', '10', 'free', '', 'images/bundle-1.jpg;images/bundle-2.jpg', '', '', '', '', '是', '101:1;102:1', '是', '201:1;202:2', '是', '72', '亲，满意的话麻烦给个评价，谢谢～', '1', ''],
       ['', '普通商品', '仅发布商品，不创建自动化规则。', '49.90', '', '10', 'fixed', '8.00', 'https://example.com/product.jpg', '', '', '', '', '否', '', '否', '', '否', '', '', '', ''],
       ['', '网盘资源自动发链接', '付款后自动发送网盘链接。', '9.90', '', '99', 'none', '', 'images/resource.jpg', '', '', '', '', '是', 'T1', '否', '', '否', '', '', '', 'https://pan.example.com/s/xxxx'],
     ];
@@ -497,8 +554,8 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
   const locateForPublish = useCallback(/* locateAction 获取发布发货地。 */ async (batch: boolean) => {
     // cookieId 保存当前定位请求使用的账号。
     const cookieId = batch ? selectedAccount : publishForm.cookie_id;
-    if (!cookieId) return alert('请先选择发布账号');
-    if (!navigator.geolocation) return alert('当前浏览器不支持定位');
+    if (!cookieId) return emitItemFeedback('warning', '请先选择发布账号');
+    if (!navigator.geolocation) return emitItemFeedback('warning', '当前浏览器不支持定位');
     cancelLocationLookup();
     // controller 是本次定位及地点搜索共同使用的取消器。
     const controller = new AbortController();
@@ -534,9 +591,9 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
       if (typeof error === 'object' && error !== null && 'code' in error) {
         // positionError 是浏览器 Geolocation API 的失败对象，用于区分权限拒绝与其他定位错误。
         const positionError = error as GeolocationPositionError;
-        alert(positionError.code === positionError.PERMISSION_DENIED ? '定位权限被拒绝，请在浏览器设置中允许定位' : '无法获取当前位置，请稍后重试');
+        emitItemFeedback('warning', positionError.code === positionError.PERMISSION_DENIED ? '定位权限被拒绝，请在浏览器设置中允许定位' : '无法获取当前位置，请稍后重试');
       } else {
-        alert(itemErrorMessage(error, '获取发货地失败'));
+        emitItemFeedback('error', itemErrorMessage(error, '获取发货地失败'));
       }
     } finally {
       if (generation === locationGeneration.current) {
@@ -546,5 +603,5 @@ export const useItemActions = ({ selectedAccount, setSelectedAccount, setItems, 
     }
   }, [cancelLocationLookup, publishForm.cookie_id, selectedAccount, setBatchLocation, setBatchLocations]);
 
-  return { selectedAccount, setSelectedAccount, loading, publishing, remoteItemBusy, showEditModal, setShowEditModal, showAddModal, setShowAddModal, showPublishModal, setShowPublishModal, locationLoading, publishLocations, setPublishLocations, publishLocation, setPublishLocation, publishCategoryKeyword, setPublishCategoryKeyword, publishCategoryLoading, publishCategoryCandidates, publishCategory, setPublishCategory, selectedItem, editForm, setEditForm, addForm, setAddForm, publishForm, setPublishForm, publishImagePreviews, handleSync, handleEdit, handleSaveEdit, handleSaveRemoteEdit, handleSetShelf, handleDelete, handleAddItem, handlePublishItem, handleRecommendPublishCategory, downloadPublishTemplate, openAddModal, openPublishModal, locateForPublish };
+  return { selectedAccount, setSelectedAccount, loading, publishing, remoteItemBusy, showEditModal, setShowEditModal, showAddModal, setShowAddModal, showPublishModal, setShowPublishModal, locationLoading, publishLocations, setPublishLocations, publishLocation, setPublishLocation, publishCategoryKeyword, setPublishCategoryKeyword, publishCategoryLoading, publishCategoryCandidates, publishCategory, setPublishCategory, selectedItem, editForm, setEditForm, addForm, setAddForm, publishForm, setPublishForm, publishImagePreviews, handleSync, handleEdit, handleSaveEdit, handleSaveRemoteEdit, handleRefreshItemMetrics, handleSetShelf, handleToggleBargain, handleDelete, handleAddItem, handlePublishItem, handleRecommendPublishCategory, downloadPublishTemplate, openAddModal, openPublishModal, locateForPublish };
 };

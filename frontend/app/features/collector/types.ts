@@ -7,6 +7,8 @@ export type CollectorSortMode = 'default' | 'want_desc' | 'newest' | 'price_asc'
 /** CollectorPriceMode 表示转存为商品模板时的定价换算模式。 */
 export type CollectorPriceMode = 'keep' | 'offset' | 'fixed';
 
+import type { SourcePublishInfo } from '../../../shared/ui/publish/sourceInfo';
+
 /** CollectorAccountOption 描述可供用户选择执行采集的闲鱼账号摘要。 */
 export interface CollectorAccountOption {
   /** id 是账号唯一标识（cookie_id）。 */
@@ -55,6 +57,8 @@ export interface CollectedProduct {
   browseCount: number;
   /** categoryId 是平台原始类目 ID。 */
   categoryId: string;
+  /** source 是从原闲鱼商品详情核实的完整发布资料快照，列表摘要可能不具备。 */
+  source?: SourcePublishInfo;
   /** isFreeShipping 表示是否包邮。 */
   isFreeShipping: boolean;
   /** isMultiSpec 表示是否包含多规格。 */
@@ -140,7 +144,7 @@ export interface CollectorSaveTemplatesParams {
   /** quantity 是默认上架库存。 */
   quantity: number;
   /** postageMode 是邮费方式（none 无需邮寄 / free 包邮）。 */
-  postageMode: 'none' | 'free';
+  postageMode: 'none' | 'free' | 'source';
   /** deliveryTemplateId 是可选自动绑定的发货模板 ID（0 表示不绑定）。 */
   deliveryTemplateId: number;
   /** customVariables 是绑定发货模板时填充的自定义变量键值。 */

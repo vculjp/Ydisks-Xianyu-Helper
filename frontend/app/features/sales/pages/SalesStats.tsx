@@ -96,7 +96,7 @@ const SalesStats: React.FC = () => {
       <PageHeader title="销售统计" description="按订单创建时间统计一段时间内的销售额、已收货款与退货货款。" />
 
       {/* 时间范围选择 */}
-      <div className="flex flex-wrap gap-2 p-2 bg-gray-100/50 rounded-2xl">
+      <div className="console-filter-bar">
         {timeRangeOptions.map(/* 当前回调处理集合中的单个元素。 */ option => (
           <button
             key={option.key}

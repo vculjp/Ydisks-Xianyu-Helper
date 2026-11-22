@@ -324,10 +324,15 @@ func (p *CollectorPlatformPort) maybeRecoverSession(ctx context.Context, cookieI
 	}
 }
 
-// formatCollectorPlatformError 为风控与会话过期错误补充清晰的用户操作建议，同时保留底层错误链以便 errors.Is 判定。
+// formatCollectorPlatformError 区分平台未提供验证页的 RGV587 风控与明确附带验证地址的挑战，保留原错误链供整批立即熔断。
 func formatCollectorPlatformError(err error) error {
 	if mtop.IsRiskVerificationErr(err) {
-		return fmt.Errorf("闲鱼触发滑块安全验证（RGV587），已自动熔断保护账号。请直接点击右侧「① 一键弹出闲鱼窗口过滑块（免 F12）」，滑过后再点一键同步即可恢复: %w", err)
+		// riskErr 仅用于判断平台是否真实下发验证地址；无地址的 RGV587 不能假定官方网页会弹出滑块。
+		var riskErr *mtop.RiskVerificationError
+		if errors.As(err, &riskErr) && strings.TrimSpace(riskErr.VerificationURL) != "" {
+			return fmt.Errorf("闲鱼要求官方安全验证，已停止本批次。平台已提供验证地址，请按闲鱼官网提示人工处理；完成后再更新登录态，不要反复采集: %w", err)
+		}
+		return fmt.Errorf("闲鱼返回 RGV587 风控或拥堵提示，未提供可直接打开的滑块验证地址，已停止本批次保护账号。普通闲鱼网页不一定显示滑块；请勿反复请求，可稍后检查账号状态或转存时关闭「补抓缺失详情」: %w", err)
 	}
 	if mtop.IsSessionExpiredErr(err) {
 		return fmt.Errorf("所选闲鱼账号登录状态已失效，请在账号管理重新扫码或更新 Cookie: %w", err)
@@ -348,6 +353,16 @@ func toAppCollectedItems(items []mtop.MarketCollectedItem) []collectorapp.Collec
 
 // toAppCollectedItem 将单条 MTOP 采集商品映射为应用层模型。
 func toAppCollectedItem(item mtop.MarketCollectedItem) collectorapp.CollectedItem {
+	// source 对列表摘要补充原商品 ID 和可验证的部分分类信息，缺少详情时保留明确待核实标记。
+	source := item.Source
+	if source.ItemID == "" {
+		source.ItemID = item.ItemID
+		source.WebURL = item.WebURL
+		source.Area = item.Area
+		source.Category.CatID = item.CategoryID
+		source.Missing = []string{"原商品完整类目", "原商品库存", "运费方式", "规格和 SKU", "公开商品属性"}
+	}
+	source.NormalizeCollections()
 	return collectorapp.CollectedItem{
 		ItemID:          item.ItemID,
 		Title:           item.Title,
@@ -362,6 +377,7 @@ func toAppCollectedItem(item mtop.MarketCollectedItem) collectorapp.CollectedIte
 		WantCount:       item.WantCount,
 		BrowseCount:     item.BrowseCount,
 		CategoryID:      item.CategoryID,
+		Source:          source,
 		IsFreeShipping:  item.IsFreeShipping,
 		IsMultiSpec:     item.IsMultiSpec,
 		HasFullDetail:   item.HasFullDetail,

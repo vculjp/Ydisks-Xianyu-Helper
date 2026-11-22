@@ -18,6 +18,9 @@ const ItemEditAPI = "https://h5api.m.goofish.com/h5/mtop.idle.pc.idleitem.edit/1
 // ItemDownShelfAPI 是卖家主动下架单件商品的接口。
 const ItemDownShelfAPI = "https://h5api.m.goofish.com/h5/mtop.taobao.idle.item.downshelf/2.0/"
 
+// ItemDeleteAPI 是卖家删除单件商品的接口。
+const ItemDeleteAPI = "https://h5api.m.goofish.com/h5/mtop.alibaba.idle.seller.pc.item.delete/1.0/"
+
 // RemoteItemEdit 保存用户明确修改的字段；nil 表示沿用平台原有值。
 type RemoteItemEdit struct {
 	// Title 只更新商品标题，不影响其描述。
@@ -26,6 +29,8 @@ type RemoteItemEdit struct {
 	Description *string
 	// PriceCents 只更新商品售价，单位为分。
 	PriceCents *int64
+	// Bargain 非 nil 时只更新商品的“2 人小刀”开关。
+	Bargain *bool
 }
 
 // FetchItemEditDetail 只读取平台编辑详情；不会向平台提交任何编辑或上架操作。
@@ -122,6 +127,11 @@ func buildExistingItemEditPayload(detail map[string]any, itemID string, changes 
 		}
 		priceDTO["priceInCent"] = strconv.FormatInt(*changes.PriceCents, 10)
 	}
+	if changes.Bargain != nil {
+		// 小刀开关由编辑详情的 canBargain 与 supportBargainPrice 两个字段共同控制，切换时必须一起更新。
+		payload["canBargain"] = *changes.Bargain
+		payload["supportBargainPrice"] = *changes.Bargain
+	}
 	if strings.TrimSpace(mtopString(priceDTO["priceInCent"])) == "" {
 		return nil, errors.New("平台商品价格数据缺失，已阻止修改")
 	}
@@ -155,6 +165,11 @@ func buildExistingItemEditPayload(detail map[string]any, itemID string, changes 
 	payload["bizcode"] = "pcMainPublish"
 	payload["publishScene"] = "pcMainPublish"
 	return payload, nil
+}
+
+// SetBargain 在平台确认后开启或关闭单件商品的“2 人小刀”；沿用 PC 编辑接口，平台不支持网页编辑时会明确拒绝。
+func (c *ClientImpl) SetBargain(ctx context.Context, cookies, itemID string, enabled bool) (string, error) {
+	return c.EditExistingItem(ctx, cookies, itemID, RemoteItemEdit{Bargain: &enabled})
 }
 
 // remoteItemBool 将平台可能以字符串表达的布尔开关转为 HTTP 编辑接口要求的 JSON 布尔值。
@@ -207,6 +222,27 @@ func (c *ClientImpl) DownShelfItem(ctx context.Context, cookies, itemID string) 
 	ret, data := retFromDecoded(decoded), mapFromAny(decoded["data"])
 	if !hasMTopSuccess(ret) || data == nil || data["success"] != true {
 		return updated, fmt.Errorf("平台未明确确认商品下架: %w", c.mtopResponseFailure("mtop.taobao.idle.item.downshelf", 200, ret, "下架结果未确认"))
+	}
+	return updated, nil
+}
+
+// DeleteItem 删除指定闲鱼商品；只有平台明确返回成功标记时才允许调用方删除本地记录。
+func (c *ClientImpl) DeleteItem(ctx context.Context, cookies, itemID string) (string, error) {
+	if strings.TrimSpace(itemID) == "" {
+		return "", errors.New("商品 ID 不能为空")
+	}
+	// payload 与闲鱼 PC 卖家端一致：商品 ID 必填，草稿 ID 明确为空。
+	payload := map[string]any{"itemId": itemID, "draftId": nil}
+	// decoded、updated、err 是删除业务返回的确认结果及会话变化。
+	decoded, updated, err := c.callMTop(ctx, cookies, ItemDeleteAPI, "mtop.alibaba.idle.seller.pc.item.delete", "1.0",
+		"a21107h.42829799.0.0", "a21107h.42829799.0.0", "item-delete", payload)
+	if err != nil {
+		return updated, err
+	}
+	// ret、data 分别是平台顶层状态和明确的删除结果；data 省略成功标记时以 ret 为准，显式 false 必须拒绝。
+	ret, data := retFromDecoded(decoded), mapFromAny(decoded["data"])
+	if !hasMTopSuccess(ret) || (data != nil && data["success"] == false) {
+		return updated, fmt.Errorf("平台未明确确认商品删除: %w", c.mtopResponseFailure("mtop.alibaba.idle.seller.pc.item.delete", 200, ret, "删除结果未确认"))
 	}
 	return updated, nil
 }

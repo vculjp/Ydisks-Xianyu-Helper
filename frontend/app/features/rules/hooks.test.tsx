@@ -86,7 +86,8 @@ describe('useRulesData', /* 当前回调处理规则页参考数据、分页和�
       async () => hook.result.current.loadReferenceData(),
     );
     expect(hook.result.current.accounts).toEqual([accountFixture]);
-    expect(hook.result.current.cards).toEqual([cardFixture]);
+    expect(hook.result.current.cards).toEqual([]);
+    expect(cardsMock).not.toHaveBeenCalled();
     expect(setSelectedAccountId).toHaveBeenCalled();
     // selectedAccountUpdater 是规则 Hook 回填账号时交给 React 的函数式更新器。
     const selectedAccountUpdater = setSelectedAccountId.mock.calls[0][0] as (current: string) => string;
@@ -178,21 +179,24 @@ describe('useRulesData', /* 当前回调处理规则页参考数据、分页和�
     const setSelectedAccountId = vi.fn();
     // refreshedAccount 是账号管理页新增或登录后，刷新规则页应显示的新账号。
     const refreshedAccount = { ...accountFixture, id: 'account-2', nickname: '账号二' };
-    // consoleLog 是参考数据部分失败日志的可控替身。
-    const consoleLog = vi.spyOn(console, 'log').mockImplementation(/* errorLogger 屏蔽测试日志输出。 */ () => undefined);
     accountsMock.mockResolvedValueOnce([accountFixture]).mockResolvedValueOnce([refreshedAccount]);
-    cardsMock.mockRejectedValueOnce(new Error('卡密参考接口失败'));
+    itemsMock.mockRejectedValueOnce(new Error('商品参考接口失败'));
     // hook 是自动化页参考数据和规则刷新的真实 Hook 实例。
     const hook = renderHook(
       // issue20HookFactory 创建 Issue #20 的部分参考请求失败场景。
       () => useRulesData({ activeTab: 'automation', selectedAccountId: '', automationTriggerFilter: '', automationStatusFilter: 'all', debouncedAutomationSearch: '', automationPage: 1, automationPageSize: 10, setSelectedAccountId }),
     );
     await act(/* 当前回调等待首次参考数据请求完成并保留可观察的失败结果。 */ async () => {
-      // referenceAction 首次加载参考数据，卡密失败不应阻断账号列表收口。
+      // referenceAction 首次加载参考数据，商品参考数据失败不应阻断账号列表收口。
       await hook.result.current.loadReferenceData();
     });
     expect(hook.result.current.accounts).toEqual([accountFixture]);
-    expect(consoleLog).toHaveBeenCalledWith('规则异常');
+    expect(hook.result.current.referenceDataWarning).toContain('商品列表');
+    expect(hook.result.current.referenceDataError).toBe('');
+    expect(hook.result.current.automationError).toBe('');
+    expect(hook.result.current.replyError).toBe('');
+    expect(hook.result.current.defaultRepliesError).toBe('');
+    expect(cardsMock).not.toHaveBeenCalled();
 
     await act(
       // refreshAction 验证页面刷新会重新读取账号，并继续刷新自动化规则。
@@ -201,7 +205,102 @@ describe('useRulesData', /* 当前回调处理规则页参考数据、分页和�
     expect(accountsMock).toHaveBeenCalledTimes(2);
     expect(hook.result.current.accounts).toEqual([refreshedAccount]);
     hook.unmount();
-    consoleLog.mockRestore();
+  });
+
+  test('账号参考数据失败时进入可见错误态并保留其他成功数据', /* 当前回调验证账号失败可被页面提示和重试。 */ async () => {
+    // setSelectedAccountId 是账号加载失败时不应被调用的状态替身。
+    const setSelectedAccountId = vi.fn();
+    accountsMock.mockRejectedValueOnce(new Error('账号接口不可用'));
+    // hook 是账号参考数据失败场景的规则 Hook 渲染结果。
+    const hook = renderHook(
+      // accountFailureHookFactory 创建账号参考数据失败场景。
+      () => useRulesData({ activeTab: 'automation', selectedAccountId: '', automationTriggerFilter: '', automationStatusFilter: 'all', debouncedAutomationSearch: '', automationPage: 1, automationPageSize: 10, setSelectedAccountId }),
+    );
+    await act(/* 当前回调等待参考数据失败结果收口。 */ async () => hook.result.current.loadReferenceData());
+    expect(hook.result.current.referenceDataError).toBe('账号接口不可用');
+    expect(hook.result.current.items).toEqual([itemFixture]);
+    expect(setSelectedAccountId).not.toHaveBeenCalled();
+    hook.unmount();
+  });
+
+  test('自动化规则刷新失败时保留旧列表并写入错误态', /* 当前回调验证失败不清空已展示的自动化规则。 */ async () => {
+    // setSelectedAccountId 是自动化 Hook 的账号状态替身。
+    const setSelectedAccountId = vi.fn();
+    // hook 是自动化规则刷新失败场景的渲染结果。
+    const hook = renderHook(
+      // automationFailureHookFactory 创建可保留旧规则的自动化 Hook。
+      () => useRulesData({ activeTab: 'automation', selectedAccountId: 'account-1', automationTriggerFilter: '', automationStatusFilter: 'all', debouncedAutomationSearch: '', automationPage: 1, automationPageSize: 10, setSelectedAccountId }),
+    );
+    await act(/* 当前回调先加载一次成功列表。 */ async () => hook.result.current.loadAutomationRules());
+    expect(hook.result.current.automationRules).toEqual([shippingFixture]);
+    shippingPageMock.mockRejectedValueOnce(new Error('规则刷新失败'));
+    await act(/* 当前回调触发失败刷新并吞掉预期异常。 */ async () => {
+      await hook.result.current.loadAutomationRules().catch(/* refreshError 是本次预期的刷新失败。 */ () => undefined);
+    });
+    expect(hook.result.current.automationRules).toEqual([shippingFixture]);
+    expect(hook.result.current.automationError).toBe('规则刷新失败');
+    hook.unmount();
+  });
+
+  test('关键词回复刷新失败时保留同账号旧列表', /* 当前回调验证失败不把已有回复规则误清空。 */ async () => {
+    // setSelectedAccountId 是关键词 Hook 的账号状态替身。
+    const setSelectedAccountId = vi.fn();
+    // hook 是关键词回复刷新失败场景的渲染结果。
+    const hook = renderHook(
+      // replyFailureHookFactory 创建可保留旧关键词规则的 Hook。
+      () => useRulesData({ activeTab: 'reply', selectedAccountId: 'account-1', automationTriggerFilter: '', automationStatusFilter: 'all', debouncedAutomationSearch: '', automationPage: 1, automationPageSize: 10, setSelectedAccountId }),
+    );
+    await act(/* 当前回调先加载一次成功列表。 */ async () => hook.result.current.loadReplyRules());
+    expect(hook.result.current.replyRules).toEqual([replyFixture]);
+    repliesMock.mockRejectedValueOnce(new Error('关键词刷新失败'));
+    await act(/* 当前回调触发失败刷新并吞掉预期异常。 */ async () => {
+      await hook.result.current.loadReplyRules().catch(/* refreshError 是本次预期的刷新失败。 */ () => undefined);
+    });
+    expect(hook.result.current.replyRules).toEqual([replyFixture]);
+    expect(hook.result.current.replyError).toBe('关键词刷新失败');
+    hook.unmount();
+  });
+
+  test('切换账号时清空旧账号关键词并写入失败态', /* 当前回调验证账号切换不会残留其他账号规则。 */ async () => {
+    // selectedAccountId 是可在测试中切换的当前账号。
+    let selectedAccountId = 'account-1';
+    // setSelectedAccountId 是切号状态替身。
+    const setSelectedAccountId = vi.fn();
+    // hook 是账号切换场景的规则 Hook 渲染结果。
+    const hook = renderHook(
+      // replyAccountSwitchFactory 创建可切换账号的关键词 Hook。
+      () => useRulesData({ activeTab: 'reply', selectedAccountId, automationTriggerFilter: '', automationStatusFilter: 'all', debouncedAutomationSearch: '', automationPage: 1, automationPageSize: 10, setSelectedAccountId }),
+    );
+    await act(/* 当前回调先加载账号一的关键词规则。 */ async () => hook.result.current.loadReplyRules());
+    expect(hook.result.current.replyRules).toEqual([replyFixture]);
+    selectedAccountId = 'account-2';
+    hook.rerender();
+    repliesMock.mockRejectedValueOnce(new Error('账号二加载失败'));
+    await act(/* 当前回调切号后加载失败。 */ async () => {
+      await hook.result.current.loadReplyRules().catch(/* refreshError 是本次预期的刷新失败。 */ () => undefined);
+    });
+    expect(hook.result.current.replyRules).toEqual([]);
+    expect(hook.result.current.replyError).toBe('账号二加载失败');
+    hook.unmount();
+  });
+
+  test('默认回复读取失败时保留旧配置并写入错误态', /* 当前回调验证失败不用空配置覆盖已有默认回复。 */ async () => {
+    // setSelectedAccountId 是默认回复 Hook 的账号状态替身。
+    const setSelectedAccountId = vi.fn();
+    // hook 是默认回复读取失败场景的渲染结果。
+    const hook = renderHook(
+      // defaultFailureHookFactory 创建可保留旧默认回复的 Hook。
+      () => useRulesData({ activeTab: 'default', selectedAccountId: 'account-1', automationTriggerFilter: '', automationStatusFilter: 'all', debouncedAutomationSearch: '', automationPage: 1, automationPageSize: 10, setSelectedAccountId }),
+    );
+    await act(/* 当前回调先加载一次成功配置。 */ async () => hook.result.current.loadDefaultReplies());
+    expect(hook.result.current.defaultReplies).toEqual({ 'account-1': defaultReplyFixture });
+    defaultsMock.mockRejectedValueOnce(new Error('默认回复读取失败'));
+    await act(/* 当前回调触发失败刷新并吞掉预期异常。 */ async () => {
+      await hook.result.current.loadDefaultReplies().catch(/* refreshError 是本次预期的刷新失败。 */ () => undefined);
+    });
+    expect(hook.result.current.defaultReplies).toEqual({ 'account-1': defaultReplyFixture });
+    expect(hook.result.current.defaultRepliesError).toBe('默认回复读取失败');
+    hook.unmount();
   });
 
   test('带分页回调的规则 Hook 入口保持数据契约', /* 当前回调验证分页兼容入口委托到统一规则 Hook。 */ async () => {

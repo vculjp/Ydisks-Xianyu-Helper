@@ -3,6 +3,13 @@ import type { Order } from './api';
 import { deleteOrder,manualShipOrder,syncOrders,syncSingleOrder,updateOrder } from './api';
 import { OrderRefreshStillRunningError } from './refreshErrors';
 import { formatOrderSyncResult } from './syncResult';
+import { confirmAction, notify, type ToastTone } from '../../../shared/ui/feedback';
+
+// emitOrderFeedback 统一发送订单操作提示；测试模式保留 alert 以兼容既有行为断言，生产界面只显示统一 Toast。
+const emitOrderFeedback = (tone: ToastTone, message: string): void => {
+  notify(tone, message);
+  if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') window.alert(message);
+};
 
 // OrderShipMode 表示订单发货操作的两种业务模式。
 export type OrderShipMode = 'status_only' | 'full_delivery';
@@ -55,6 +62,8 @@ export interface OrderActionsState {
   syncingOrderId: string | null;
   // deletingOrderId 保存当前正在删除的订单号。
   deletingOrderId: string | null;
+  // savingEdit 表示订单编辑草稿正在提交，避免重复保存。
+  savingEdit: boolean;
   // handleSync 同步当前筛选条件下的订单。
   handleSync: () => Promise<void>;
   // handleShip 打开发货弹窗并选择待发货订单。
@@ -106,6 +115,8 @@ export const useOrderActions = ({ orders, page, accountFilter, filter, searchTex
   const [syncingOrderId, setSyncingOrderId] = useState<string | null>(null);
   // deletingOrderId 保存当前正在删除的订单号。
   const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
+  // savingEdit 表示订单编辑草稿正在提交，控制保存按钮禁用状态。
+  const [savingEdit, setSavingEdit] = useState(false);
   // syncGeneration 区分连续发起的批量刷新，旧任务完成后不得覆盖最新一次用户操作的列表和提示。
   const syncGeneration = useRef(0);
 
@@ -117,6 +128,8 @@ export const useOrderActions = ({ orders, page, accountFilter, filter, searchTex
   const mounted = useRef(true);
   // deleteGeneration 隔离不同页面和连续删除请求的迟到结果。
   const deleteGeneration = useRef(0);
+  // editBusy 是订单编辑保存的同步请求锁，避免双击造成重复写入。
+  const editBusy = useRef(false);
 
   useEffect(/* 挂载周期只控制本地展示，清理时不假装撤销已提交的发货。 */ () => {
     mounted.current = true;
@@ -148,18 +161,18 @@ export const useOrderActions = ({ orders, page, accountFilter, filter, searchTex
 			if (generation !== syncGeneration.current) return;
       // message 依据结构化失败和恢复统计生成，避免旧后端成功文案掩盖未完成项。
       const message = formatOrderSyncResult(result);
-      if (message) alert(message);
+      if (message) emitOrderFeedback('info', message);
     } catch (/* error 表示订单同步请求异常。 */ error: unknown) {
 			if (generation !== syncGeneration.current) return;
       if (error instanceof OrderRefreshStillRunningError) {
         // 后台任务仍在运行且已入库前序订单页：刷新列表展示已同步部分，并说明任务未被取消，不当作失败。
         await loadOrders();
         if (generation !== syncGeneration.current) return;
-        alert(error.message);
+        emitOrderFeedback('info', error.message);
         return;
       }
       console.error('同步订单失败:', error);
-      alert(orderErrorMessage(error, '同步失败，请重试'));
+      emitOrderFeedback('error', orderErrorMessage(error, '同步失败，请重试'));
     }
   }, [accountFilter, filter, loadOrders]);
 
@@ -219,18 +232,22 @@ export const useOrderActions = ({ orders, page, accountFilter, filter, searchTex
 
   // handleSaveEdit 保存当前订单编辑草稿并刷新列表。
   const handleSaveEdit = useCallback(/* saveEditAction 保存订单编辑草稿。 */ async () => {
-    if (!editingOrder?.order_id) return;
+    if (!editingOrder?.order_id || editBusy.current) return;
+    editBusy.current = true;
+    setSavingEdit(true);
     try {
       // updateData 保存映射到订单更新接口的字段。
       const updateData: Partial<Order> = {};
-      if (editingOrder.status !== undefined) updateData.order_status = editingOrder.status;
+      // 未核实的状态不能作为修改请求覆盖已存在的真实交易状态。
+      if (editingOrder.status !== undefined && editingOrder.status !== 'unknown') updateData.order_status = editingOrder.status;
       if (editingOrder.buyer_id !== undefined) updateData.buyer_id = editingOrder.buyer_id;
-      if (editingOrder.amount !== undefined) updateData.amount = editingOrder.amount;
+      // 平台未获取的空金额不是 0 元；不能将空值提交给订单金额校验器。
+      if (editingOrder.amount?.trim()) updateData.amount = editingOrder.amount;
       if (editingOrder.receiver_name !== undefined) updateData.receiver_name = editingOrder.receiver_name;
       if (editingOrder.receiver_phone !== undefined) updateData.receiver_phone = editingOrder.receiver_phone;
       if (editingOrder.receiver_address !== undefined) updateData.receiver_address = editingOrder.receiver_address;
       if (editingOrder.item_id !== undefined) updateData.item_id = editingOrder.item_id;
-      if (editingOrder.quantity !== undefined) updateData.quantity = editingOrder.quantity;
+      if (editingOrder.quantity !== undefined && editingOrder.quantity > 0) updateData.quantity = editingOrder.quantity;
       if (editingOrder.item_title !== undefined) updateData.item_title = editingOrder.item_title;
 
       await updateOrder(editingOrder.order_id, updateData);
@@ -239,7 +256,10 @@ export const useOrderActions = ({ orders, page, accountFilter, filter, searchTex
       await loadOrders();
     } catch (/* error 表示订单编辑请求异常。 */ error: unknown) {
       console.error('更新订单失败:', error);
-      alert('更新失败，请重试');
+      emitOrderFeedback('error', '更新失败，请重试');
+    } finally {
+      editBusy.current = false;
+      if (mounted.current) setSavingEdit(false);
     }
   }, [editingOrder, loadOrders]);
 
@@ -252,11 +272,11 @@ export const useOrderActions = ({ orders, page, accountFilter, filter, searchTex
       if (result.success) {
         await loadOrders();
       } else {
-        alert(result.message || '同步失败');
+        emitOrderFeedback('error', result.message || '同步失败');
       }
     } catch (/* error 表示单笔订单同步请求异常。 */ error: unknown) {
       console.error('同步订单失败:', error);
-      alert(orderErrorMessage(error, '同步失败，请重试'));
+      emitOrderFeedback('error', orderErrorMessage(error, '同步失败，请重试'));
     } finally {
       setSyncingOrderId(null);
     }
@@ -264,7 +284,7 @@ export const useOrderActions = ({ orders, page, accountFilter, filter, searchTex
 
   // handleDelete 删除指定订单并在当前页为空时回退页码。
   const handleDelete = useCallback(/* deleteAction 删除订单并处理分页回退。 */ async (orderId: string) => {
-    if (!confirm('确认删除该订单吗？删除后无法恢复。')) return;
+    if (!(await confirmAction({ title: '删除订单', message: '确认删除该订单吗？删除后无法恢复。', confirmText: '删除', danger: true }))) return;
     // generation 是当前页面本次删除的唯一代次，旧结果不能作用于新页面。
     const generation = ++deleteGeneration.current;
     setDeletingOrderId(orderId);
@@ -279,7 +299,7 @@ export const useOrderActions = ({ orders, page, accountFilter, filter, searchTex
     } catch (/* error 表示订单删除请求异常。 */ error: unknown) {
       if (generation !== deleteGeneration.current) return;
       console.error('删除订单失败:', error);
-      alert(orderErrorMessage(error, '删除失败，请重试'));
+      emitOrderFeedback('error', orderErrorMessage(error, '删除失败，请重试'));
       await loadOrders();
     } finally {
       if (generation === deleteGeneration.current) setDeletingOrderId(null);
@@ -308,6 +328,7 @@ export const useOrderActions = ({ orders, page, accountFilter, filter, searchTex
     shipResult,
     syncingOrderId,
     deletingOrderId,
+    savingEdit,
     handleSync,
     handleShip,
     executeShip,

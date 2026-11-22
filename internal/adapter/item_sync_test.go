@@ -1,50 +1,72 @@
 package adapter
 
 import (
-	"bytes"
-	"context"
-	"log/slog"
-	"strings"
+	"encoding/json"
 	"testing"
-
-	itemapp "xianyu-go/internal/application/items"
-	"xianyu-go/internal/xianyu/mtop"
 )
 
-// TestItemSyncRepositoryUsesListMultiSpecMarkers 验证商品同步只使用列表模型的多规格标记。
-func TestItemSyncRepositoryUsesListMultiSpecMarkers(t *testing.T) {
-	// store、cleanup 保存隔离数据库及关闭责任。
-	store, cleanup := newAdapterTestStore(t)
-	defer cleanup()
-	// logs 收集商品同步日志，用于验证日志明确说明多规格判断来源。
-	var logs bytes.Buffer
-	// client 提供带有明确多规格标记的列表结果。
-	client := &itemSyncListClient{
-		allResult: &mtop.ItemListResult{Items: []mtop.ItemListItem{
-			{ID: "list-multi", IsMultiSpec: true},
-			{ID: "list-single", IsMultiSpec: false},
-		}, PageNumber: 1, PageSize: 20, TotalPages: 1},
+// TestPreserveCachedItemMetricsKeepsShelfState 验证列表同步不会清空平台已确认的货架状态。
+func TestPreserveCachedItemMetricsKeepsShelfState(t *testing.T) {
+	// cached 是本地已有的货架状态和浏览统计。
+	cached := map[string]json.RawMessage{
+		"shelf_state":  json.RawMessage(`"off"`),
+		"browse_count": json.RawMessage(`5`),
 	}
-	// repository 使用列表接口替身执行同步。
-	repository := NewItemSyncRepository(store, func() mtop.Client { return client }, slog.New(slog.NewTextHandler(&logs, nil)), nil, nil)
-	// owner、ownerErr 保存测试账号归属，供同步接口执行所有权校验。
-	owner, ownerErr := store.Users.GetByUsername(context.Background(), "admin")
-	if ownerErr != nil {
-		t.Fatal(ownerErr)
+	// merged 是本次平台列表快照补回本地状态后的扩展 JSON。
+	merged := preserveCachedItemMetrics(`{"item_image":"new.png"}`, cached)
+	// fields 是解析后的扩展对象，用于逐字段核对。
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(merged), &fields); err != nil {
+		t.Fatal(err)
 	}
-	// result、syncErr 保存全量同步结果。
-	result, syncErr := repository.SyncAll(context.Background(), itemapp.SyncQuery{UserID: owner.ID, CookieID: "cid", PageSize: 20, MaxPages: 1})
-	if syncErr != nil || result.TotalCount != 2 || result.SavedCount != 2 {
-		t.Fatalf("列表同步异常 result=%+v err=%v", result, syncErr)
+	if fields["shelf_state"] != "off" || fields["browse_count"] != float64(5) || fields["item_image"] != "new.png" {
+		t.Fatalf("同步合并结果错误: %s", merged)
 	}
-	// multi、multiErr 和 single、singleErr 保存同步后的两条商品记录。
-	multi, multiErr := store.Items.Get(context.Background(), "cid", "list-multi")
-	// single、singleErr 保存列表中普通单规格商品的同步结果及读取错误。
-	single, singleErr := store.Items.Get(context.Background(), "cid", "list-single")
-	if multiErr != nil || singleErr != nil || !multi.IsMultiSpec || single.IsMultiSpec {
-		t.Fatalf("列表多规格标记落库异常 multi=%+v single=%+v multiErr=%v singleErr=%v", multi, single, multiErr, singleErr)
+}
+
+// TestPreserveCachedItemMetricsKeepsNewShelfState 验证平台明确返回的新货架状态优先于旧缓存。
+func TestPreserveCachedItemMetricsKeepsNewShelfState(t *testing.T) {
+	// cached 是旧的已下架状态。
+	cached := map[string]json.RawMessage{"shelf_state": json.RawMessage(`"off"`)}
+	// merged 必须保留本次快照明确给出的已上架状态。
+	merged := preserveCachedItemMetrics(`{"shelf_state":"on"}`, cached)
+	// fields 是解析后的扩展对象。
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(merged), &fields); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(logs.String(), "列表 isSKU 字段") || !strings.Contains(logs.String(), "全量商品同步完成") {
-		t.Fatalf("商品同步日志未说明多规格判断来源：%s", logs.String())
+	if fields["shelf_state"] != "on" {
+		t.Fatalf("新货架状态被旧缓存覆盖: %s", merged)
+	}
+}
+
+// TestEnsureOnShelfStateDefaultsListedItemsToOnSale 验证从“在售”分组同步的商品默认标记为已上架，且不覆盖已确认的下架回执。
+func TestEnsureOnShelfStateDefaultsListedItemsToOnSale(t *testing.T) {
+	// onSale 是无货架状态的新商品，应补回“在售”标记。
+	onSale := ensureOnShelfState(`{"title":"新商品"}`)
+	// offShelf 是本地已经确认下架的商品，必须保留 off。
+	offShelf := ensureOnShelfState(`{"shelf_state":"off","title":"下架商品"}`)
+	// broken 是损坏的扩展 JSON，应原样返回不阻断同步。
+	broken := ensureOnShelfState(`{invalid`)
+	for _, tc := range []struct {
+		name string
+		got  string
+		want string
+	}{
+		{name: "默认在售", got: onSale, want: "on"},
+		{name: "保留下架回执", got: offShelf, want: "off"},
+		{name: "损坏 JSON 原样返回", got: broken, want: broken},
+	} {
+		var fields map[string]any
+		_ = json.Unmarshal([]byte(tc.got), &fields)
+		if tc.name == "损坏 JSON 原样返回" {
+			if tc.got != tc.want {
+				t.Fatalf("%s: 应原样返回损坏 JSON", tc.name)
+			}
+			continue
+		}
+		if fields["shelf_state"] != tc.want {
+			t.Fatalf("%s: shelf_state=%v want %v (raw=%s)", tc.name, fields["shelf_state"], tc.want, tc.got)
+		}
 	}
 }

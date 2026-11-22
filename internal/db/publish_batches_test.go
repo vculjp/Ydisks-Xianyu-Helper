@@ -385,6 +385,7 @@ func TestPublishBatches_ResetFailedKeepsValidationFailures(t *testing.T) {
 	err := s.PublishBatches.Create(ctx, makePublishBatch(uid, "validation-batch"), []ItemPublishBatchRow{
 		{RowNo: 1, Title: "bad", Price: "0", Status: "failed", ErrorMessage: "价格错误", FailureKind: "validation"},
 		{RowNo: 2, Title: "retry", Price: "1", Status: "failed", ErrorMessage: "网络错误", FailureKind: "publish"},
+		{RowNo: 3, Title: "web denied", Price: "1", Status: "failed", ErrorMessage: "请到APP发布", FailureKind: "pc_unsupported"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -402,6 +403,10 @@ func TestPublishBatches_ResetFailedKeepsValidationFailures(t *testing.T) {
 	}
 	if rows[1].Status != "pending" || rows[1].FailureKind != "" || rows[1].ErrorMessage != "" {
 		t.Fatalf("publish failure should be reset: %+v", rows[1])
+	}
+	// 平台明确拒绝网页发布的行不能在“重试失败行”时重设，否则会反复调用不可用的接口。
+	if rows[2].Status != "failed" || rows[2].FailureKind != "pc_unsupported" {
+		t.Fatalf("pc_unsupported row must remain failed: %+v", rows[2])
 	}
 }
 

@@ -231,6 +231,21 @@ func TestTemplatePublishPreviewFailures(t *testing.T) {
 	}
 }
 
+// TestTemplatePublishPreviewRejectsTitleOnly 验证历史脏模板不会进入图片快照、预检批次或真实平台发布。
+func TestTemplatePublishPreviewRejectsTitleOnly(t *testing.T) {
+	// f 创建只包含本地仓储和记录器的发布夹具，绝不触发平台调用。
+	f := newPublishFixture(t)
+	// template 修改为历史故障版本：正文与标题完全相同。
+	template := f.templates.templates[1]
+	template.Description = template.Title
+	f.templates.templates[1] = template
+	// resultErr 应在准备临时目录前返回描述缺失错误。
+	_, resultErr := f.service.PreviewPublish(context.Background(), PublishPreviewInput{UserID: 1, TemplateIDs: []int64{1}, CookieIDs: []string{"a"}})
+	if resultErr == nil || !strings.Contains(resultErr.Error(), "描述缺失或只有标题") || len(f.snapshots.prepared) != 0 {
+		t.Fatalf("历史坏模板不应进入发布预检: err=%v prepared=%v", resultErr, f.snapshots.prepared)
+	}
+}
+
 // TestPublishHelpers 覆盖金额与扩展名辅助函数。
 func TestPublishHelpers(t *testing.T) {
 	if centsText(5) != "0.05" || centsText(123456) != "1234.56" {

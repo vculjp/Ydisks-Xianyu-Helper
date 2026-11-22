@@ -8,6 +8,7 @@ import { draftFromTemplate, emptyDraft, reconcileDraftSpecs, specScopes, toReque
 import type { LibraryCategoryFieldComponent, LibraryCategoryValue, ProductTemplate } from '../types';
 import { ImagePickerDialog } from './ImagePickerDialog';
 import { TemplateAutomationEditor } from './TemplateAutomationEditor';
+import { SourcePublishSummary } from '../../../../shared/ui/publish/SourcePublishSummary';
 
 /** TemplateEditorDialogProps 描述模板编辑弹窗。 */
 export interface TemplateEditorDialogProps {
@@ -84,6 +85,7 @@ export const TemplateEditorDialog = ({ template, busy, options, categoryField: C
         </div>
         <div className="modal-body space-y-6">
           {error && <div role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+          {draft.source?.itemId && <SourcePublishSummary source={draft.source}/>}
           <section className="grid gap-4 md:grid-cols-2">
             <label className="text-sm font-bold text-gray-800">模板名称<input className={`${fieldClass} mt-1`} value={draft.name} onChange={/* 修改模板名称。 */ event => patch({ name: event.target.value })} placeholder="仅用于识别模板" /></label>
             <label className="text-sm font-bold text-gray-800">商品标题<input className={`${fieldClass} mt-1`} value={draft.title} onChange={/* 修改商品标题。 */ event => patch({ title: event.target.value })} /></label>

@@ -8,7 +8,8 @@ describe('responsive rules layout', () => {
   test('allows the rules page to shrink inside the sidebar layout', () => {
     const app = source('app/shell/AuthenticatedShell.tsx'); /* app 表示认证后应用壳源码。 */
     const rules = source('app/features/rules/pages/Rules.tsx'); /* rules 表示规则集合。 */
-    expect(app).toContain('h-screen min-w-0 flex-1 overflow-x-hidden');
+    expect(app).toContain('className="console-workspace"');
+    expect(app).toContain('console-main');
     expect(rules).toContain('min-w-0 space-y-8');
     expect(rules).toContain('xl:grid-cols-[minmax(270px,0.72fr)_minmax(0,1.28fr)]');
     expect(rules).not.toContain('2xl:grid-cols-[360px_1fr]');

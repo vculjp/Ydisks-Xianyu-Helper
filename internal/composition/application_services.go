@@ -718,11 +718,14 @@ func publishBatchFailure(err error, batchStatus string) (string, string) {
 	if errors.As(err, &uncertainErr) {
 		failureKind = "uncertain_remote"
 		message += "；远端结果未能可靠落库，禁止自动重试，请人工核对闲鱼商品列表"
+	} else if errors.Is(err, itemapp.ErrPCPublishUnsupported) {
+		failureKind = "pc_unsupported"
+		message += "；该商品不支持网页端发布，不能通过重复提交解决；请在闲鱼APP发布后回系统同步商品"
 	} else if errors.As(err, &postErr) {
 		failureKind = "post_publish"
 	}
 	if batchStatus == "canceled" || batchStatus == "canceling" {
-		if failureKind == "uncertain_remote" {
+		if failureKind == "uncertain_remote" || failureKind == "pc_unsupported" {
 			message = "任务已取消；" + message
 		} else {
 			message = "任务已取消"

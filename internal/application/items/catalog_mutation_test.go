@@ -21,6 +21,8 @@ type catalogMutationRepositoryStub struct {
 	patchInput CatalogPatchInput
 	// deleteErr 保存逻辑删除时的预设错误。
 	deleteErr error
+	// deleteCalls 记录逻辑删除被调用的次数，供远端删除顺序测试断言。
+	deleteCalls int
 	// multiSpecErr 保存多规格开关更新时的预设错误。
 	multiSpecErr error
 	// multiQuantityErr 保存多数量开关更新时的预设错误。
@@ -46,6 +48,7 @@ func (repository *catalogMutationRepositoryStub) Patch(_ context.Context, _, _ s
 
 // Delete 返回测试预设的逻辑删除错误。
 func (repository *catalogMutationRepositoryStub) Delete(context.Context, string, string) error {
+	repository.deleteCalls++
 	return repository.deleteErr
 }
 

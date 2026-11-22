@@ -1090,6 +1090,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/items/{cookie_id}/{item_id}/bargain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 用户确认后开启或关闭单件闲鱼商品的“2 人小刀” */
+        post: operations["postApiV1ItemBargain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/items/{cookie_id}/{item_id}/downshelf": {
         parameters: {
             query?: never;
@@ -1118,6 +1135,46 @@ export interface paths {
         put?: never;
         /** 用户确认后通过原始商品详情尝试重新上架 */
         post: operations["postApiV1ItemReshelf"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{cookie_id}/{item_id}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 用户确认后删除单件闲鱼商品并清理本地记录 */
+        post: operations["postApiV1ItemDelete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/items/{cookie_id}/{item_id}/metrics/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 用户显式读取一件商品的真实浏览及想要并更新本地缓存
+         * @description 每次仅调用已有单商品详情用例，不支持批量 ID、不由列表读取或同步自动触发。
+         *     继续遵守账号 MTOP 节流和原有有界 Token 恢复；风控、会话失效或取消后不重放本次用例。
+         *     不存在已验证的详情曝光字段，因此不能据此补全曝光量；未知统计省略，真实零保留。
+         *
+         */
+        post: operations["refreshItemMetrics"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2753,6 +2810,10 @@ export interface components {
             item_description?: string;
             item_price?: string;
         };
+        /** @description 开启或关闭单件商品的“2 人小刀” */
+        ItemBargainRequest: {
+            enabled: boolean;
+        };
         ItemRemoteActionResponse: {
             success: boolean;
             message: string;
@@ -3562,6 +3623,12 @@ export interface components {
             item_price: string;
             item_detail: string;
             item_image: string;
+            /** @description 最近一次列表同步缓存的精确曝光次数；未知时省略，0 表示平台明确返回零。不因读取列表补发平台请求。 */
+            exposure_count?: number;
+            /** @description 最近一次列表同步缓存的精确浏览次数；未知时省略，0 表示平台明确返回零。 */
+            browse_count?: number;
+            /** @description 最近一次列表同步缓存的精确想要人数；未知时省略，0 表示平台明确返回零。 */
+            want_count?: number;
             is_multi_spec: boolean;
             multi_quantity_delivery: boolean;
             is_multi_qty_ship: boolean;
@@ -3576,6 +3643,12 @@ export interface components {
             item_category: string;
             item_price: string;
             item_detail: string;
+            /** @description 从本地详情缓存派生的精确曝光次数；未知时省略，真实零值保留。 */
+            exposure_count?: number;
+            /** @description 从本地详情缓存派生的精确浏览次数；未知时省略，真实零值保留。 */
+            browse_count?: number;
+            /** @description 从本地详情缓存派生的精确想要人数；未知时省略，真实零值保留。 */
+            want_count?: number;
             is_multi_spec: boolean;
             multi_quantity_delivery: boolean;
         };
@@ -4422,6 +4495,7 @@ export interface components {
             postage_mode: string;
             postage?: string;
             category: components["schemas"]["PublishCategoryResponse"];
+            source?: components["schemas"]["SourcePublishInfo"];
             image_ids: number[];
             specs: components["schemas"]["LibraryTemplateSpecs"];
             automation: components["schemas"]["LibraryTemplateAutomation"];
@@ -4438,6 +4512,7 @@ export interface components {
             postage_mode: string;
             postage: string;
             category: components["schemas"]["PublishCategoryResponse"];
+            source?: components["schemas"]["SourcePublishInfo"];
             image_ids: number[];
             specs: components["schemas"]["LibraryTemplateSpecs"];
             automation: components["schemas"]["LibraryTemplateAutomation"];
@@ -4503,6 +4578,42 @@ export interface components {
             location?: components["schemas"]["LibraryTemplateLocation"];
             publish_interval_seconds?: number;
         };
+        SourcePublishCategory: {
+            cat_id: string;
+            cat_name: string;
+            channel_cat_id: string;
+            tb_cat_id: string;
+        };
+        SourcePublishAttribute: {
+            name: string;
+            value: string;
+        };
+        SourcePublishSpecValue: {
+            value: string;
+            image_url: string;
+        };
+        SourcePublishSpec: {
+            name: string;
+            values: components["schemas"]["SourcePublishSpecValue"][];
+        };
+        SourcePublishSKU: {
+            value_labels: string[];
+            price: string;
+            quantity: number;
+        };
+        SourcePublishInfo: {
+            item_id?: string;
+            web_url?: string;
+            category?: components["schemas"]["SourcePublishCategory"];
+            specs?: components["schemas"]["SourcePublishSpec"][];
+            skus?: components["schemas"]["SourcePublishSKU"][];
+            quantity?: number;
+            postage_mode?: string;
+            postage?: string;
+            area?: string;
+            attributes?: components["schemas"]["SourcePublishAttribute"][];
+            missing?: string[];
+        };
         CollectedItem: {
             item_id: string;
             title: string;
@@ -4517,6 +4628,7 @@ export interface components {
             want_count: number;
             browse_count: number;
             category_id: string;
+            source?: components["schemas"]["SourcePublishInfo"];
             is_free_shipping: boolean;
             is_multi_spec: boolean;
             has_full_detail: boolean;
@@ -4579,6 +4691,7 @@ export interface components {
             original_price?: string;
             image_urls: string[];
             has_full_detail: boolean;
+            source?: components["schemas"]["SourcePublishInfo"];
         };
         CollectorSaveTemplatesRequest: {
             cookie_id?: string;
@@ -10620,6 +10733,87 @@ export interface operations {
             };
         };
     };
+    postApiV1ItemBargain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cookie_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ItemBargainRequest"];
+            };
+        };
+        responses: {
+            /** @description 小刀开关已确认 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemRemoteActionResponse"];
+                };
+            };
+            /** @description 参数错误 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 未登录 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 商品不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 本地状态保存失败 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 平台拒绝或结果未知 */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     postApiV1ItemDownShelf: {
         parameters: {
             query?: never;
@@ -10764,6 +10958,151 @@ export interface operations {
                 };
             };
             /** @description 平台拒绝或结果未知 */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    postApiV1ItemDelete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cookie_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 删除已确认 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemRemoteActionResponse"];
+                };
+            };
+            /** @description 参数错误 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 未登录 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 商品不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 本地状态保存失败 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 平台拒绝或结果未知 */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    refreshItemMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                cookie_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 返回缓存更新后的当前商品 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ItemListResponse"];
+                };
+            };
+            /** @description 未登录 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 无权限 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 商品不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 本地统计保存或读取失败 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description 平台详情读取失败 */
             502: {
                 headers: {
                     [name: string]: unknown;

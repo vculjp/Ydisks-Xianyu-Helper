@@ -14,9 +14,9 @@ func TestPreviewTemplateRowsSkipsAccountAndImageFiles(t *testing.T) {
 	service := newSheetTemplateService(t)
 	service.images = batchPreviewImageFake{invalid: "bad.png"}
 	// fields 包含：合法模板行（他人账号、不存在的图片文件）与价格非法行。
-	fields, err := ParseSheet([]byte("模板名称,账号ID,标题,价格,图片,邮费模式,付款发货启用,付款发货内容,变量.link,变量.code,模板卡密.main\n"+
-		"网盘A,someone-else,资源A,9.9,bad.png,none,是,T1,https://pan.example.com/s/a,c1,9\n"+
-		",,资源B,abc,bad.png,none,否,,,,\n"), "t.csv", 300)
+	fields, err := ParseSheet([]byte("模板名称,账号ID,标题,描述,价格,图片,邮费模式,付款发货启用,付款发货内容,变量.link,变量.code,模板卡密.main\n"+
+		"网盘A,someone-else,资源A,资源A的商品详情,9.9,bad.png,none,是,T1,https://pan.example.com/s/a,c1,9\n"+
+		",,资源B,资源B的商品详情,abc,bad.png,none,否,,,,\n"), "t.csv", 300)
 	if err != nil {
 		t.Fatal(err)
 	}

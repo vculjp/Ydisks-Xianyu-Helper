@@ -214,7 +214,7 @@ func (r automationRunCoordinator) prepareRuleRun(ctx context.Context, task Task,
 	// AllowAllItems 固化当前规则的显式全商品授权；恢复历史运行时仍以当前有效规则授权为准，不从订单规格推断通配范围。
 	task.AllowAllItems = ruleAllowsAllItems(rule, task.TriggerType)
 	if len(task.ActionPlan) == 0 && task.TriggerType != TriggerOrderPaid {
-		task.ActionPlan = r.planner.plan(task, rule.Actions)
+		task.ActionPlan = r.planner.planRuleActions(task, rule)
 	}
 	if r.paidEventAlreadySettled(ctx, task, rule) {
 		// 同一规则已对这条付款事件收口（成功或转人工），重复推送不再补全订单事实，也就不会再请求平台订单详情。
@@ -261,7 +261,7 @@ func (r automationRunCoordinator) prepareRuleRun(ctx context.Context, task Task,
 		return preparedTask, nil, true, nil
 	}
 	if len(preparedTask.ActionPlan) == 0 {
-		preparedTask.ActionPlan = r.planner.plan(preparedTask, rule.Actions)
+		preparedTask.ActionPlan = r.planner.planRuleActions(preparedTask, rule)
 	}
 	// resumeID 是延迟任务或恢复任务携带的既有运行 ID。
 	if resumeID := taskAutomationRunID(preparedTask); resumeID > 0 {

@@ -17,9 +17,9 @@ const BrowserNotificationToggle: React.FC = () => {
   // hint 是权限被拒绝、页面非安全上下文或浏览器不支持时的处理建议，由权限与页面环境推导，不存入状态。
   const hint = getBrowserNotificationHint(preference.permission, typeof window === 'undefined' || window.isSecureContext !== false);
   return (
-    <div title={hint || undefined} className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs">
+    <div title={hint || undefined} className="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs sm:rounded-full">
       <BellRing className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
-      <span className="font-semibold text-slate-600">浏览器提醒</span>
+      <span className="whitespace-nowrap font-semibold text-slate-600">浏览器提醒</span>
       <button
         type="button"
         role="switch"
@@ -31,8 +31,8 @@ const BrowserNotificationToggle: React.FC = () => {
       >
         <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${preference.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
       </button>
-      <span className="text-slate-400">{statusText}</span>
-      {hint && <span className="max-w-[16rem] text-amber-600">{hint}</span>}
+      <span className="whitespace-nowrap text-slate-400">{statusText}</span>
+      {hint && <span className="max-w-full break-words text-amber-600">{hint}</span>}
       {preference.error && <span className="sr-only" role="status">{preference.error}</span>}
     </div>
   );

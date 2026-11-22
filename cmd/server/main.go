@@ -180,6 +180,7 @@ func main() {
 	// err 表示前台服务的启动、监听或关闭失败。
 	if err := run(ctx); err != nil {
 		slog.Error("服务退出", "err", logsafe.Error(err))
+		fmt.Fprintf(os.Stderr, "服务退出: %s\n", logsafe.Error(err))
 		os.Exit(1)
 	}
 }

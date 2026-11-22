@@ -15,10 +15,14 @@ type RemoteItemAction string
 const (
 	// RemoteItemEditAction 表示修改闲鱼现有商品的标题、描述和价格。
 	RemoteItemEditAction RemoteItemAction = "edit"
+	// RemoteItemBargainAction 表示开启或关闭闲鱼商品的“2 人小刀”。
+	RemoteItemBargainAction RemoteItemAction = "bargain"
 	// RemoteItemDownShelfAction 表示将平台在售商品下架，但保留本地资料和发货规则。
 	RemoteItemDownShelfAction RemoteItemAction = "downshelf"
 	// RemoteItemReshelfAction 表示尝试使用平台原始编辑详情重新上架。
 	RemoteItemReshelfAction RemoteItemAction = "reshelf"
+	// RemoteItemDeleteAction 表示在平台确认删除后逻辑删除本地商品及其商品级规则。
+	RemoteItemDeleteAction RemoteItemAction = "delete"
 )
 
 // RemoteItemInput 是平台单件操作的业务输入，价格采用人民币文本而非浮点数。
@@ -37,6 +41,8 @@ type RemoteItemInput struct {
 	Description *string
 	// Price 为 nil 时保留原价格，否则格式为元且最多两位小数。
 	Price *string
+	// Bargain 为 nil 时保留原小刀开关，否则为期望的开启或关闭状态。
+	Bargain *bool
 }
 
 // RemoteItemChanges 是应用层交付平台的显式编辑补丁。
@@ -47,6 +53,8 @@ type RemoteItemChanges struct {
 	Description *string
 	// PriceCents 是修改后的售价，单位分。
 	PriceCents *int64
+	// Bargain 是显式修改的“2 人小刀”开关目标。
+	Bargain *bool
 }
 
 // RemoteItemPlatform 是应用层消费的最小平台操作端口，负责账号归属、Cookie 和 MTOP 通信。
@@ -55,8 +63,12 @@ type RemoteItemPlatform interface {
 	Edit(context.Context, int64, string, string, RemoteItemChanges) error
 	// DownShelf 只提交一次单件下架请求，平台未确认成功应返回错误。
 	DownShelf(context.Context, int64, string, string) error
+	// Delete 只提交一次单件删除请求，平台未确认成功应返回错误。
+	Delete(context.Context, int64, string, string) error
 	// Reshelf 使用平台编辑快照执行一次重新上架，拒绝时不更新本地状态。
 	Reshelf(context.Context, int64, string, string) error
+	// SetBargain 在平台确认后开启或关闭商品的“2 人小刀”。
+	SetBargain(context.Context, int64, string, string, bool) error
 }
 
 // RemoteItemLocalSaveError 表示平台已经确认成功，但本地数据库尚未完成一致性写入。
@@ -107,6 +119,28 @@ func (s *RemoteItemService) Execute(ctx context.Context, input RemoteItemInput) 
 	// patch 是后续数据库操作仅修改的字段，保留其它属性及发货规则。
 	patch := CatalogPatchInput{}
 	switch input.Action {
+	case RemoteItemRefreshMetricsAction:
+		return s.refreshMetrics(ctx, input)
+	case RemoteItemBargainAction:
+		if input.Bargain == nil {
+			return errors.New("小刀开关目标不能为空")
+		}
+		// storedShelfState 是此前由平台确认的货架标记，避免编辑已下架商品时意外触发重新上架。
+		var storedShelfState struct {
+			ShelfState string `json:"shelf_state"`
+		}
+		if json.Unmarshal([]byte(firstNonEmptyRemoteItemDetail(current.ItemDetail)), &storedShelfState) == nil && storedShelfState.ShelfState == "off" {
+			return errors.New("商品已下架，请先重新上架并确认后再切换小刀")
+		}
+		if err := s.platform.SetBargain(ctx, input.UserID, input.CookieID, input.ItemID, *input.Bargain); err != nil {
+			return err
+		}
+		// bargainDetail 保存平台确认后的本地小刀状态，仅改动扩展 JSON 中的显式标记。
+		bargainDetail, jsonErr := remoteItemDetailWithBargainState(current.ItemDetail, *input.Bargain)
+		if jsonErr != nil {
+			return &RemoteItemLocalSaveError{Action: input.Action, Err: jsonErr}
+		}
+		patch.ItemDetail = &bargainDetail
 	case RemoteItemEditAction:
 		// storedShelfState 是此前由平台确认的货架标记，避免编辑已下架商品时意外触发重新上架。
 		var storedShelfState struct {
@@ -167,6 +201,15 @@ func (s *RemoteItemService) Execute(ctx context.Context, input RemoteItemInput) 
 			return actionErr
 		}
 		patch.ItemDetail = &metadata
+	case RemoteItemDeleteAction:
+		// 平台删除是本地删除的前置条件；平台拒绝或结果未知时保留本地商品和规则供人工核对。
+		if err := s.platform.Delete(ctx, input.UserID, input.CookieID, input.ItemID); err != nil {
+			return err
+		}
+		if err := s.catalog.Delete(ctx, input.CookieID, input.ItemID); err != nil {
+			return &RemoteItemLocalSaveError{Action: input.Action, Err: err}
+		}
+		return nil
 	default:
 		return errors.New("不支持的商品操作")
 	}
@@ -175,6 +218,78 @@ func (s *RemoteItemService) Execute(ctx context.Context, input RemoteItemInput) 
 		return &RemoteItemLocalSaveError{Action: input.Action, Err: err}
 	}
 	return nil
+}
+
+// remoteItemDetailWithBargainState 只更新本地扩展 JSON 里的显式小刀开关，保留原有图片、分类与货架状态。
+func remoteItemDetailWithBargainState(original string, enabled bool) (string, error) {
+	// detail 是本地非敏感商品扩展对象，不向平台上传。
+	detail := map[string]json.RawMessage{}
+	if strings.TrimSpace(original) != "" {
+		// err 是已有商品扩展信息解析失败的原因，禁止提交会破坏本地详情的远端操作。
+		if err := json.Unmarshal([]byte(original), &detail); err != nil {
+			return "", err
+		}
+	}
+	if detail == nil {
+		return "", errors.New("本地商品详情必须是 JSON 对象")
+	}
+	// stateJSON 保存布尔开关的 JSON 编码，供列表页展示和下次同步前保持稳定。
+	stateJSON, _ := json.Marshal(enabled)
+	detail["bargain_state"] = stateJSON
+	// encoded、err 是保留其它已有字段后的完整扩展 JSON。
+	encoded, err := json.Marshal(detail)
+	return string(encoded), err
+}
+
+// refreshMetrics 在单件详情返回后重新读取最新缓存并只合并浏览和想要；并发本地编辑不会因本次刷新被整份旧快照覆盖。
+func (s *RemoteItemService) refreshMetrics(ctx context.Context, input RemoteItemInput) error {
+	// initial、initialErr 是刷新前已存在商品及其读取错误，确保不会借刷新创建新商品。
+	initial, initialErr := s.catalog.Get(ctx, input.CookieID, input.ItemID)
+	if initialErr != nil {
+		return initialErr
+	}
+	// metadata、refreshErr 是单件详情结果，不写库、不循环、不自动重放。
+	metadata, refreshErr := s.refreshedMetricsDetail(ctx, initial, input)
+	if refreshErr != nil {
+		return refreshErr
+	}
+	// latest、latestErr 是平台读取期间可能被其它本地操作更新的商品；单件刷新只合并统计键。
+	latest, latestErr := s.catalog.Get(ctx, input.CookieID, input.ItemID)
+	if latestErr != nil {
+		return &RemoteItemLocalSaveError{Action: RemoteItemRefreshMetricsAction, Err: latestErr}
+	}
+	// merged、mergeErr 是保留最新 non-stat 字段并写入本次明确统计的完整详情。
+	merged, mergeErr := mergeMetricCache(latest.ItemDetail, metadata)
+	if mergeErr != nil {
+		return &RemoteItemLocalSaveError{Action: RemoteItemRefreshMetricsAction, Err: mergeErr}
+	}
+	if /* patchErr 是保存合并统计的数据库错误，平台已成功读取但本地失败。 */ patchErr := s.catalog.Patch(ctx, input.CookieID, input.ItemID, CatalogPatchInput{ItemDetail: &merged}); patchErr != nil {
+		return &RemoteItemLocalSaveError{Action: RemoteItemRefreshMetricsAction, Err: patchErr}
+	}
+	return nil
+}
+
+// mergeMetricCache 仅从 refreshed 提取三项统计键合并进 latest，避免晚到的平台读取覆盖同时发生的标题或货架编辑。
+func mergeMetricCache(latest, refreshed string) (string, error) {
+	// latestFields、latestErr 是当前缓存对象，损坏时拒绝保存而不是丢弃原资料。
+	var latestFields map[string]json.RawMessage
+	if /* latestErr 是当前本地缓存格式错误。 */ latestErr := json.Unmarshal([]byte(firstNonEmptyRemoteItemDetail(latest)), &latestFields); latestErr != nil || latestFields == nil {
+		return "", errors.New("本地商品扩展信息损坏，无法合并指标")
+	}
+	// refreshedFields、refreshedErr 是本次平台详情保存出的统计字段。
+	var refreshedFields map[string]json.RawMessage
+	if /* refreshedErr 是内部统计缓存 JSON 编码错误。 */ refreshedErr := json.Unmarshal([]byte(refreshed), &refreshedFields); refreshedErr != nil || refreshedFields == nil {
+		return "", errors.New("商品指标缓存格式错误")
+	}
+	// key 只允许本次明确刷新的统计字段，不把平台详情原始对象或其它编辑字段带入本地缓存。
+	for _, key := range []string{"browse_count", "want_count"} {
+		if /* value、exists 分别是待合并统计字段的原始 JSON 值及其存在标记。 */ value, exists := refreshedFields[key]; exists {
+			latestFields[key] = value
+		}
+	}
+	// encoded、encodeErr 是合并后的本地扩展 JSON。
+	encoded, encodeErr := json.Marshal(latestFields)
+	return string(encoded), encodeErr
 }
 
 // firstNonEmptyRemoteItemDetail 仅将本地空扩展详情归一为空 JSON 对象，避免把空串误判为损坏。

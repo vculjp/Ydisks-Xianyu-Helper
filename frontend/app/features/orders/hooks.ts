@@ -32,6 +32,8 @@ export const useOrderQuery = (options: OrderQueryOptions = { pageSize: 20 }): Or
   const [totalPages, setTotalPages] = useState(1);
   // loading 表示当前订单查询是否正在执行。
   const [loading, setLoading] = useState(false);
+  // loadError 保存订单列表读取失败的可见说明；空字符串表示最近一次请求成功。
+  const [loadError, setLoadError] = useState('');
   // orderGeneration 隔离筛选变化和手动刷新的旧订单响应。
   const orderGeneration = useRef(0);
   // orderAbort 保存当前订单查询的取消控制器。
@@ -50,6 +52,7 @@ export const useOrderQuery = (options: OrderQueryOptions = { pageSize: 20 }): Or
     const controller = new AbortController();
     orderAbort.current = controller;
     setLoading(true);
+    setLoadError('');
     try {
       // result 是当前筛选条件下的分页订单结果。
       const result = await getOrders(accountFilter || undefined, filter, page, options.pageSize, debouncedSearch, { signal: controller.signal });
@@ -59,6 +62,9 @@ export const useOrderQuery = (options: OrderQueryOptions = { pageSize: 20 }): Or
     } catch (error /* 订单查询异常 */) {
       if (isCurrentOrderRequest(generation, orderGeneration.current) && !controller.signal.aborted) {
         console.error('加载订单失败:', error);
+        // message 是订单查询失败后允许展示给用户的脱敏说明。
+        const message = error instanceof Error && error.message ? error.message : '订单列表加载失败，请稍后重试';
+        setLoadError(message);
       }
     } finally {
       if (isCurrentOrderRequest(generation, orderGeneration.current)) setLoading(false);
@@ -225,6 +231,7 @@ export const useOrderQuery = (options: OrderQueryOptions = { pageSize: 20 }): Or
     setPage,
     totalPages,
     loading,
+    loadError,
     loadOrders,
     accountName,
     accountNickname,

@@ -12,6 +12,7 @@ const orderListMocks = vi.hoisted(/* orderListMockFactory 创建订单页面共�
   setSearchText: vi.fn(),
   setPage: vi.fn(),
   loadOrders: vi.fn(),
+  loadError: '',
   syncOrders: vi.fn(),
   syncSingleOrder: vi.fn(),
   manualShipOrder: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock('../hooks', /* ordersHooksMockFactory 提供订单查询与导入 Hook �
     setPage: orderListMocks.setPage,
     totalPages: 3,
     loading: false,
+    loadError: orderListMocks.loadError,
     loadOrders: orderListMocks.loadOrders,
     accountName: /* accountNameMock 返回订单筛选账号名称。 */ () => '主账号 · account',
     accountNickname: /* accountNicknameMock 返回订单行账号名称。 */ () => '主账号',
@@ -94,6 +96,7 @@ describe('OrderList 页面组合行为', /* 当前回调验证订单筛选、编
   beforeEach(/* 当前回调重置订单页面 API、Hook 状态和浏览器提示替身。 */ () => {
     vi.clearAllMocks();
     orderListMocks.orders = [orderFixture];
+    orderListMocks.loadError = '';
     orderListMocks.loadOrders.mockResolvedValue(undefined);
     orderListMocks.syncOrders.mockResolvedValue({ success: true, message: '同步完成' });
     orderListMocks.syncSingleOrder.mockResolvedValue({ success: true, message: '订单已同步' });
@@ -149,10 +152,33 @@ describe('OrderList 页面组合行为', /* 当前回调验证订单筛选、编
     expect(orderListMocks.loadOrders).toHaveBeenCalled();
   });
 
+  test('订单缺少平台状态、金额、数量时展示待核实且编辑不会伪造交易字段', /* 避免同步权限不足时把未获取的数量写成 1，或覆盖旧状态。 */ async () => {
+    // pendingOrder 是仅由实时消息发现、尚未完成平台详情核实的订单。
+    orderListMocks.orders = [{ ...orderFixture, status: 'unknown', quantity: 0, amount: '' }];
+    render(<OrderList />);
+    expect(screen.getByRole('status').textContent).toContain('本页有 1 笔订单的信息尚未核实');
+    expect(screen.getByText(/数量: 待获取/)).toBeTruthy();
+    expect(screen.getByText('待核实')).toBeTruthy();
+    fireEvent.click(screen.getByTitle('查看详情'));
+    expect(screen.getAllByText('待获取').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByText('关闭'));
+    fireEvent.click(screen.getByTitle('编辑订单'));
+    expect(screen.getByRole('option', { name: /待核实（请先确认实际状态）/ })).toBeTruthy();
+    fireEvent.click(screen.getByText('保存更改'));
+    await waitFor(/* saveIncompleteAssertion 校验未核实字段没有发送到修改订单接口。 */ () => expect(orderListMocks.updateOrder).toHaveBeenCalled());
+    // payload 是当前编辑提交的数据；数据库中的未知字段不能被前端猜测覆盖。
+    const payload = orderListMocks.updateOrder.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('order_status');
+    expect(payload).not.toHaveProperty('amount');
+    expect(payload).not.toHaveProperty('quantity');
+  });
+
   test('发货、单笔同步和删除操作分别调用对应 API', /* 当前回调验证订单行动作和结果收束。 */ async () => {
     render(<OrderList />);
     fireEvent.click(screen.getByText('立即发货'));
     expect(screen.getByText('请选择发货方式：')).toBeTruthy();
+    expect(screen.queryByText(/卡券|卡密/)).toBeNull();
+    expect(screen.getByText('完整发货（按规则发送内容）')).toBeTruthy();
     fireEvent.click(screen.getByText('仅修改闲鱼发货状态'));
     await waitFor(/* shipAssertion 等待订单发货 API 完成。 */ () => expect(orderListMocks.manualShipOrder).toHaveBeenCalledWith(['order-1'], 'status_only'));
     expect(screen.getByText('✓ 发货成功')).toBeTruthy();
@@ -178,5 +204,14 @@ describe('OrderList 页面组合行为', /* 当前回调验证订单筛选、编
     expect(pageUpdaters).toHaveLength(2);
     expect(pageUpdaters[0][0](2)).toBe(1);
     expect(pageUpdaters[1][0](2)).toBe(3);
+  });
+
+  test('订单读取失败显示错误和重试入口而不是空列表', /* 当前回调验证失败态不会伪装成没有订单。 */ () => {
+    orderListMocks.orders = [];
+    orderListMocks.loadError = '订单服务不可用';
+    render(<OrderList />);
+    expect(screen.getByRole('alert').textContent).toContain('订单服务不可用');
+    fireEvent.click(screen.getByText('重新加载'));
+    expect(orderListMocks.loadOrders).toHaveBeenCalled();
   });
 });

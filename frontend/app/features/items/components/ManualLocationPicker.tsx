@@ -107,7 +107,7 @@ export const ManualLocationPicker: React.FC<ManualLocationPickerProps> = ({ open
             </div>
           </div>
 
-          {locationState.error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-700">{locationState.error}</div>}
+          {locationState.error && <div className="rounded-xl border border-danger-200 bg-danger-50 px-4 py-3 text-sm leading-6 text-danger-700">{locationState.error}</div>}
 
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">

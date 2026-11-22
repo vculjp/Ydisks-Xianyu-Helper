@@ -51,6 +51,8 @@ export interface OrderQueryState {
   totalPages: number;
   // loading 表示订单列表或刷新请求是否正在执行。
   loading: boolean;
+  // loadError 保存订单列表加载失败的可见说明。
+  loadError: string;
   // loadOrders 刷新当前筛选条件下的订单列表。
   loadOrders: () => Promise<void>;
   // accountName 将账号 ID 转换为筛选下拉框展示名称。

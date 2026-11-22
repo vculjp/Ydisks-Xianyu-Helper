@@ -1,4 +1,5 @@
 import type { PublishLocation } from './models';
+import { itemMetrics } from './itemMetrics';
 import {
 AccountDetail,
 BatchCancelResponse,
@@ -36,6 +37,8 @@ export const itemErrorMessage = (error: unknown, fallback: string): string => {
     switch (error.code) {
       case 'stock_permission_missing':
         return '发布失败：该账号没有库存发布权限，无法按库存数量发布商品。请换账号或先在闲鱼确认库存能力。';
+      case 'pc_publish_unsupported':
+        return '闲鱼平台不支持该商品通过网页端发布，请到闲鱼APP发布；成功后返回系统同步商品列表。重复网页提交无法解决。';
       case 'conflict':
       case 'item_conflict':
         return '商品状态已发生变化，请刷新后重试。';
@@ -65,8 +68,9 @@ export const getItems = async (cookieId?: string, options?: RequestControlOption
     const res = await runContractRequest(/* signal 控制商品列表请求的取消和超时。 */ signal => contractClient.GET('/api/v1/items', { params: { query: { cookie_id: cookieId } }, signal }), options) as unknown;
     // items 商品列表，用于当前 API 处理流程。
     const items = collectionFrom<Item>(res, ['items', 'data', 'results']);
-    return items.map(/* 当前回调用于处理集合元素或接口响应。 */ (item: any) => ({
+    return items.map(/* item 是列表 DTO；统计仅从响应和本地详情缓存派生，不触发逐商品请求。 */ (item: Item) => ({
       ...item,
+      ...itemMetrics(item),
       id: item.id || `${item.cookie_id}-${item.item_id}`,
       is_multi_spec: normalizeBooleanFlag(item.is_multi_spec),
       is_multi_qty_ship: normalizeBooleanFlag(item.is_multi_qty_ship ?? item.multi_quantity_delivery),
@@ -100,9 +104,9 @@ export const syncItemsFromAccount = async (cookieId: string): Promise<ItemSyncRe
     return runContractRequest(/* signal 控制商品同步请求的取消和超时。 */ signal => contractClient.POST('/api/v1/items/get-all-from-account', { body: { cookie_id: cookieId } as never, signal })) as unknown as Promise<ItemSyncResponse>;
 }
 
-// deleteItem 删除商品。
+// deleteItem 先请求闲鱼删除商品，平台确认后清理本地记录及商品级规则。
 export const deleteItem = async (cookieId: string, itemId: string): Promise<OperationResponse> => {
-    return runContractRequest(/* signal 控制商品删除请求的取消和超时。 */ signal => contractClient.DELETE('/api/v1/items/{cookie_id}/{item_id}', { params: { path: { cookie_id: cookieId, item_id: itemId } }, signal }));
+    return runContractRequest(/* signal 控制商品远程删除请求的取消和超时。 */ signal => contractClient.POST('/api/v1/items/{cookie_id}/{item_id}/delete', { params: { path: { cookie_id: cookieId, item_id: itemId } }, signal })) as Promise<OperationResponse>;
 }
 
 // createItem 创建商品。
@@ -290,9 +294,26 @@ export const setItemShelf = async (cookieId: string, itemId: string, operation: 
   })) as Promise<ItemRemoteActionResponse>;
 };
 
+// setItemBargain 只向闲鱼提交一次小刀开关变更，不自动重试；平台不支持网页编辑时返回明确错误。
+export const setItemBargain = async (cookieId: string, itemId: string, enabled: boolean): Promise<ItemRemoteActionResponse> =>
+  runContractRequest(/* signal 控制已确认的小刀开关请求。 */ signal => contractClient.POST('/api/v1/items/{cookie_id}/{item_id}/bargain', {
+    params: { path: { cookie_id: cookieId, item_id: itemId } }, body: { enabled }, signal,
+  })) as Promise<ItemRemoteActionResponse>;
+
 /** 读取指定账号与商品的详情，用于编辑器恢复表单，并将生成传输 DTO 保持在 feature adapter 边界。 */
 export const getItemDetail = async (accountID: string, itemID: string): Promise<ItemDetailResponse> => {
   // response 保存已由 OpenAPI 路径类型约束的商品详情传输响应。
   const response = await runContractRequest(/* signal 控制商品详情请求的取消和超时。 */ signal => contractClient.GET('/api/v1/items/{cookie_id}/{item_id}', { params: { path: { cookie_id: accountID, item_id: itemID } }, signal }));
-  return response;
+  return { ...response, ...itemMetrics(response) };
+};
+
+/** 用户显式刷新一件商品的真实指标；一次只读取一个商品，失败不自动重试，也不会扩展成列表或批量请求。 */
+export const refreshItemMetrics = async (accountID: string, itemID: string): Promise<Item> => {
+  // response 是服务端保存后返回的当前商品，可直接替换表格同一行。
+  const response = await runContractRequest(/* signal 控制单件指标刷新的取消和超时。 */ signal => contractClient.POST('/api/v1/items/{cookie_id}/{item_id}/metrics/refresh', {
+    params: { path: { cookie_id: accountID, item_id: itemID } }, signal,
+  }));
+  // item 保留接口字段并复用同一套严格统计解析，避免表格出现另一套语义。
+  const item = response as unknown as Item;
+  return { ...item, ...itemMetrics(item) };
 };

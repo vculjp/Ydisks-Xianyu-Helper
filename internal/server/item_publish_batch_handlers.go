@@ -553,11 +553,14 @@ func publishBatchFailure(err error, batchStatus string) (string, string) {
 	if errors.As(err, &uncertainErr) || errors.As(err, &appUncertainErr) {
 		failureKind = "uncertain_remote"
 		message += "；远端结果未能可靠落库，禁止自动重试，请人工核对闲鱼商品列表"
+	} else if errors.Is(err, itemapp.ErrPCPublishUnsupported) {
+		failureKind = "pc_unsupported"
+		message += "；该商品不支持网页端发布，不能通过重复提交解决；请在闲鱼APP发布后回系统同步商品"
 	} else if errors.As(err, &postErr) || errors.As(err, &appPostErr) {
 		failureKind = "post_publish"
 	}
 	if batchStatus == "canceled" || batchStatus == "canceling" {
-		if failureKind == "uncertain_remote" {
+		if failureKind == "uncertain_remote" || failureKind == "pc_unsupported" {
 			message = "任务已取消；" + message
 		} else {
 			message = "任务已取消"
@@ -620,7 +623,7 @@ func publishBatchApplicationToResponse(batch itemapp.BatchInfo, rows []itemapp.B
 	retryable := 0
 	// row 表示当前用于统计可重试数量的应用批次明细。
 	for _, row := range rows {
-		if row.Status == "failed" && row.FailureKind != "validation" && row.FailureKind != "uncertain_remote" {
+		if row.Status == "failed" && row.FailureKind != "validation" && row.FailureKind != "uncertain_remote" && row.FailureKind != "pc_unsupported" {
 			retryable++
 		}
 	}

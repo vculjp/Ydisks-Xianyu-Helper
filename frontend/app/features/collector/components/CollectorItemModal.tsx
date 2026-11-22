@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ExternalLink, RefreshCw, Sparkles, X } from 'lucide-react';
 import { collectProductDetails, collectorErrorMessage, rewriteProductWithAI } from '../api';
 import type { CollectedProduct } from '../types';
+import { SourcePublishSummary } from '../../../../shared/ui/publish/SourcePublishSummary';
+import { notify } from '../../../../shared/ui/feedback';
 
 /** CollectorItemModalProps 描述单件采集商品详情补抓与 AI 防重改写弹窗属性。 */
 export interface CollectorItemModalProps {
@@ -35,6 +37,8 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
   const [draftImages, setDraftImages] = useState<string[]>([]);
   // fullDetailLoaded 与 setFullDetailLoaded 标记当前草稿是否已完成详情补抓。
   const [fullDetailLoaded, setFullDetailLoaded] = useState(false);
+  // draftSource 保存补抓详情得到的原商品发布信息，保存草稿时必须与图文一起写回列表。
+  const [draftSource, setDraftSource] = useState<CollectedProduct['source']>(undefined);
   // customInstruction 与 setCustomInstruction 保存用户的可选 AI 附加改写指令。
   const [customInstruction, setCustomInstruction] = useState('');
   // loadingDetail 与 setLoadingDetail 表示是否正在请求闲鱼详情接口。
@@ -43,15 +47,20 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
   const [rewriting, setRewriting] = useState(false);
   // statusMessage 与 setStatusMessage 展示弹窗内的成功提示或失败原因。
   const [statusMessage, setStatusMessage] = useState<{ /** tone 区分成功与警告颜色。 */ tone: 'ok' | 'err'; /** text 是提示文本。 */ text: string } | null>(null);
+  // detailPendingRef 是详情补抓的同步锁，避免同一渲染帧内重复访问平台。
+  const detailPendingRef = useRef(false);
+  // rewritePendingRef 是 AI 改写的同步锁，避免重复计费或覆盖最新结果。
+  const rewritePendingRef = useRef(false);
 
   /** effect 在切换目标商品时同步表单草稿初始值。 */
   useEffect(/* syncDraftEffect 在打开不同商品弹窗时重置编辑草稿。 */ () => {
     if (!item) return;
     setDraftTitle(item.title);
-    setDraftDesc(item.description || item.title);
+    setDraftDesc(item.description);
     setDraftPrice(item.price);
     setDraftImages(item.imageUrls.length > 0 ? [...item.imageUrls] : (item.picUrl ? [item.picUrl] : []));
     setFullDetailLoaded(item.hasFullDetail);
+    setDraftSource(item.source);
     setStatusMessage(null);
   }, [item]);
 
@@ -61,19 +70,22 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
   const buildUpdatedItem = (): CollectedProduct => ({
     ...item,
     title: draftTitle.trim() || item.title,
-    description: draftDesc.trim() || draftTitle.trim() || item.title,
+    description: draftDesc.trim(),
     price: draftPrice.trim() || item.price,
     picUrl: draftImages[0] || item.picUrl,
     imageUrls: draftImages,
     hasFullDetail: fullDetailLoaded,
+    source: draftSource,
   });
 
   /** handleFetchFullDetail 调用单品详情接口补抓完整描述文案与全部高清原图。 */
   const handleFetchFullDetail = async (): Promise<void> => {
+    if (detailPendingRef.current) return;
     if (!cookieId) {
       setStatusMessage({ tone: 'err', text: '请先在页面顶部选择一个采集账号再补抓详情' });
       return;
     }
+    detailPendingRef.current = true;
     setLoadingDetail(true);
     setStatusMessage(null);
     try {
@@ -87,19 +99,28 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
         setDraftPrice(fetched.price || draftPrice);
         setDraftImages(fetched.imageUrls);
         setFullDetailLoaded(fetched.hasFullDetail);
+        setDraftSource(fetched.source);
         setStatusMessage(fetched.hasFullDetail ? { tone: 'ok', text: `已成功补抓完整文案与 ${fetched.imageUrls.length} 张主图` } : { tone: 'err', text: '返回的详情不完整，请人工核对正文及图片' });
+        notify(fetched.hasFullDetail ? 'success' : 'warning', fetched.hasFullDetail ? `已补抓完整文案与 ${fetched.imageUrls.length} 张主图` : '详情返回不完整，请人工核对');
       } else if (batch.errors.length > 0) {
         setStatusMessage({ tone: 'err', text: batch.errors[0].message });
+        notify('error', batch.errors[0].message);
       }
     } catch (failure /* failure 是详情补抓请求抛出的异常。 */) {
-      setStatusMessage({ tone: 'err', text: collectorErrorMessage(failure, '补抓商品详情失败') });
+      // failureMessage 是详情补抓失败的可展示原因。
+      const failureMessage = collectorErrorMessage(failure, '补抓商品详情失败');
+      setStatusMessage({ tone: 'err', text: failureMessage });
+      notify('error', failureMessage);
     } finally {
+      detailPendingRef.current = false;
       setLoadingDetail(false);
     }
   };
 
   /** handleAIRewrite 调用系统大模型对当前标题和详情文案做防同质化改写。 */
   const handleAIRewrite = async (): Promise<void> => {
+    if (rewritePendingRef.current) return;
+    rewritePendingRef.current = true;
     setRewriting(true);
     setStatusMessage(null);
     try {
@@ -108,9 +129,14 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
       setDraftTitle(rewritten.title);
       setDraftDesc(rewritten.description);
       setStatusMessage({ tone: 'ok', text: 'AI 防重改写已完成，请核对下方标题与文案' });
+      notify('success', 'AI 防重改写已完成');
     } catch (failure /* failure 是大模型改写调用失败原因。 */) {
-      setStatusMessage({ tone: 'err', text: collectorErrorMessage(failure, '调用系统 AI 改写失败') });
+      // failureMessage 是 AI 改写失败的可展示原因。
+      const failureMessage = collectorErrorMessage(failure, '调用系统 AI 改写失败');
+      setStatusMessage({ tone: 'err', text: failureMessage });
+      notify('error', failureMessage);
     } finally {
+      rewritePendingRef.current = false;
       setRewriting(false);
     }
   };
@@ -118,7 +144,7 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
   /** handleRestoreOriginal 一键恢复到未改写前的源商品标题与描述。 */
   const handleRestoreOriginal = (): void => {
     setDraftTitle(item.title);
-    setDraftDesc(item.description || item.title);
+    setDraftDesc(item.description);
     setStatusMessage(null);
   };
 
@@ -139,7 +165,7 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
 
         <div className="flex-1 space-y-4 overflow-y-auto p-6">
           {statusMessage && (
-            <div className={`rounded-xl px-4 py-2.5 text-xs font-medium ${statusMessage.tone === 'ok' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                <div className={`rounded-xl px-4 py-2.5 text-xs font-medium ${statusMessage.tone === 'ok' ? 'bg-emerald-50 text-emerald-700' : 'bg-danger-50 text-danger-700'}`}>
               {statusMessage.text}
             </div>
           )}
@@ -178,6 +204,8 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
             </div>
           )}
 
+          <SourcePublishSummary source={draftSource} />
+
           <div className="grid gap-3 sm:grid-cols-4">
             <div className="sm:col-span-3">
               <label className="mb-1 block text-xs font-bold text-slate-700">商品标题（闲鱼展示建议 30 字内）</label>
@@ -207,6 +235,9 @@ export const CollectorItemModal: React.FC<CollectorItemModalProps> = ({
               onChange={/* event 携带详情描述最新文本。 */ event => setDraftDesc(event.target.value)}
               className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm leading-relaxed text-slate-800 focus:border-sky-500 focus:outline-hidden"
             />
+            {(!draftDesc.trim() || draftDesc.trim() === draftTitle.trim()) && (
+              <p className="mt-2 text-xs font-semibold text-amber-700">该商品缺少有效详情或正文与标题相同。采集列表通常只有标题和封面；请补抓完整详情或手动填写原商品真实描述，不能拿标题冒充正文发布。</p>
+            )}
           </div>
 
           <div className="rounded-xl border border-violet-100 bg-violet-50/50 p-3.5">

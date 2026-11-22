@@ -4,6 +4,7 @@ import { beforeEach,describe,expect,test,vi } from 'vitest';
 import type { AIConnectionTestResult,OperationResponse,SystemSettings } from './api';
 import { fetchAIModels,getSystemSettings,testAIConnection,updateLoginCredentials,updateSystemSettings,verifySession } from './api';
 import { useSettings } from './hooks';
+import { confirmAction,notify } from '../../../shared/ui/feedback';
 
 vi.mock('./api', /* settingsApiMockFactory 提供设置 Hook 的确定性 API 替身。 */ () => ({
   fetchAIModels: vi.fn(),
@@ -12,6 +13,10 @@ vi.mock('./api', /* settingsApiMockFactory 提供设置 Hook 的确定性 API �
   updateLoginCredentials: vi.fn(),
   updateSystemSettings: vi.fn(),
   verifySession: vi.fn(),
+}));
+vi.mock('../../../shared/ui/feedback', /* settingsFeedbackMockFactory 提供统一确认框和全局提示替身。 */ () => ({
+  confirmAction: vi.fn(),
+  notify: vi.fn(),
 }));
 
 // fetchModelsMock 是模型发现请求的可控替身。
@@ -26,6 +31,10 @@ const updateCredentialsMock = vi.mocked(updateLoginCredentials);
 const updateSettingsMock = vi.mocked(updateSystemSettings);
 // verifySessionMock 是会话校验请求的可控替身。
 const verifySessionMock = vi.mocked(verifySession);
+// confirmActionMock 是刷新草稿保护和远程 Cookie 确认的统一确认框替身。
+const confirmActionMock = vi.mocked(confirmAction);
+// notifyMock 是保存、凭据和失败提示的全局通知替身。
+const notifyMock = vi.mocked(notify);
 
 // settingsFixture 是覆盖 AI、验证码和日志字段的系统配置。
 const settingsFixture: SystemSettings = { ai_api_url: 'https://ai.example.com', ai_api_key: 'secret', ai_model: '', 'captcha.remote_service_url': 'https://captcha.example.com', log_level: 'info' };
@@ -43,10 +52,7 @@ describe('useSettings', /* 当前回调处理系统设置、模型和凭据请�
     testConnectionMock.mockResolvedValue({ success: true, model: 'model-a', latency_ms: 42, reply: '你好' });
     updateSettingsMock.mockResolvedValue({ success: true });
     updateCredentialsMock.mockResolvedValue({ success: true, message: '凭据已更新' });
-    vi.spyOn(window, 'alert').mockImplementation(
-      // alertImplementation 屏蔽设置保存成功时的浏览器弹窗。
-      () => undefined,
-    );
+    confirmActionMock.mockResolvedValue(true);
     Object.defineProperty(window, 'location', { configurable: true, value: { ...window.location, reload: noopReload } });
   });
 
@@ -66,7 +72,7 @@ describe('useSettings', /* 当前回调处理系统设置、模型和凭据请�
       async () => hook.result.current.handleSave(),
     );
     expect(updateSettingsMock).toHaveBeenCalledWith(expect.objectContaining({ ai_api_url: settingsFixture.ai_api_url }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
-    expect(window.alert).toHaveBeenCalledWith('系统配置已保存');
+    expect(notifyMock).toHaveBeenCalledWith('success', '系统配置已保存');
     expect(hook.result.current.settings?.ai_api_key).toBe('');
     expect(hook.result.current.settings?.ai_api_key_configured).toBe(true);
     await act(/* saveAgain 确保再次保存不会把已脱敏的空密钥传给服务端。 */ async () => hook.result.current.handleSave());
@@ -199,6 +205,117 @@ describe('useSettings', /* 当前回调处理系统设置、模型和凭据请�
       async () => hook.result.current.handleSave(),
     );
     expect(updateSettingsMock).not.toHaveBeenCalled();
+    hook.unmount();
+  });
+
+  test('刷新远端配置前确认未保存草稿并保留刷新失败后的草稿', /* 当前回调验证草稿覆盖保护和失败保留。 */ async () => {
+    // hook 是草稿刷新保护场景的系统设置 Hook 渲染结果。
+    const hook = renderHook(renderSettingsHook);
+    await waitFor(
+      // statusAssertion 等待初始系统设置加载成功。
+      () => expect(hook.result.current.requestStatus).toBe('success'),
+    );
+    await act(
+      // editAction 修改日志等级并形成未保存草稿。
+      () => hook.result.current.setSettings(/* previous 是修改前的系统配置草稿。 */ previous => previous ? { ...previous, log_level: 'debug' } : previous),
+    );
+    expect(hook.result.current.hasUnsavedChanges).toBe(true);
+
+    confirmActionMock.mockResolvedValueOnce(false);
+    await act(
+      // canceledRefreshAction 取消覆盖未保存草稿。
+      async () => hook.result.current.loadSettings(),
+    );
+    expect(getSettingsMock).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.settings?.log_level).toBe('debug');
+
+    confirmActionMock.mockResolvedValueOnce(true);
+    getSettingsMock.mockRejectedValueOnce(new Error('刷新远端失败'));
+    await act(
+      // failedRefreshAction 确认覆盖但远端刷新失败。
+      async () => hook.result.current.loadSettings(),
+    );
+    expect(getSettingsMock).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.loadError).toBe('刷新远端失败');
+    expect(hook.result.current.settings?.log_level).toBe('debug');
+    expect(hook.result.current.hasUnsavedChanges).toBe(true);
+
+    confirmActionMock.mockResolvedValueOnce(true);
+    await act(
+      // successfulRefreshAction 再次确认并成功恢复服务端配置。
+      async () => hook.result.current.loadSettings(),
+    );
+    expect(hook.result.current.settings?.log_level).toBe('info');
+    expect(hook.result.current.hasUnsavedChanges).toBe(false);
+    hook.unmount();
+  });
+
+  test('远程 Cookie 开关和保存都需要危险确认', /* 当前回调验证敏感 Cookie 外发配置的双重确认。 */ async () => {
+    getSettingsMock.mockResolvedValueOnce({ ...settingsFixture, 'captcha.remote_pass_cookies': 'false' });
+    // hook 是远程 Cookie 确认场景的系统设置 Hook 渲染结果。
+    const hook = renderHook(renderSettingsHook);
+    await waitFor(
+      // statusAssertion 等待初始系统设置加载成功。
+      () => expect(hook.result.current.requestStatus).toBe('success'),
+    );
+
+    confirmActionMock.mockResolvedValueOnce(false);
+    await act(
+      // canceledToggleAction 取消开启远程 Cookie 传递。
+      async () => hook.result.current.handleRemoteCookieToggle(true),
+    );
+    expect(hook.result.current.settings?.['captcha.remote_pass_cookies']).toBe('false');
+
+    confirmActionMock.mockResolvedValueOnce(true);
+    await act(
+      // confirmedToggleAction 确认开启远程 Cookie 传递。
+      async () => hook.result.current.handleRemoteCookieToggle(true),
+    );
+    expect(hook.result.current.settings?.['captcha.remote_pass_cookies']).toBe(true);
+    expect(hook.result.current.hasUnsavedChanges).toBe(true);
+    expect(confirmActionMock).toHaveBeenLastCalledWith(expect.objectContaining({ danger: true }));
+
+    confirmActionMock.mockResolvedValueOnce(false);
+    await act(
+      // canceledSaveAction 在保存前取消远程 Cookie 配置提交。
+      async () => hook.result.current.handleSave(),
+    );
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+
+    confirmActionMock.mockResolvedValueOnce(true);
+    await act(
+      // confirmedSaveAction 确认后提交远程 Cookie 配置。
+      async () => hook.result.current.handleSave(),
+    );
+    expect(updateSettingsMock).toHaveBeenCalledWith(expect.objectContaining({ 'captcha.remote_pass_cookies': true }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    hook.unmount();
+  });
+
+  test('系统配置保存期间阻止重复提交', /* 当前回调验证保存按钮同步锁。 */ async () => {
+    // resolveSave 控制当前系统配置保存请求的完成时机。
+    let resolveSave!: (value: OperationResponse) => void;
+    updateSettingsMock.mockReturnValueOnce(new Promise(/* pendingSaveExecutor 暂存配置保存完成函数。 */ resolve => {
+      resolveSave = resolve;
+    }));
+    // hook 是保存同步锁验证使用的系统设置 Hook 渲染结果。
+    const hook = renderHook(renderSettingsHook);
+    await waitFor(
+      // statusAssertion 等待初始系统设置加载成功。
+      () => expect(hook.result.current.requestStatus).toBe('success'),
+    );
+    // saveTask 保存第一次配置提交，第二次重复点击应立即返回。
+    let saveTask!: Promise<void>;
+    act(/* duplicateSaveAction 连续提交两次系统配置保存。 */ () => {
+      saveTask = hook.result.current.handleSave();
+      void hook.result.current.handleSave();
+    });
+    await waitFor(/* savingAssertion 等待保存状态可见。 */ () => expect(hook.result.current.saving).toBe(true));
+    expect(updateSettingsMock).toHaveBeenCalledTimes(1);
+    await act(/* resolveSaveAction 完成当前保存并释放同步锁。 */ async () => {
+      resolveSave({ success: true });
+      await saveTask;
+    });
+    expect(hook.result.current.saving).toBe(false);
     hook.unmount();
   });
 

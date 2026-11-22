@@ -85,7 +85,7 @@ export const PublishLocationField = ({ value, onChange }: PublishLocationFieldPr
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" disabled={loading} onClick={/* 获取设备当前位置附近的发货地。 */ () => void locate()} className="ios-btn-primary flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold disabled:opacity-50"><LocateFixed className="h-4 w-4" />{loading ? '定位中...' : '获取当前位置'}</button>
-        <button type="button" onClick={/* 打开高德手动选点。 */ () => setManualOpen(true)} className="flex items-center gap-2 rounded-xl border border-sky-200 bg-white px-4 py-2 text-sm font-bold text-sky-700 hover:bg-sky-50"><MapPin className="h-4 w-4" />手动选择</button>
+        <button type="button" onClick={/* 打开高德手动选点。 */ () => setManualOpen(true)} className="ios-btn-secondary flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold"><MapPin className="h-4 w-4 text-brand" />手动选择</button>
         {value && <button type="button" onClick={/* 清除本次发货地及自动记忆。 */ () => { setCandidates([]); saveLastPublishLocation(null); onChange(null); }} className="text-xs font-bold text-gray-500 hover:text-red-600">清除</button>}
       </div>
       {error && <p role="alert" className="text-xs text-red-600">{error}</p>}

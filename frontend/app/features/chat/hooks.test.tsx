@@ -1012,4 +1012,30 @@ describe('useChat', /* 当前回调处理聊天加载、分页、发送和实时
     await act(/* 当前回调完成新删除并释放所有 Promise。 */ async () => { newDeletePending.resolve({ success: true }); await newDelete; });
     hook.unmount();
   });
+
+  test('首次加载失败显示错误并可重试，不伪装成暂无账号', /* 当前回调验证首屏错误态与恢复路径。 */ async () => {
+    getDetailsMock.mockRejectedValueOnce(new Error('账号接口不可用'));
+    // hook 保存首屏加载失败场景的聊天状态。
+    const hook = renderHook(/* chatHookFactory 创建首屏失败 Hook。 */ () => useChat());
+    await waitFor(/* errorAssertion 等待首屏错误写入。 */ () => expect(hook.result.current.initialError).toBe('账号接口不可用'));
+    expect(hook.result.current.loading).toBe(false);
+    expect(hook.result.current.accounts).toEqual([]);
+    await act(/* retryAction 重新执行首屏初始化。 */ async () => { await hook.result.current.retryInitial(); });
+    await waitFor(/* recoveredAssertion 等待账号与会话恢复。 */ () => expect(hook.result.current.accounts).toHaveLength(1));
+    expect(hook.result.current.initialError).toBe('');
+    hook.unmount();
+  });
+
+  test('消息首页加载失败保留错误并可重新加载', /* 当前回调验证消息读取失败不会伪装成空会话。 */ async () => {
+    getMessagePageMock.mockRejectedValueOnce(new Error('消息接口不可用'));
+    // hook 保存消息首页失败场景的聊天状态。
+    const hook = renderHook(/* chatHookFactory 创建消息失败 Hook。 */ () => useChat());
+    await waitFor(/* activeAssertion 等待默认会话选中。 */ () => expect(hook.result.current.activeChatID).toBe('chat-1'));
+    await waitFor(/* errorAssertion 等待消息错误写入。 */ () => expect(hook.result.current.messagesError).toBe('消息接口不可用'));
+    getMessagePageMock.mockResolvedValue({ messages: [messageFixture], has_more: false, session: sessionFixture });
+    await act(/* retryAction 触发当前会话消息重新加载。 */ () => { hook.result.current.retryMessages(); });
+    await waitFor(/* recoveredAssertion 等待消息恢复。 */ () => expect(hook.result.current.messages).toEqual([messageFixture]));
+    expect(hook.result.current.messagesError).toBe('');
+    hook.unmount();
+  });
 });

@@ -74,7 +74,7 @@ export const auditTriggerLabel = (triggerType: string): string => auditTriggerLa
 
 // auditActionLabels 是动作类型的中文名。
 const auditActionLabels: Record<string, string> = {
-  send_card: '发卡',
+  send_card: '历史发货动作',
   send_template: '发货模板',
   send_text: '文本消息',
   confirm_shipment: '确认发货',
@@ -83,6 +83,11 @@ const auditActionLabels: Record<string, string> = {
 
 // auditActionLabel 返回动作类型的中文名；运行级事件没有动作时返回空字符串。
 export const auditActionLabel = (actionType: string): string => auditActionLabels[actionType] ?? actionType;
+
+// auditDisplaySummary 将旧发货动作的库存专属信息替换为中性说明，保留日志的动作结果与状态。
+export const auditDisplaySummary = (summary: string, actionType: string): string => (
+  actionType === 'send_card' ? '执行历史发货动作' : summary
+);
 
 // auditSourceLabels 是事件来源的中文名。
 const auditSourceLabels: Record<string, string> = {

@@ -265,4 +265,28 @@ describe('useRuntimeLogs', /* 当前测试组验证运行日志轮询、暂停�
     expect(entrySeqs(hook.result.current.entries)).toEqual([3, 4]);
     hook.unmount();
   });
+
+  test('手动刷新未完成前忽略重复刷新，完成后复位忙碌状态', /* 当前回调验证刷新按钮防重复与独立 pending。 */ async () => {
+    // pendingResolve 保存手动刷新请求的兑现函数。
+    let pendingResolve: ((page: RuntimeLogPage) => void) | undefined;
+    logsMock
+      .mockResolvedValueOnce(buildPage([], 0))
+      .mockImplementationOnce(/* pendingFactory 保留手动刷新请求未完成。 */ () => new Promise(/* resolve 在测试允许时兑现刷新结果。 */ resolve => { pendingResolve = resolve; }))
+      .mockResolvedValueOnce(buildPage([buildEntry(5)], 5));
+    // hook 保存运行日志 Hook 的当前测试状态。
+    const hook = renderHook(/* hookFactory 创建运行日志 Hook 测试实例。 */ () => useRuntimeLogs({ pollIntervalMs: POLL_INTERVAL_MS }));
+    await flushAsync();
+    act(/* reloadAction 触发第一次手动刷新。 */ () => hook.result.current.reload());
+    await flushAsync();
+    expect(hook.result.current.refreshing).toBe(true);
+    act(/* duplicateReloadAction 在刷新未完成时再次点击刷新。 */ () => hook.result.current.reload());
+    await flushAsync();
+    expect(logsMock).toHaveBeenCalledTimes(2);
+    await act(/* completeRefreshAction 放行手动刷新结果。 */ async () => {
+      pendingResolve?.(buildPage([buildEntry(4)], 4));
+    });
+    expect(hook.result.current.refreshing).toBe(false);
+    expect(entrySeqs(hook.result.current.entries)).toEqual([4]);
+    hook.unmount();
+  });
 });

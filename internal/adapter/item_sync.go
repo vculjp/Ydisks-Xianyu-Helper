@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -284,6 +285,8 @@ func (r *ItemSyncRepository) persistSession(ctx context.Context, detail db.Cooki
 func (r *ItemSyncRepository) saveItems(ctx context.Context, cookieID string, items []mtop.ItemListItem) (int, error) {
 	// rows 保存从平台商品模型转换出的分页持久化记录。
 	rows := make([]db.ItemInfoRow, 0, len(items))
+	// cachedMetrics 是我们本地已经读取过的统计与货架状态，分页同步同样不能把它们清空。
+	cachedMetrics := r.loadCachedItemMetrics(ctx, cookieID)
 	// item 表示当前待转换的平台商品。
 	for _, item := range items {
 		// price 保存优先使用格式化价格的商品价格文本。
@@ -291,7 +294,7 @@ func (r *ItemSyncRepository) saveItems(ctx context.Context, cookieID string, ite
 		if price == "" {
 			price = item.Price
 		}
-		rows = append(rows, db.ItemInfoRow{CookieID: cookieID, ItemID: item.ID, ItemTitle: item.Title, ItemCategory: item.CategoryID, ItemPrice: price, ItemDetail: item.ItemDetail, IsMultiSpec: item.IsMultiSpec})
+		rows = append(rows, db.ItemInfoRow{CookieID: cookieID, ItemID: item.ID, ItemTitle: item.Title, ItemCategory: item.CategoryID, ItemPrice: price, ItemDetail: ensureOnShelfState(preserveCachedItemMetrics(item.ItemDetail, cachedMetrics[item.ID])), IsMultiSpec: item.IsMultiSpec})
 	}
 	return r.store.Items.SavePageFromRemote(ctx, cookieID, rows)
 }
@@ -300,6 +303,8 @@ func (r *ItemSyncRepository) saveItems(ctx context.Context, cookieID string, ite
 func (r *ItemSyncRepository) syncItems(ctx context.Context, cookieID string, items []mtop.ItemListItem) (db.ItemSyncResult, error) {
 	// rows 保存待写入数据库的商品行。
 	rows := make([]db.ItemInfoRow, 0, len(items))
+	// cachedMetrics 保存本地已有商品最近一次读取的统计键，避免普通列表同步把它们清空。
+	cachedMetrics := r.loadCachedItemMetrics(ctx, cookieID)
 	// item 表示当前待转换的平台商品。
 	for _, item := range items {
 		// price 保存优先使用格式化价格的商品价格文本。
@@ -307,9 +312,92 @@ func (r *ItemSyncRepository) syncItems(ctx context.Context, cookieID string, ite
 		if price == "" {
 			price = item.Price
 		}
-		rows = append(rows, db.ItemInfoRow{CookieID: cookieID, ItemID: item.ID, ItemTitle: item.Title, ItemCategory: item.CategoryID, ItemPrice: price, ItemDetail: item.ItemDetail, IsMultiSpec: item.IsMultiSpec})
+		// detailJSON 默认采用本次列表快照；仅在统计键缺失时补回最近一次读取值，并标记来自“在售”分组。
+		detailJSON := ensureOnShelfState(preserveCachedItemMetrics(item.ItemDetail, cachedMetrics[item.ID]))
+		rows = append(rows, db.ItemInfoRow{CookieID: cookieID, ItemID: item.ID, ItemTitle: item.Title, ItemCategory: item.CategoryID, ItemPrice: price, ItemDetail: detailJSON, IsMultiSpec: item.IsMultiSpec})
 	}
 	return r.store.Items.SyncFromRemote(ctx, cookieID, rows)
+}
+
+// loadCachedItemMetrics 一次读取账号现有商品中的统计键和平台确认的货架状态；读取失败返回空表，不阻断列表同步。
+func (r *ItemSyncRepository) loadCachedItemMetrics(ctx context.Context, cookieID string) map[string]map[string]json.RawMessage {
+	// out 以商品 ID 为键保存可补回的统计字段。
+	out := map[string]map[string]json.RawMessage{}
+	// existing、existingErr 是本地商品行及读取错误；失败时仍允许正常同步。
+	existing, existingErr := r.store.Items.AllForCookie(ctx, cookieID)
+	if existingErr != nil {
+		return out
+	}
+	for _, row := range existing {
+		// fields 是本地商品扩展 JSON；损坏记录直接跳过，不推断统计。
+		var fields map[string]json.RawMessage
+		if json.Unmarshal([]byte(row.ItemDetail), &fields) != nil || fields == nil {
+			continue
+		}
+		// kept 只保留统计键和货架状态，避免把旧商品文案合并回新快照。
+		kept := map[string]json.RawMessage{}
+		for _, key := range []string{"exposure_count", "browse_count", "want_count", "shelf_state"} {
+			if value, exists := fields[key]; exists {
+				kept[key] = value
+			}
+		}
+		if len(kept) > 0 {
+			out[row.ItemID] = kept
+		}
+	}
+	return out
+}
+
+// preserveCachedItemMetrics 只把本次快照未提供的统计键和货架状态补回 detail，不覆盖平台新返回的统计或商品文案。
+func preserveCachedItemMetrics(detailJSON string, cached map[string]json.RawMessage) string {
+	if len(cached) == 0 {
+		return detailJSON
+	}
+	// current 是本次列表快照的扩展字段；损坏或非对象时保持原值，不尝试修复。
+	var current map[string]json.RawMessage
+	if json.Unmarshal([]byte(detailJSON), &current) != nil || current == nil {
+		return detailJSON
+	}
+	// changed 标记是否真的补入了旧统计，避免无意义地重新编码。
+	changed := false
+	for _, key := range []string{"exposure_count", "browse_count", "want_count", "shelf_state"} {
+		if _, exists := current[key]; exists {
+			continue
+		}
+		if value, exists := cached[key]; exists {
+			current[key] = value
+			changed = true
+		}
+	}
+	if !changed {
+		return detailJSON
+	}
+	// encoded 是保留本次其它字段的扩展 JSON；编码失败时退回原快照。
+	encoded, encodeErr := json.Marshal(current)
+	if encodeErr != nil {
+		return detailJSON
+	}
+	return string(encoded)
+}
+
+// ensureOnShelfState 把列表快照缺失的货架状态默认标记为“在售”。商品列表接口固定请求“在售”分组，
+// 因此本轮同步返回的商品在平台上处于出售中；只有本地已经缓存的下架回执（shelf_state="off"）会保留。
+func ensureOnShelfState(detailJSON string) string {
+	// current 是本次列表快照的扩展字段；损坏或非对象时保持原值，不尝试修复。
+	var current map[string]json.RawMessage
+	if json.Unmarshal([]byte(detailJSON), &current) != nil || current == nil {
+		return detailJSON
+	}
+	if _, exists := current["shelf_state"]; exists {
+		return detailJSON
+	}
+	current["shelf_state"] = json.RawMessage(`"on"`)
+	// encoded 是补回在售标记后的扩展 JSON；编码失败时退回原快照，不阻断同步。
+	encoded, encodeErr := json.Marshal(current)
+	if encodeErr != nil {
+		return detailJSON
+	}
+	return string(encoded)
 }
 
 // withCookieSnapshot 创建带完整 Cookie Jar 或平面 Cookie 的平台上下文。

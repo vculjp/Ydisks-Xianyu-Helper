@@ -1,4 +1,4 @@
-import { Loader2,QrCode,User } from 'lucide-react';
+import { Loader2,QrCode } from 'lucide-react';
 import React,{ Suspense,useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AccountDetail } from '../api';
@@ -9,7 +9,7 @@ updateAccountStatus,
 } from '../api';
 import { AccountAISettingsModal } from '../components/AccountAISettingsModal';
 import AccountAutomationModal from '../components/AccountAutomationModal';
-import { AccountCard } from '../components/AccountCard';
+import AccountTable from '../components/AccountTable';
 import { AccountSafetyPanel } from '../components/AccountSafetyPanel';
 import { AccountDeleteDialog } from '../components/AccountDeleteDialog';
 import { AccountQRCodeModal } from '../components/AccountQRCodeModal';
@@ -18,6 +18,8 @@ import { useAccountQRCodeLogin } from '../qrLogin';
 import { useAccountSubmodules,type AccountModalType } from '../submoduleHooks';
 import type { AccountEditForm,AccountListProps } from '../types';
 import { PageHeader } from '../../../../shared/ui/PageHeader';
+import { AsyncStateView,notify } from '../../../../shared/ui/feedback';
+import { useAsyncAction } from '../../../../shared/ui/useAsyncAction';
 
 // EditModalLoading 是编辑弹窗分片下载期间的遮罩占位，避免点击“编辑”后界面无反馈。
 const EditModalLoading: React.FC = () => (
@@ -29,13 +31,13 @@ const EditModalLoading: React.FC = () => (
 // AccountList 渲染账号列表组件。
 const AccountList: React.FC<AccountListProps> = ({ accountEditModal: AccountEditModal }) => {
   // accountData 保存账号列表及其加载控制器。
-  const { accounts, setAccounts, loading, loadAccounts } = useAccountsData();
+  const { accounts, setAccounts, loading, loadError, loadAccounts } = useAccountsData();
   // accountSearch 保存列表过滤关键词。
   const [accountSearch, setAccountSearch] = useState('');
-  // refreshingProfileId 保存正在刷新资料的账号 ID。
-  const [refreshingProfileId, setRefreshingProfileId] = useState<string>('');
   // deletingAccountId 保存正在删除的账号 ID。
   const [deletingAccountId, setDeletingAccountId] = useState<string>('');
+  // accountActions 提供按账号动作隔离的防重复提交和统一提示。
+  const accountActions = useAsyncAction();
   // deleteDialogAccount 保存待确认删除的账号。
   const [deleteDialogAccount, setDeleteDialogAccount] = useState<AccountDetail | null>(null);
   // deleteError 保存删除失败提示。
@@ -118,10 +120,16 @@ const AccountList: React.FC<AccountListProps> = ({ accountEditModal: AccountEdit
     closeQRModal,
   } = qrLogin;
 
-  // handleToggle 切换账号启用状态。
+  // handleToggle 切换账号启用状态，并在成功后刷新服务端运行状态。
   const handleToggle = async (id: string, currentStatus: boolean) => {
-    await updateAccountStatus(id, !currentStatus);
-    loadAccounts();
+    await accountActions.run(
+      `toggle:${id}`,
+      /* 账号启停请求成功后刷新服务端运行状态，避免只更新本地开关。 */ async () => {
+        await updateAccountStatus(id, !currentStatus);
+        await loadAccounts();
+      },
+      { successMessage: currentStatus ? '账号已停用' : '账号已启用' },
+    );
   };
 
   // openDeleteDialog 打开账号删除确认框。
@@ -149,9 +157,13 @@ const AccountList: React.FC<AccountListProps> = ({ accountEditModal: AccountEdit
       await deleteAccount(account.id);
       setAccounts(/* 当前回调处理集合中的单个元素。 */ current => current.filter(/* 当前回调处理集合中的单个元素。 */ item => item.id !== account.id));
       setDeleteDialogAccount(null);
+      notify('success', `账号 ${account.nickname || account.remark || account.id} 已删除`);
     } catch (/* error 保存账号删除请求的失败原因，仅转换为界面提示。 */ error: any) {
       console.error('删除账号失败:', error);
-      setDeleteError(error?.message || '删除账号失败，请稍后重试');
+      // message 是删除失败后允许在确认框中展示的脱敏说明。
+      const message = error?.message || '删除账号失败，请稍后重试';
+      setDeleteError(message);
+      notify('error', message);
     } finally {
       setDeletingAccountId('');
     }
@@ -159,22 +171,34 @@ const AccountList: React.FC<AccountListProps> = ({ accountEditModal: AccountEdit
 
   // handleRefreshProfile 刷新账号资料并同步列表。
   const handleRefreshProfile = async (account: AccountDetail) => {
-    setRefreshingProfileId(account.id);
-    try {
-      // res 保存资料刷新接口返回值。
-      const res = await refreshAccountProfile(account.id);
-      if (res?.profile_error) {
-        alert('资料刷新失败：' + res.profile_error);
-      }
-      await loadAccounts();
-    } catch (/* error 保存资料刷新请求的失败原因，仅转换为界面提示。 */ error: any) {
-      console.error('刷新账号资料失败:', error);
-      alert(error?.message || '刷新账号资料失败，请先重新授权该账号');
-    } finally {
-      setRefreshingProfileId('');
-    }
+    await accountActions.run(
+      `refresh:${account.id}`,
+      /* 账号资料刷新成功后再读取列表，确保昵称、头像和告警使用服务端最新值。 */ async () => {
+        // res 保存资料刷新接口返回值，profile_error 表示平台未返回完整公开资料。
+        const res = await refreshAccountProfile(account.id);
+        await loadAccounts();
+        return res;
+      },
+      {
+        onSuccess: /* 资料刷新成功回调区分平台警告与完整成功。 */ res => {
+          if (res?.profile_error) notify('warning', `资料刷新未完整成功：${res.profile_error}`);
+          else notify('success', '账号资料已刷新');
+        },
+        errorMessage: '刷新账号资料失败，请重新授权后再试',
+      },
+    );
   };
-  if (loading && accounts.length === 0) return <div className="p-20 flex justify-center"><Loader2 className="w-8 h-8 text-brand animate-spin"/></div>;
+  if ((loading || loadError) && accounts.length === 0) {
+    return (
+      <AsyncStateView
+        loading={loading}
+        error={loadError}
+        empty={false}
+        onRetry={/* 错误态重试重新读取账号列表。 */ () => void loadAccounts()}
+        loadingText="正在加载账号"
+      />
+    );
+  }
 
   // filteredAccounts 过滤后的账号列表，负责当前功能中的对应处理。
   const filteredAccounts = accounts.filter(/* 当前回调处理集合中的单个元素。 */ account => {
@@ -191,20 +215,20 @@ const AccountList: React.FC<AccountListProps> = ({ accountEditModal: AccountEdit
   });
 
   return (
-    <div className="min-w-0 space-y-8 animate-fade-in">
+    <div className="min-w-0 space-y-6 animate-fade-in">
       <PageHeader title="账号管理" description="管理您的闲鱼授权账号及设置。建议给账号填写备注，便于多账号区分。">
         <div className="flex flex-col sm:flex-row gap-3">
           <input
             value={accountSearch}
             onChange={/* 当前回调处理用户交互或异步状态变化。 */ event => setAccountSearch(event.target.value)}
             placeholder="搜索昵称 / 备注 / 账号ID"
-            className="ios-input px-4 py-3 rounded-2xl text-sm w-full sm:w-72"
+            className="ios-input w-full rounded px-3 py-2 text-sm sm:w-72"
           />
           <button
             onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => startQRLogin()}
-            className="ios-btn-primary flex items-center gap-2 px-6 py-3 rounded-2xl font-bold shadow-lg shadow-blue-200 transition-transform hover:scale-105 active:scale-95"
+            className="ios-btn-primary flex items-center justify-center gap-2 rounded px-4 py-2 text-sm font-medium"
           >
-            <QrCode className="w-5 h-5" />
+            <QrCode className="w-4 h-4" />
             扫码添加新账号
           </button>
         </div>
@@ -212,45 +236,29 @@ const AccountList: React.FC<AccountListProps> = ({ accountEditModal: AccountEdit
 
       <AccountSafetyPanel accounts={accounts} refresh={loadAccounts} />
 
-      <div className="rounded-2xl border border-blue-100 bg-blue-50 px-5 py-4 text-sm text-blue-900 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-        <div className="font-bold">当前显示 {filteredAccounts.length} / {accounts.length} 个账号</div>
-        <div className="text-blue-700">如果某个账号只显示 ID，点该账号右侧“刷新资料”；若刷新失败，先点二维码重新授权。</div>
+      <div className="flex flex-col gap-2 rounded border border-brand-100 bg-brand-50 px-4 py-3 text-xs text-slate-700 md:flex-row md:items-center md:justify-between">
+        <div className="font-medium">当前显示 {filteredAccounts.length} / {accounts.length} 个账号</div>
+        <div>如果账号只显示 ID，点该行“刷新资料”；刷新失败时请重新授权。</div>
       </div>
 
-      {/* Account Grid */}
-      <div className="grid grid-cols-1 gap-6">
-        {filteredAccounts.map(/* 当前回调处理集合中的单个元素。 */ account => (
-          <AccountCard
-            key={account.id}
-            account={account}
-            refreshing={refreshingProfileId === account.id}
-            deleting={deletingAccountId === account.id}
-            onRefreshProfile={handleRefreshProfile}
-            onReauthorize={startQRLogin}
-            onEdit={openEditModal}
-            onAI={openAIModal}
-            onTasks={setTaskAccount}
-            onToggle={handleToggle}
-            onDelete={openDeleteDialog}
-          />
-        ))}
-
-        {accounts.length === 0 && (
-            <div className="ios-card p-12 text-center">
-                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <User className="w-10 h-10 text-gray-400" />
-                </div>
-                <h3 className="text-lg font-bold text-gray-900">暂无账号</h3>
-                <p className="text-gray-500 mt-1">请点击右上角扫码添加您的闲鱼账号</p>
-            </div>
-        )}
-        {accounts.length > 0 && filteredAccounts.length === 0 && (
-            <div className="ios-card p-12 text-center">
-                <h3 className="text-lg font-bold text-gray-900">没有匹配的账号</h3>
-                <p className="text-gray-500 mt-1">换一个关键词搜索昵称、备注或账号ID。</p>
-            </div>
-        )}
-      </div>
+      <AsyncStateView
+        loading={false}
+        empty={filteredAccounts.length === 0}
+        emptyTitle={accounts.length === 0 ? '暂无账号' : '没有匹配的账号'}
+        emptyDescription={accounts.length === 0 ? '请点击右上角扫码添加您的闲鱼账号。' : '换一个关键词搜索昵称、备注或账号 ID。'}
+      >
+        <AccountTable
+          accounts={filteredAccounts}
+          isPending={/* 账号动作忙碌判断直接复用页面级请求锁。 */ accountActions.isPending}
+          onRefreshProfile={handleRefreshProfile}
+          onReauthorize={startQRLogin}
+          onEdit={openEditModal}
+          onAI={openAIModal}
+          onTasks={setTaskAccount}
+          onToggle={handleToggle}
+          onDelete={openDeleteDialog}
+        />
+      </AsyncStateView>
 
       {taskAccount && createPortal(
         <AccountAutomationModal
@@ -275,7 +283,7 @@ const AccountList: React.FC<AccountListProps> = ({ accountEditModal: AccountEdit
       {deleteDialogAccount && (
         <AccountDeleteDialog
           account={deleteDialogAccount}
-          deleting={deletingAccountId === deleteDialogAccount.id}
+          deleting={Boolean(deletingAccountId)}
           error={deleteError}
           onClose={closeDeleteDialog}
           onConfirm={confirmDeleteAccount}

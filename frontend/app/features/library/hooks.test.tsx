@@ -53,6 +53,25 @@ describe('useLibraryImages', /* 图片库 Hook 的加载、上传与删除保护
     await waitFor(/* 等待失败状态。 */ () => expect(hook.result.current.error).toBe('网络错误'));
     expect(hook.result.current.images).toEqual([]);
   });
+
+  test('整批上传失败向上抛出并保留可展示错误', /* 验证父组件不会把失败摘要伪装成新增零张。 */ async () => {
+    vi.mocked(api.uploadLibraryImages).mockRejectedValueOnce(new Error('上传接口不可用'));
+    // hook 是被测图片库 Hook。
+    const hook = renderHook(/* 创建 Hook。 */ () => useLibraryImages());
+    await waitFor(/* 等待首次加载。 */ () => expect(hook.result.current.images).toHaveLength(1));
+    // failureMessage 保存上传失败向上抛出的原因。
+    let failureMessage = '';
+    await act(/* 在 act 中执行失败上传。 */ async () => {
+      try {
+        await hook.result.current.upload([new File(['x'], 'a.png')]);
+      } catch (failure /* failure 是上传失败原因。 */) {
+        failureMessage = failure instanceof Error ? failure.message : '';
+      }
+    });
+    expect(failureMessage).toBe('上传接口不可用');
+    expect(hook.result.current.error).toBe('上传接口不可用');
+    expect(hook.result.current.busy).toBe(false);
+  });
 });
 
 describe('useLibraryImages.removeMany', /* 图片批量删除的汇总、保护与取消。 */ () => {
@@ -148,6 +167,27 @@ describe('useProductTemplates', /* 模板 Hook 的保存与删除。 */ () => {
     await act(/* 在 act 中执行异步 Hook 操作。 */ async () => { failed = await hook.result.current.remove(2); });
     expect(ok).toBe(true);
     expect(failed).toBe(false);
+  });
+
+  test('保存请求未完成时忽略重复提交', /* 验证同步锁覆盖按钮状态更新前的双击。 */ async () => {
+    // resolveSave 保存挂起保存请求的兑现函数。
+    let resolveSave: (() => void) | undefined;
+    vi.mocked(api.saveProductTemplate).mockImplementationOnce(/* pendingFactory 保留首次保存请求未完成。 */ () => new Promise(/* resolve 在测试允许时完成保存。 */ resolve => {
+      resolveSave = /* 当前回调兑现保存请求。 */ () => resolve({} as never);
+    }));
+    // hook 是被测模板 Hook。
+    const hook = renderHook(/* 创建 Hook。 */ () => useProductTemplates());
+    await waitFor(/* 等待首次加载。 */ () => expect(hook.result.current.loading).toBe(false));
+    // firstSave 保存首次保存请求。
+    let firstSave: Promise<boolean> | undefined;
+    await act(/* 启动首次保存。 */ () => { firstSave = hook.result.current.save(null, {} as never); });
+    // secondSave 记录重复提交结果。
+    let secondSave = true;
+    await act(/* 在首次请求未完成时重复保存。 */ async () => { secondSave = await hook.result.current.save(null, {} as never); });
+    expect(secondSave).toBe(false);
+    expect(api.saveProductTemplate).toHaveBeenCalledTimes(1);
+    await act(/* 完成首次保存。 */ async () => { resolveSave?.(); await firstSave; });
+    hook.unmount();
   });
 });
 

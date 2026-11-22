@@ -35,3 +35,15 @@ test('部分失败标记单独生效，逐项说明保留 error 和 message 且�
   expect(message).not.toContain(successResult.message);
   expect(message).not.toContain('成功项不应展示');
 });
+
+test('平台返回卖家订单列表无权限时提示核实账号权限且不误导用户重复发货', /* 提示只依赖明确的平台失败码，不对其他普通失败泛化。 */ () => {
+  // denied 是平台真实可能返回的无权限诊断形状。
+  const denied = formatOrderSyncResult({ ...successResult, partial_failure: true, results: [
+    { success: false, error: 'PERMISSION_EXCEPTION::无权限访问', message: '平台拒绝访问卖家订单列表' },
+  ] });
+  expect(denied).toContain('闲鱼平台拒绝访问卖家订单列表');
+  expect(denied).toContain('请勿据此重复发货');
+  expect(formatOrderSyncResult({ ...successResult, partial_failure: true, results: [
+    { success: false, error: '请求超时', message: '稍后重试' },
+  ] })).not.toContain('检查账号权限');
+});

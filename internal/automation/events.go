@@ -22,7 +22,7 @@ import (
 const (
 	TriggerOrderCreated = "order_created"
 	TriggerOrderPaid    = "order_paid"
-	// TriggerOrderCompleted 表示买家确认收货后平台发出的完成交易系统提示；仅用于更新本地订单事实。
+	// TriggerOrderCompleted 表示买家确认收货后平台发出的完成交易系统提示；用于更新完成事实并触发“收货后立即求评价”规则。
 	TriggerOrderCompleted = "order_completed"
 	// TriggerBargainPending 表示砍价“我已小刀，待刀成”系统阶段；它不是用户可配置规则触发器。
 	TriggerBargainPending       = "bargain_pending"
@@ -30,7 +30,9 @@ const (
 	TriggerReviewMissingTimeout = "review_missing_timeout"
 
 	ActionConfirmShipment = "confirm_shipment"
-	ActionSendCard        = "send_card"
+	// ActionRequestRedFlower 在平台确认发货成功后调用订单原生“求小红花”，不发送聊天话术。
+	ActionRequestRedFlower = "request_red_flower"
+	ActionSendCard         = "send_card"
 	// ActionSendTemplate 表示按发货模板渲染并发送多条消息。
 	ActionSendTemplate = "send_template"
 	ActionSendText     = "send_text"

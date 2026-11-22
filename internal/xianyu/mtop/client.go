@@ -94,7 +94,9 @@ type ClientImpl struct {
 	RateListURL         string
 	PolishItemURL       string
 	PolishItemBackupURL string
-	ChatUserQueryURL    string
+	// RedFlowerURL 允许测试通过本地 HTTP 服务验证求小红花请求；生产使用闲鱼原生 MTOP 端点。
+	RedFlowerURL     string
+	ChatUserQueryURL string
 	// ChatItemSearchURL 允许测试将聊天商品查询指向本地 HTTP 服务；生产空值使用官方端点。
 	ChatItemSearchURL string
 	// MarketSearchURL 允许测试将全站商品搜索指向本地 HTTP 服务；生产空值使用官方端点。

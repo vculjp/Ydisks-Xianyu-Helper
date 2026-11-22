@@ -171,6 +171,9 @@ func (s *Server) publishItem(w http.ResponseWriter, r *http.Request) {
 			if perr.Code == itemapp.PublishErrorStockPermissionMissing {
 				status = http.StatusForbidden
 				msg = "该账号没有库存发布权限，无法按库存数量发布商品"
+			} else if perr.Code == itemapp.PublishErrorPCUnsupported {
+				status = http.StatusForbidden
+				msg = "闲鱼平台不支持该商品通过网页端发布，请到闲鱼APP发布，发布成功后返回本系统同步商品列表"
 			}
 			writeErrCode(w, status, string(perr.Code), msg, "")
 			return
@@ -541,10 +544,13 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "商品不存在")
 		return
 	}
+	// metrics 仅从既有本地详情派生，读取商品详情不会隐式触发平台同步。
+	metrics := itemapp.MetricsFromDetail(it.ItemDetail)
 	writeJSON(w, http.StatusOK, itemDetailResponse{
 		CookieID: it.CookieID, ItemID: it.ItemID, ItemTitle: it.ItemTitle, ItemDescription: it.ItemDescription,
 		ItemCategory: it.ItemCategory, ItemPrice: it.ItemPrice, ItemDetail: it.ItemDetail,
 		IsMultiSpec: it.IsMultiSpec, MultiQuantityDelivery: it.MultiQuantityDelivery,
+		ExposureCount: metrics.ExposureCount, BrowseCount: metrics.BrowseCount, WantCount: metrics.WantCount,
 	})
 }
 
@@ -668,7 +674,7 @@ func (s *Server) updateItem(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, operationResponse{Success: true})
 }
 
-// deleteItem 封装delete商品业务协调。
+// deleteItem 逻辑删除本地商品及其商品级自动化规则，保留历史数据以便审计和恢复。
 func (s *Server) deleteItem(w http.ResponseWriter, r *http.Request) {
 	// cid 用于本次流程后续判断的cid
 	cid := chi.URLParam(r, "cookie_id")
@@ -733,13 +739,19 @@ func (s *Server) setItemMultiQuantity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, operationResponse{Success: true})
 }
 
-func itemToMap(it itemapp.CatalogItem) itemListResponse { // itemToMap 将应用商品模型转换为商品列表 DTO。
+// itemToMap 将 it 应用商品转换为非敏感列表 DTO；统计来自已有缓存，未知指标保持省略。
+func itemToMap(it itemapp.CatalogItem) itemListResponse {
+	// imageURL 是本地详情中的主图，解析失败时留空。
 	imageURL := itemImageFromDetail(it.ItemDetail)
+	// metrics 是本地缓存中明确存在的非负整数统计。
+	metrics := itemapp.MetricsFromDetail(it.ItemDetail)
 	return itemListResponse{
 		ID: it.ID, CookieID: it.CookieID, ItemID: it.ItemID, ItemTitle: it.ItemTitle,
 		ItemDescription: it.ItemDescription, ItemCategory: it.ItemCategory, ItemPrice: it.ItemPrice,
 		ItemDetail: it.ItemDetail, ItemImage: imageURL, IsMultiSpec: it.IsMultiSpec,
 		MultiQuantityDelivery: it.MultiQuantityDelivery, IsMultiQtyShip: it.MultiQuantityDelivery, AIOverride: it.AIOverride,
+		ExposureCount: metrics.ExposureCount, BrowseCount: metrics.BrowseCount, WantCount: metrics.WantCount,
+		CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt,
 	}
 }
 

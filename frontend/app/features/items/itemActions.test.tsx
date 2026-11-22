@@ -3,7 +3,7 @@ import { act,renderHook } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach,beforeEach,describe,expect,test,vi } from 'vitest';
 import type { Item } from './api';
-import { createItem,deleteItem,getPublishLocations,publishItem,remoteEditItem,recommendPublishCategory,setItemShelf,syncItemsFromAccount,updateItem } from './api';
+import { createItem,deleteItem,getPublishLocations,publishItem,remoteEditItem,recommendPublishCategory,setItemBargain,setItemShelf,syncItemsFromAccount,updateItem } from './api';
 import { useItemActions,type ItemActionsOptions } from './itemActions';
 import { readLastPublishLocation } from '../../../shared/browser/publishLocationPreference';
 
@@ -14,6 +14,7 @@ vi.mock('./api', /* itemActionsApiMockFactory 提供商品动作 Hook 的确定�
   itemErrorMessage: /* errorMessageMock 将测试动作中的异常转换为稳定回退文本。 */ (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback,
   publishItem: vi.fn(),
   remoteEditItem: vi.fn(),
+  setItemBargain: vi.fn(),
   setItemShelf: vi.fn(),
   recommendPublishCategory: vi.fn(),
   syncItemsFromAccount: vi.fn(),
@@ -38,6 +39,8 @@ const updateItemMock = vi.mocked(updateItem);
 const remoteEditMock = vi.mocked(remoteEditItem);
 // shelfMock 是经二次确认的单件上下架请求替身。
 const shelfMock = vi.mocked(setItemShelf);
+// bargainMock 是经二次确认的单件小刀开关请求替身。
+const bargainMock = vi.mocked(setItemBargain);
 
 // itemFixture 是商品动作 Hook 使用的商品样本。
 const itemFixture: Item = { id: 'item-1', cookie_id: 'account-1', item_id: 'item-1', item_title: '旧标题', item_price: '10', item_description: '', item_category: '', item_detail: '', item_image: '' } as Item;
@@ -80,6 +83,7 @@ describe('useItemActions', /* 当前回调验证商品普通操作、发布和�
     updateItemMock.mockResolvedValue({ success: true });
     remoteEditMock.mockResolvedValue({ success: true, message: '编辑成功', shelf_state: '' });
     shelfMock.mockResolvedValue({ success: true, message: '下架成功', shelf_state: 'off' });
+    bargainMock.mockResolvedValue({ success: true, message: '小刀开关已同步', shelf_state: '' });
     vi.stubGlobal('alert', vi.fn());
     vi.stubGlobal('confirm', vi.fn(() => true));
   });
@@ -127,8 +131,10 @@ describe('useItemActions', /* 当前回调验证商品普通操作、发布和�
     act(/* changeTitleAction 提供要取消提交的新标题。 */ () => hook.result.current.actions.setEditForm(current => ({ ...current, item_title: '拟修改但取消' })));
     await act(/* cancelEditAction 用户取消同步编辑。 */ async () => hook.result.current.actions.handleSaveRemoteEdit());
     await act(/* cancelDownShelfAction 用户取消下架。 */ async () => hook.result.current.actions.handleSetShelf(itemFixture));
+    await act(/* cancelToggleBargainAction 用户取消小刀开关。 */ async () => hook.result.current.actions.handleToggleBargain(itemFixture, true));
     expect(remoteEditMock).not.toHaveBeenCalled();
     expect(shelfMock).not.toHaveBeenCalled();
+    expect(bargainMock).not.toHaveBeenCalled();
     hook.unmount();
   });
 
@@ -142,6 +148,18 @@ describe('useItemActions', /* 当前回调验证商品普通操作、发布和�
     await act(/* reshelfAction 用户确认重新上架。 */ async () => hook.result.current.actions.handleSetShelf(offItem));
     expect(shelfMock).toHaveBeenCalledWith('account-1', 'item-1', 'reshelf');
     expect(shelfMock).toHaveBeenCalledTimes(2);
+    hook.unmount();
+  });
+
+  test('切换 2 人小刀只在用户确认后提交明确开关目标', /* toggleBargainCase 验证小刀开关请求携带正确的开启/关闭布尔值。 */ async () => {
+    // hook 是包含小刀开关场景的独立操作容器。
+    const hook = renderHook(/* bargainHarnessFactory 创建小刀开关模拟请求场景。 */ () => useItemActionsHarness());
+    await act(/* enableBargainAction 用户确认开启小刀。 */ async () => hook.result.current.actions.handleToggleBargain(itemFixture, true));
+    expect(bargainMock).toHaveBeenCalledWith('account-1', 'item-1', true);
+    expect(hook.result.current.loadItems).toHaveBeenCalled();
+    await act(/* disableBargainAction 用户确认关闭小刀。 */ async () => hook.result.current.actions.handleToggleBargain(itemFixture, false));
+    expect(bargainMock).toHaveBeenCalledWith('account-1', 'item-1', false);
+    expect(bargainMock).toHaveBeenCalledTimes(2);
     hook.unmount();
   });
 

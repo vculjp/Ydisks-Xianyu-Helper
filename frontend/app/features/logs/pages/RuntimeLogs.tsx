@@ -15,6 +15,7 @@ import {
 } from '../models';
 import type { RuntimeLogEntry,RuntimeLogLevel,RuntimeLogSource } from '../types';
 import { PageHeader } from '../../../../shared/ui/PageHeader';
+import { confirmAction,notify } from '../../../../shared/ui/feedback';
 
 /** RuntimeLogRowProps 描述单条运行日志行的渲染输入。 */
 interface RuntimeLogRowProps {
@@ -93,6 +94,10 @@ const RuntimeLogs: React.FC = () => {
   const retentionHint = runtimeLogRetentionHint(runtimeLogs.capacity, runtimeLogs.dropped);
   // entryCount 是当前已加载的日志条数，仅用于触发跟随滚动。
   const entryCount = runtimeLogs.entries.length;
+  // [clearPending, setClearPending] 表示清屏确认或清理动作尚未结束，避免重复触发。
+  const [clearPending, setClearPending] = useState(false);
+  // clearPendingRef 是清屏动作的同步锁，覆盖确认框关闭到状态更新之间的快速双击。
+  const clearPendingRef = useRef(false);
 
   useEffect(/* followEffect 在跟随最新且日志数量变化时把列表滚动到底部。 */ () => {
     if (!followLatest) return;
@@ -101,6 +106,28 @@ const RuntimeLogs: React.FC = () => {
     if (!container) return;
     container.scrollTop = container.scrollHeight;
   }, [followLatest, entryCount]);
+
+  /** handleClearLogs 在用户确认后清空当前日志视图，不改动服务端历史与增量游标。 */
+  const handleClearLogs = async (): Promise<void> => {
+    if (clearPendingRef.current) return;
+    clearPendingRef.current = true;
+    setClearPending(true);
+    try {
+      // confirmed 表示用户是否确认执行仅影响当前页面的清屏动作。
+      const confirmed = await confirmAction({
+        title: '清空日志视图',
+        message: '确定清空当前页面已加载的运行日志吗？服务端历史记录不会被删除，后续仍可通过刷新重新读取。',
+        confirmText: '清空视图',
+        danger: true,
+      });
+      if (!confirmed) return;
+      runtimeLogs.clear();
+      notify('success', '已清空当前运行日志视图');
+    } finally {
+      clearPendingRef.current = false;
+      setClearPending(false);
+    }
+  };
 
   return (
     <div className="min-w-0 space-y-8 animate-fade-in">
@@ -118,18 +145,20 @@ const RuntimeLogs: React.FC = () => {
           <button
             type="button"
             onClick={/* reloadLogs 从零游标重新加载当前过滤条件下的日志。 */ () => runtimeLogs.reload()}
-            className="flex items-center gap-2 rounded-xl bg-gray-100 px-4 py-2 font-bold text-gray-700 transition-colors hover:bg-gray-200"
+            disabled={runtimeLogs.refreshing}
+            className="flex items-center gap-2 rounded-xl bg-gray-100 px-4 py-2 font-bold text-gray-700 transition-colors hover:bg-gray-200 disabled:opacity-50"
           >
-            <RefreshCw className="h-4 w-4" />
-            刷新
+            <RefreshCw className={`h-4 w-4 ${runtimeLogs.refreshing ? 'animate-spin' : ''}`} />
+            {runtimeLogs.refreshing ? '刷新中' : '刷新'}
           </button>
           <button
             type="button"
-            onClick={/* clearLogs 清空当前展示的日志，游标保持不变。 */ () => runtimeLogs.clear()}
-            className="flex items-center gap-2 rounded-xl bg-gray-100 px-4 py-2 font-bold text-gray-700 transition-colors hover:bg-red-50 hover:text-red-600"
+            onClick={/* clearLogs 确认后清空当前展示的日志，游标保持不变。 */ () => void handleClearLogs()}
+            disabled={clearPending || entryCount === 0}
+            className="flex items-center gap-2 rounded-xl bg-gray-100 px-4 py-2 font-bold text-gray-700 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
           >
             <Trash2 className="h-4 w-4" />
-            清屏
+            {clearPending ? '处理中' : '清屏'}
           </button>
         </div>
       </PageHeader>
@@ -189,7 +218,7 @@ const RuntimeLogs: React.FC = () => {
       {retentionHint && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{retentionHint}</div>
       )}
-      {runtimeLogs.error && (
+      {runtimeLogs.error && entryCount > 0 && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
           <span>{runtimeLogs.error}</span>
           <button
@@ -204,11 +233,26 @@ const RuntimeLogs: React.FC = () => {
 
       <div className="ios-card overflow-hidden rounded-xl bg-white">
         {entryCount === 0 ? (
-          <div className="flex min-h-[16rem] flex-col items-center justify-center gap-2 text-sm text-gray-400" role="status">
-            <ScrollText className="h-8 w-8 text-gray-300" />
-            <span>{runtimeLogs.error ? '暂无法读取运行日志' : '当前过滤条件下还没有运行日志'}</span>
-            <span className="text-xs">日志等级设为 info 时只记录失败与警告；需要每次接口调用明细请把系统日志等级调为 debug</span>
-          </div>
+          runtimeLogs.loading || runtimeLogs.refreshing ? (
+            <div className="flex min-h-[16rem] flex-col items-center justify-center gap-2 text-sm text-gray-500" role="status">
+              <RefreshCw className="h-7 w-7 animate-spin text-sky-500" />
+              <span>正在读取运行日志…</span>
+              <span className="text-xs text-gray-400">首次加载会从服务端缓冲区读取最近记录。</span>
+            </div>
+          ) : runtimeLogs.error ? (
+            <div className="flex min-h-[16rem] flex-col items-center justify-center gap-3 px-6 text-center text-sm text-red-700" role="alert">
+              <ScrollText className="h-8 w-8 text-red-300" />
+              <strong>运行日志加载失败</strong>
+              <span>{runtimeLogs.error}</span>
+              <button type="button" onClick={/* 重新加载失败后的首屏日志。 */ () => runtimeLogs.reload()} className="ios-btn-secondary">重新加载</button>
+            </div>
+          ) : (
+            <div className="flex min-h-[16rem] flex-col items-center justify-center gap-2 text-sm text-gray-400" role="status">
+              <ScrollText className="h-8 w-8 text-gray-300" />
+              <span>当前过滤条件下还没有运行日志</span>
+              <span className="text-xs">日志等级设为 info 时只记录失败与警告；需要每次接口调用明细请把系统日志等级调为 debug</span>
+            </div>
+          )
         ) : (
           <ul ref={listRef} className="max-h-[60vh] divide-y divide-slate-100 overflow-y-auto">
             {runtimeLogs.entries.map(/* entry 是当前待展示的一条运行日志。 */ entry => (

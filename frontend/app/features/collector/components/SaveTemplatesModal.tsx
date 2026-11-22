@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ArrowRight, CheckCircle2, FolderPlus, Sparkles, X, XCircle } from 'lucide-react';
 import { collectorErrorMessage, saveProductsToTemplates } from '../api';
+import { classifyTemplateSaveRecovery, incompleteDescriptionItems } from '../templateSaveRecovery';
+import { notify } from '../../../../shared/ui/feedback';
 import type {
   CollectedProduct,
   CollectorDeliveryTemplateOption,
@@ -46,7 +48,7 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
   // quantity 与 setQuantity 保存模板默认上架库存。
   const [quantity, setQuantity] = useState(5);
   // postageMode 与 setPostageMode 保存模板邮费方式（虚拟商品默认无需邮寄）。
-  const [postageMode, setPostageMode] = useState<'none' | 'free'>('none');
+  const [postageMode, setPostageMode] = useState<'none' | 'free' | 'source'>('none');
   // selectedTemplateId 与 setSelectedTemplateId 保存可选绑定的发货模板主键（0 表示暂不绑定）。
   const [selectedTemplateId, setSelectedTemplateId] = useState<number>(0);
   // customVars 与 setCustomVars 保存发货模板所需的自定义变量键值（如网盘 link）。
@@ -57,17 +59,56 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
   const [submitError, setSubmitError] = useState('');
   // summary 与 setSummary 保存执行完成后的逐件成功与失败汇总。
   const [summary, setSummary] = useState<CollectorSaveTemplatesSummary | null>(null);
+  // submittedCount 与 setSubmittedCount 保存本次发出请求时的商品数，避免结果返回后勾选数变化造成统计误导。
+  const [submittedCount, setSubmittedCount] = useState(0);
+  // submittingRef 是转存请求的同步锁，覆盖按钮状态更新前的快速双击。
+  const submittingRef = useRef(false);
+
+  useEffect(/* modalCloseCleanupEffect 在父组件取消选品时清空旧批次反馈，避免下次打开看到其他商品的失败信息。 */ () => {
+    if (!open) {
+      setSummary(null);
+      setSubmitError('');
+      setSubmittedCount(0);
+    }
+  }, [open]);
+
+  /** handleCloseModal 结束本次转存结果展示；运行中禁止从界面丢弃尚未确认的请求状态。 */
+  const handleCloseModal = (): void => {
+    if (submitting) return;
+    setSummary(null);
+    setSubmitError('');
+    setSubmittedCount(0);
+    onClose();
+  };
 
   if (!open || items.length === 0) return null;
 
   // activeDeliveryTemplate 查找当前选中的发货模板定义以渲染其自定义变量输入框。
   const activeDeliveryTemplate = deliveryTemplates.find(/* tpl 匹配选中的发货模板 ID。 */ tpl => tpl.id === selectedTemplateId);
+  // recoveryKind 仅依据这次实际返回的错误分类，绝不发起额外的采集或账号状态查询。
+  const recoveryKind = summary ? classifyTemplateSaveRecovery(summary) : null;
+  // missingDescriptions 是当前待转存商品中缺少真实详情的标识，未经补抓或人工填写不允许创建标题式伪描述。
+  const missingDescriptions = incompleteDescriptionItems(items);
+
+  /** returnToSaveSettings 保留本次已选商品和其它发布参数，按用户选择决定是否禁用详情补抓。 */
+  const returnToSaveSettings = (disableDetailFetch: boolean): void => {
+    if (disableDetailFetch) setFetchMissingDetail(false);
+    setSummary(null);
+    setSubmitError('');
+  };
 
   /** handleStartSave 提交批量下图与创建本地商品模板请求。 */
   const handleStartSave = async (): Promise<void> => {
+    if (submittingRef.current) return;
+    if (!fetchMissingDetail && missingDescriptions.length > 0) {
+      setSubmitError(`有 ${missingDescriptions.length} 件商品缺少真实详情描述。请先逐件补全正文，或开启详情补抓；不能用标题代替描述入库。`);
+      return;
+    }
+    submittingRef.current = true;
     setSubmitting(true);
     setSubmitError('');
     setSummary(null);
+    setSubmittedCount(items.length);
     try {
       // res 是后端批量下载图片并写入模板库的汇总结果。
       const res = await saveProductsToTemplates({
@@ -84,9 +125,18 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
         items,
       });
       setSummary(res);
+      if (res.failed > 0 || res.abortedByRisk) {
+        notify('warning', `转存完成：成功 ${res.succeeded} 件，失败 ${res.failed} 件`);
+      } else {
+        notify('success', `已转存 ${res.succeeded} 件商品模板`);
+      }
     } catch (failure /* failure 是批量转存请求抛出的异常。 */) {
-      setSubmitError(collectorErrorMessage(failure, '批量转存商品模板失败'));
+      // failureMessage 是整批转存失败的可展示原因。
+      const failureMessage = collectorErrorMessage(failure, '批量转存商品模板失败');
+      setSubmitError(failureMessage);
+      notify('error', failureMessage);
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -104,14 +154,14 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
               <p className="text-xs text-slate-500">已选择 {items.length} 件商品（单批最多 20 件），自动下载高清主图去重入库</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="关闭转存弹窗">
+          <button type="button" onClick={handleCloseModal} disabled={submitting} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40" aria-label="关闭转存弹窗">
             <X className="h-5 w-5" />
           </button>
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto p-6">
           {submitError && (
-            <div className="rounded-xl bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">{submitError}</div>
+          <div className="rounded-xl bg-danger-50 px-4 py-3 text-xs font-semibold text-danger-700">{submitError}</div>
           )}
 
           {!summary ? (
@@ -129,6 +179,13 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
                     <span className="block text-slate-500">关闭时仅使用已有快照；开启时必须成功取得完整详情，否则该商品不会创建新模板。请核对已有快照及图片的使用授权。</span>
                   </span>
                 </label>
+                {missingDescriptions.length > 0 && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900" role="alert">
+                    已选商品中有 {missingDescriptions.length} 件缺少完整正文或正文只有标题。{fetchMissingDetail
+                      ? '本次将尝试补抓真实详情，补抓失败的商品不会保存为完整模板。'
+                      : '当前不能直接转存。请先在单品详情预览中填写真实正文，或勾选上方「补抓详情页多图与长文案」。'}
+                  </div>
+                )}
 
                 <label className="flex cursor-pointer items-start gap-2.5 pt-1">
                   <input
@@ -195,15 +252,17 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
                     />
                     <select
                       value={postageMode}
-                      onChange={/* event 切换无需邮寄或包邮。 */ event => setPostageMode(event.target.value as 'none' | 'free')}
+                      onChange={/* event 选择明确的运费处理方式，来源方式缺失则后端阻止不确定转存。 */ event => setPostageMode(event.target.value as 'none' | 'free' | 'source')}
                       className="flex-1 rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-800"
                     >
                       <option value="none">无需邮寄 (虚拟推荐)</option>
                       <option value="free">包邮</option>
+                      <option value="source">沿用原商品运费（仅完整采集后）</option>
                     </select>
                   </div>
                 </div>
               </div>
+              <p className="text-xs text-amber-800">转存时会保留原商品链接、可获取的类目/规格/SKU/公开属性，缺失资料标记待核实；原卖家地址不会自动作为你的发货地，原商品库存不代表你当前库存。</p>
 
               <div className="rounded-xl border border-slate-200 p-3.5">
                 <label className="mb-1.5 block text-xs font-bold text-slate-700">可选：预绑定自动发货模板</label>
@@ -240,22 +299,50 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
           ) : (
             <div className="space-y-3">
               <div className={`rounded-xl p-4 text-xs font-bold ${summary.failed === 0 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
-                转存执行完成：已保存或复用 {summary.succeeded} 条模板结果，失败 {summary.failed} 条。相同请求复用原模板，请在资源库核对内容。
-                {summary.abortedByRisk && '（本批次因安全状态或本地任务冲突停止，剩余商品未执行，请人工核对）'}
+                本次提交 {summary.total} 件：已保存或复用 {summary.succeeded} 条模板，失败 {summary.failed} 条。相同请求复用原模板，请在资源库核对内容。
+                {summary.total !== submittedCount && `（提交数量与服务端计数不一致：发出 ${submittedCount} 件，请人工核对）`}
+                {summary.abortedByRisk && '（本批次因平台安全状态或本地任务冲突停止，剩余商品未执行）'}
               </div>
+              {recoveryKind && (
+                <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
+                  <p className="font-bold">{recoveryKind === 'busy'
+                    ? '当前有其他采集或账号任务在运行，详情补抓被安全拦截；这不是滑块验证，也不需要重新登录。'
+                    : '详情补抓遇到平台安全验证或风控，打开普通闲鱼页面不一定会出现滑块。'}</p>
+                  <p>{recoveryKind === 'busy'
+                    ? '如果需要完整详情，请先让当前采集任务结束，再手动提交；不会自动排队或补发请求。'
+                    : '请先通过闲鱼官方渠道处理验证并核对账号状态，不要连续重试详情采集。'}</p>
+                  <p>也可以关闭补抓，仅使用已采集到的商品资料尝试转存；缺失的详情、图片、类目和规格不会自动补齐，入库后仍需核对。</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={/* 禁用补抓并保留商品勾选和价格等设置，下一次提交不请求详情接口。 */ () => returnToSaveSettings(true)}
+                      className="rounded-lg border border-amber-300 bg-white px-3 py-2 font-bold text-amber-900 hover:bg-amber-100"
+                    >
+                      不补抓详情，返回设置
+                    </button>
+                    <button
+                      type="button"
+                      onClick={/* 保留补抓开关和其它表单参数，仅返回设置供用户等待任务结束后手动提交。 */ () => returnToSaveSettings(false)}
+                      className="rounded-lg border border-amber-300 px-3 py-2 font-bold text-amber-900 hover:bg-amber-100"
+                    >
+                      保留补抓，返回设置
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="max-h-60 divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">
                 {summary.results.map(/* row 是单条商品的转存结果记录。 */ row => (
                   <div key={`${row.itemId}-${row.templateId}`} className="flex items-center justify-between gap-3 px-3.5 py-2.5 text-xs">
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-bold text-slate-800">{row.title || row.itemId}</div>
-                      {row.errorReason && <div className="mt-0.5 text-rose-600">{row.errorReason}</div>}
+                        {row.errorReason && <div className="mt-0.5 text-danger-600">{row.errorReason}</div>}
                     </div>
                     {row.success ? (
                       <span className="inline-flex shrink-0 items-center gap-1 font-bold text-emerald-600">
                         <CheckCircle2 className="h-4 w-4" /> 模板 #{row.templateId} ({row.imageCount}图)
                       </span>
                     ) : (
-                      <span className="inline-flex shrink-0 items-center gap-1 font-bold text-rose-600">
+                        <span className="inline-flex shrink-0 items-center gap-1 font-bold text-danger-600">
                         <XCircle className="h-4 w-4" /> 失败
                       </span>
                     )}
@@ -267,13 +354,13 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
         </div>
 
         <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 bg-slate-50/60 px-6 py-3.5">
-          <button type="button" onClick={onClose} className="rounded-xl px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200/70">
+          <button type="button" onClick={handleCloseModal} disabled={submitting} className="rounded-xl px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200/70 disabled:cursor-not-allowed disabled:opacity-40">
             {summary ? '关闭窗口' : '取消'}
           </button>
           {!summary ? (
             <button
               type="button"
-              disabled={submitting}
+              disabled={submitting || (!fetchMissingDetail && missingDescriptions.length > 0)}
               onClick={handleStartSave}
               className="rounded-xl bg-sky-600 px-5 py-2 text-xs font-bold text-white hover:bg-sky-700 disabled:opacity-50"
             >
@@ -284,7 +371,7 @@ export const SaveTemplatesModal: React.FC<SaveTemplatesModalProps> = ({
               <button
                 type="button"
                 onClick={/* 关闭弹窗并跳转到本地资源库进行多店批量上架。 */ () => {
-                  onClose();
+                  handleCloseModal();
                   onNavigateToLibrary();
                 }}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white hover:bg-emerald-700"

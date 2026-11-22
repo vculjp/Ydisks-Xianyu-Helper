@@ -236,7 +236,7 @@ func TestBatchPreviewValidatesBusinessRules(t *testing.T) {
 		UserID: 7, DefaultCookieID: "acc1", UploadDir: "/tmp/uploads",
 		FallbackCategory: BatchPreviewCategory{CatID: "5001", CatName: "虚拟商品", ChannelCatID: "6001"},
 		Rows: []map[string]any{
-			{"标题": "商品A", "价格": "12.50", "图片": "a.png", "付款发货启用": "true", "付款发货内容": "9:2:10"},
+			{"标题": "商品A", "描述": "商品A的详细介绍及交付内容", "价格": "12.50", "图片": "a.png", "付款发货启用": "true", "付款发货内容": "9:2:10"},
 			{"账号ID": "other", "标题": "", "价格": "0", "库存": "0", "图片": "missing.png", "类目ID": "1"},
 		},
 	})
@@ -256,6 +256,29 @@ func TestBatchPreviewValidatesBusinessRules(t *testing.T) {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("invalid row errors %q missing %q", joined, expected)
 		}
+	}
+}
+
+// TestBatchPreviewRejectsMissingAndTitleOnlyDescription 验证 Excel 与模板预检不会把标题自动充当正文。
+func TestBatchPreviewRejectsMissingAndTitleOnlyDescription(t *testing.T) {
+	// service 使用不会访问平台的账号归属和图片校验替身。
+	service, err := NewBatchPreviewService(batchPreviewOwnershipFake{cookieOwned: "acc"}, batchPreviewImageFake{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// rows 模拟空描述、标题式描述及有效独立正文三种情况。
+	rows := []BatchPreviewRow{
+		{CookieID: "acc", Title: "电影A", Price: "2.00", Quantity: 1, PostageMode: "none", Images: []string{"a.jpg"}},
+		{CookieID: "acc", Title: "电影B", Description: "电影B", Price: "2.00", Quantity: 1, PostageMode: "none", Images: []string{"a.jpg"}},
+		{CookieID: "acc", Title: "电影C", Description: "电影C的真实商品内容说明", Price: "2.00", Quantity: 1, PostageMode: "none", Images: []string{"a.jpg"}},
+	}
+	// result 是本地预检的逐行校验结果。
+	result, err := service.PreviewRows(context.Background(), BatchPreviewInput{UserID: 1}, rows)
+	if err != nil || len(result) != 3 {
+		t.Fatalf("预检异常: %v %+v", err, result)
+	}
+	if !strings.Contains(strings.Join(result[0].Errors, "|"), "缺少商品描述") || !strings.Contains(strings.Join(result[1].Errors, "|"), "描述与标题完全一致") || len(result[2].Errors) != 0 {
+		t.Fatalf("描述校验未阻止标题式商品: %+v", result)
 	}
 }
 

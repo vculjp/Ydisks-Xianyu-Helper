@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { addRadarTargets, clearRadarItems, deleteRadarTarget, loadRadar, saveRadarSchedule, startRadar, stopRadar, toggleRadarTarget, type RadarData, type RadarSort } from '../api';
 import { collectorErrorMessage } from '../api';
+import { confirmAction,notify } from '../../../../shared/ui/feedback';
 
 /** RadarPanelProps 提供当前选中账号与人工进入详情采集的回调。 */
 interface RadarPanelProps {
@@ -33,6 +34,8 @@ export function RadarPanel({ cookieId, onInspect }: RadarPanelProps) {
   // busy 防止本页面重复提交操作，message 保存可见错误。
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  // loadError 保存本地雷达数据读取失败原因；与用户动作错误分开，保留已有榜单。
+  const [loadError, setLoadError] = useState('');
   // actionRef 持有当前写请求的取消句柄，离开面板后释放。
   const actionRef = useRef<AbortController | null>(null);
   // loadedSchedule 标记初次读取已同步定时间隔，轮询不覆盖用户正在编辑的表单。
@@ -52,13 +55,14 @@ export function RadarPanel({ cookieId, onInspect }: RadarPanelProps) {
         const next = await loadRadar(sort, controller.signal);
         if (controller.signal.aborted) return;
         setData(next);
+        setLoadError('');
         if (!loadedSchedule.current) {
           loadedSchedule.current = true;
           setIntervalHours([6,12,24].includes(next.status.schedule.interval) ? next.status.schedule.interval : 12);
         }
         delay = next.status.running ? 5_000 : 30_000;
       } catch (failure /* failure 是本地数据读取异常，取消请求无需提示。 */) {
-        if (!controller.signal.aborted) setMessage(collectorErrorMessage(failure, '读取雷达数据失败'));
+        if (!controller.signal.aborted) setLoadError(collectorErrorMessage(failure, '读取雷达数据失败'));
       } finally {
         if (!controller.signal.aborted) timer = setTimeout(poll, delay);
       }
@@ -74,8 +78,14 @@ export function RadarPanel({ cookieId, onInspect }: RadarPanelProps) {
     actionRef.current?.abort();
   }, []);
 
-  /** perform 串行提交一次明确的用户操作，成功后触发本地刷新；失败不自动重试。 */
-  const perform = async (operation: (signal: AbortSignal) => Promise<void>): Promise<void> => {
+  /** perform 串行提交一次明确的用户操作，成功后触发本地刷新并提示；失败不自动重试。 */
+  const perform = async (
+    operation: (signal: AbortSignal) => Promise<void>,
+    options: {
+      /** successMessage 是操作成功后的可展示提示；为空时不额外打扰。 */
+      successMessage?: string;
+    } = {},
+  ): Promise<void> => {
     if (actionRef.current) return;
     // controller 持有本次写请求的独立取消信号。
     const controller = new AbortController();
@@ -84,9 +94,17 @@ export function RadarPanel({ cookieId, onInspect }: RadarPanelProps) {
     setMessage('');
     try {
       await operation(controller.signal);
-      if (!controller.signal.aborted) setRefresh(/* n 是已完成的数据刷新代次。 */ n => n + 1);
+      if (!controller.signal.aborted) {
+        setRefresh(/* n 是已完成的数据刷新代次。 */ n => n + 1);
+        if (options.successMessage) notify('success', options.successMessage);
+      }
     } catch (failure /* failure 表示本次用户操作的错误。 */) {
-      if (!controller.signal.aborted) setMessage(collectorErrorMessage(failure, '操作失败'));
+      if (!controller.signal.aborted) {
+        // failureMessage 是当前用户操作失败的可展示原因。
+        const failureMessage = collectorErrorMessage(failure, '操作失败');
+        setMessage(failureMessage);
+        notify('error', failureMessage);
+      }
     } finally {
       if (actionRef.current === controller) actionRef.current = null;
       if (!controller.signal.aborted) setBusy(false);
@@ -105,8 +123,8 @@ export function RadarPanel({ cookieId, onInspect }: RadarPanelProps) {
           <div><h3 className="font-bold text-slate-800">爆款雷达 · 样本监控</h3><p className="text-xs text-slate-500">每个目标仅观测第一页，累计日均想要不等于近期增速。首次观测不计新增量。</p></div>
           <div className="flex gap-2">
             <button className={buttonStyle} disabled={busy} onClick={/* 只刷新已落库的雷达数据。 */ () => setRefresh(/* n 是刷新代次。 */ n => n + 1)}>刷新</button>
-            <button className="rounded-lg bg-brand px-4 py-2 text-xs font-bold text-white disabled:opacity-40" disabled={busy || running || !cookieId || !data?.targets.some(/* target 是候选启用目标。 */ target => target.enabled)} onClick={/* signal 仅控制创建任务请求。 */ () => void perform(/* signal 控制请求取消。 */ signal => startRadar(cookieId, signal))}>启动巡检</button>
-            <button className={buttonStyle} disabled={busy || !running} onClick={/* 用户主动停止当前巡检。 */ () => void perform(stopRadar)}>停止</button>
+            <button className="rounded-lg bg-brand px-4 py-2 text-xs font-bold text-white disabled:opacity-40" disabled={busy || running || !cookieId || !data?.targets.some(/* target 是候选启用目标。 */ target => target.enabled)} onClick={/* signal 仅控制创建任务请求。 */ () => void perform(/* signal 控制请求取消。 */ signal => startRadar(cookieId, signal), { successMessage: '已启动雷达巡检' })}>启动巡检</button>
+            <button className={buttonStyle} disabled={busy || !running} onClick={/* 用户主动停止当前巡检。 */ () => void perform(stopRadar, { successMessage: '已请求停止雷达巡检' })}>停止</button>
           </div>
         </div>
         <div className="grid gap-2 sm:grid-cols-4 text-sm">
@@ -117,12 +135,27 @@ export function RadarPanel({ cookieId, onInspect }: RadarPanelProps) {
         </div>
         {running && <p className="text-sm text-slate-600">当前目标：{status?.currentTarget}</p>}
         {status?.error && <p role="alert" className="rounded-lg bg-amber-50 p-2 text-sm text-amber-800">{status.aborted ? '巡检已安全停止：' : ''}{status.error}</p>}
-        {message && <p role="alert" className="rounded-lg bg-rose-50 p-2 text-sm text-rose-700">{message}</p>}
+          {message && <p role="alert" className="rounded-lg bg-danger-50 p-2 text-sm text-danger-700">{message}</p>}
+        {loadError && (
+          <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-red-50 p-2 text-sm text-red-700">
+            <span>{loadError}；已保留上次成功读取的雷达数据。</span>
+            <button type="button" onClick={/* 重新读取本地雷达数据，不触发平台采集。 */ () => setRefresh(/* n 是刷新代次。 */ n => n + 1)} className="font-bold underline">重新加载</button>
+          </div>
+        )}
+        {!data && !loadError && <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-500" role="status">正在读取本地雷达数据…</p>}
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 text-xs">
           <span>自动巡检：{status?.schedule.enabled ? `已开启（每 ${status.schedule.interval} 小时，账号 ${status.schedule.cookieId}）` : '已关闭'}</span>
           <select aria-label="巡检周期" className={inputStyle} value={interval} onChange={/* event 更新尚未保存的低频周期。 */ event => setIntervalHours(Number(event.target.value))}><option value={6}>6 小时</option><option value={12}>12 小时</option><option value={24}>24 小时</option></select>
-          <button className={buttonStyle} disabled={busy || !cookieId || running} onClick={/* 计划须由用户明确确认授权和账号状态；异常后不会自动恢复。 */ () => { if (window.confirm('请确认已通过官方渠道核对账号状态，并具备相应操作授权。确定保存此定时计划？')) void perform(/* signal 控制定时写入。 */ signal => saveRadarSchedule(true, cookieId, interval, signal)); }}>开启 / 保存计划</button>
-          <button className={buttonStyle} disabled={busy || !status?.schedule.enabled} onClick={/* 用户明确关闭未来自动巡检。 */ () => void perform(/* signal 控制关闭计划请求。 */ signal => saveRadarSchedule(false, status?.schedule.cookieId ?? '', interval, signal))}>关闭计划</button>
+          <button className={buttonStyle} disabled={busy || !cookieId || running} onClick={/* 计划须由用户明确确认授权和账号状态；异常后不会自动恢复。 */ () => void (async () => /* 等待用户确认后保存低频计划。 */ {
+            // confirmed 表示用户是否确认保存低频自动巡检计划。
+            const confirmed = await confirmAction({
+              title: '保存自动巡检计划',
+              message: '请确认已通过官方渠道核对账号状态，并具备相应操作授权。确定保存此定时计划？',
+              confirmText: '保存计划',
+            });
+            if (confirmed) await perform(/* signal 控制定时写入。 */ signal => saveRadarSchedule(true, cookieId, interval, signal), { successMessage: '自动巡检计划已保存' });
+          })()}>开启 / 保存计划</button>
+          <button className={buttonStyle} disabled={busy || !status?.schedule.enabled} onClick={/* 用户明确关闭未来自动巡检。 */ () => void perform(/* signal 控制关闭计划请求。 */ signal => saveRadarSchedule(false, status?.schedule.cookieId ?? '', interval, signal), { successMessage: '自动巡检计划已关闭' })}>关闭计划</button>
         </div>
       </div>
       <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
@@ -131,14 +164,23 @@ export function RadarPanel({ cookieId, onInspect }: RadarPanelProps) {
           <select aria-label="监控类型" className={inputStyle} value={type} onChange={/* event 更新目标录入模式。 */ event => setType(event.target.value as 'keyword' | 'seller')}><option value="keyword">关键词</option><option value="seller">同行卖家</option></select>
           <input aria-label="监控目标" placeholder={type === 'keyword' ? '输入关键词' : '同行主页链接或卖家 ID'} className={`${inputStyle} min-w-48 flex-1`} value={value} onChange={/* event 更新待保存文本。 */ event => setValue(event.target.value)} />
           {type === 'keyword' && <select aria-label="新发范围" className={inputStyle} value={days} onChange={/* event 更新关键词新发天数。 */ event => setDays(Number(event.target.value))}><option value={0}>不限</option><option value={1}>1天</option><option value={3}>3天</option><option value={7}>7天</option><option value={14}>14天</option></select>}
-          <button className={buttonStyle} disabled={busy || running || !value.trim()} onClick={/* 用户提交新增目标。 */ () => void perform(/* signal 控制目标写入。 */ async signal => { await addRadarTargets(type, value.trim(), days, false, signal); if (!signal.aborted) setValue(''); })}>添加目标</button>
-          <button className={buttonStyle} disabled={busy || running} onClick={/* 导入内置词包前不会触发采集。 */ () => void perform(/* signal 控制词包写入。 */ signal => addRadarTargets('keyword', '', 3, true, signal))}>导入虚拟资料种子词</button>
+          <button className={buttonStyle} disabled={busy || running || !value.trim()} onClick={/* 用户提交新增目标。 */ () => void perform(/* signal 控制目标写入。 */ async /* 写入当前目标并在成功后清空输入。 */ signal => { await addRadarTargets(type, value.trim(), days, false, signal); if (!signal.aborted) setValue(''); }, { successMessage: '已添加监控目标' })}>添加目标</button>
+          <button className={buttonStyle} disabled={busy || running} onClick={/* 导入内置词包前不会触发采集。 */ () => void perform(/* signal 控制词包写入。 */ signal => addRadarTargets('keyword', '', 3, true, signal), { successMessage: '已导入虚拟资料种子词' })}>导入虚拟资料种子词</button>
         </div>
         <div className="flex flex-wrap gap-2">
           {data?.targets.map(/* target 是单条本地监控配置。 */ target => <div key={target.id} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2 text-xs">
             <span className={target.enabled ? 'text-slate-800' : 'text-slate-400'}>{target.label || target.value} · {target.lastHitCount} 件</span>
-            <button className={buttonStyle} disabled={busy || running} onClick={/* 修改当前目标开关。 */ () => void perform(/* signal 控制开关修改。 */ signal => toggleRadarTarget(target.id, !target.enabled, signal))}>{target.enabled ? '暂停' : '启用'}</button>
-            <button className={buttonStyle} disabled={busy || running} onClick={/* 删除前要求用户明确确认。 */ () => { if (window.confirm('删除该监控目标？')) void perform(/* signal 控制删除请求。 */ signal => deleteRadarTarget(target.id, signal)); }}>删除</button>
+            <button className={buttonStyle} disabled={busy || running} onClick={/* 修改当前目标开关。 */ () => void perform(/* signal 控制开关修改。 */ signal => toggleRadarTarget(target.id, !target.enabled, signal), { successMessage: target.enabled ? '监控目标已暂停' : '监控目标已启用' })}>{target.enabled ? '暂停' : '启用'}</button>
+            <button className={buttonStyle} disabled={busy || running} onClick={/* 删除前要求用户明确确认。 */ () => void (async () => /* 等待用户确认后删除本地目标。 */ {
+              // confirmed 表示用户是否确认删除本地监控目标。
+              const confirmed = await confirmAction({
+                title: '删除监控目标',
+                message: `确定删除监控目标“${target.label || target.value}”吗？已保存的榜单快照不会被删除。`,
+                confirmText: '删除目标',
+                danger: true,
+              });
+              if (confirmed) await perform(/* signal 控制删除请求。 */ signal => deleteRadarTarget(target.id, signal), { successMessage: '监控目标已删除' });
+            })()}>删除</button>
           </div>)}
           {data?.targets.length === 0 && <p className="text-sm text-slate-500">暂无监控目标，请先添加关键词或同行。</p>}
         </div>
@@ -148,7 +190,16 @@ export function RadarPanel({ cookieId, onInspect }: RadarPanelProps) {
           <h3 className="font-bold text-slate-800">热度榜单（最多 200 条）</h3>
           <div className="flex gap-2">
             <select aria-label="榜单排序" className={inputStyle} value={sort} onChange={/* event 选择本地榜单排序。 */ event => setSort(event.target.value as RadarSort)}><option value="score">综合评分</option><option value="delta">新增想要</option><option value="velocity">累计日均想要</option><option value="seller_new">同行榜单</option></select>
-            <button className={buttonStyle} disabled={busy || running || !data?.items.length} onClick={/* 清理本地历史快照需二次确认。 */ () => { if (window.confirm('确认清空全部雷达商品快照？')) void perform(clearRadarItems); }}>清空榜单</button>
+            <button className={buttonStyle} disabled={busy || running || !data?.items.length} onClick={/* 清理本地历史快照需二次确认。 */ () => void (async () => /* 等待用户确认后清空本地榜单。 */ {
+              // confirmed 表示用户是否确认清空全部雷达榜单快照。
+              const confirmed = await confirmAction({
+                title: '清空雷达榜单',
+                message: '确认清空全部雷达商品快照？该操作不可撤销，但不会影响监控目标。',
+                confirmText: '清空榜单',
+                danger: true,
+              });
+              if (confirmed) await perform(clearRadarItems, { successMessage: '雷达榜单已清空' });
+            })()}>清空榜单</button>
           </div>
         </div>
         <div className="overflow-x-auto">

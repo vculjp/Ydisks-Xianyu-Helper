@@ -138,6 +138,39 @@ func ruleAllowsAllItems(rule db.AutomationRule, triggerType string) bool {
 	return scope.AllowAllItems
 }
 
+// ruleRequestsRedFlower 仅识别付款规则显式配置的布尔开关；旧规则默认关闭，不追补历史订单。
+func ruleRequestsRedFlower(rule db.AutomationRule) bool {
+	if rule.TriggerType != TriggerOrderPaid {
+		return false
+	}
+	// config 只读取布尔设置，任意非布尔输入均不得启用真实平台副作用。
+	var config struct {
+		RequestRedFlower bool `json:"request_red_flower"`
+	}
+	return json.Unmarshal([]byte(rule.ConfigJSON), &config) == nil && config.RequestRedFlower
+}
+
+// planRuleActions 为自动付款订单在“确认发货”之后追加一次求花动作；恢复流程沿用冻结快照，
+// 人工发货与其余触发器完全保持既有动作语义。
+func (p actionPlanner) planRuleActions(task Task, rule db.AutomationRule) []db.AutomationAction {
+	// actions 是原有发货内容、确认发货等动作的有序快照。
+	actions := p.plan(task, rule.Actions)
+	if task.TriggerType != TriggerOrderPaid || task.Source == "manual" || !ruleRequestsRedFlower(rule) {
+		return actions
+	}
+	// hasConfirm 检查是否存在实际启用的确认发货动作；只有平台确认动作之后才允许求花。
+	hasConfirm := false
+	for _, action := range actions {
+		if action.ActionType == ActionConfirmShipment {
+			hasConfirm = true
+		}
+	}
+	if !hasConfirm {
+		return actions
+	}
+	return append(actions, db.AutomationAction{ActionType: ActionRequestRedFlower, Enabled: true, SortOrder: len(actions) + 1})
+}
+
 // isDeliveryAction 判断动作是否会产生订单发货消息。
 func isDeliveryAction(action db.AutomationAction) bool {
 	return action.ActionType == ActionSendCard || action.ActionType == ActionSendTemplate

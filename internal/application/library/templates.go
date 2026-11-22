@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	itemapp "xianyu-go/internal/application/items"
+	"xianyu-go/internal/catalog"
 )
 
 const (
@@ -55,6 +56,8 @@ type Template struct {
 	PostageCents int64
 	// Category 是类目；CatID 为空表示发布时沿用批次兜底或自动推荐。
 	Category itemapp.BatchPreviewCategory
+	// Source 是原商品已公开的发布资料快照；旧模板为空值，不应影响原有模板发布。
+	Source catalog.SourceInfo
 	// ImageIDs 是商品主图的图片库主键，顺序即发布顺序。
 	ImageIDs []int64
 	// Specs 是多规格配置，nil 表示单规格。
@@ -219,6 +222,11 @@ func (s *TemplateService) normalize(ctx context.Context, input Template) (Templa
 		return Template{}, invalid("原价格式错误")
 	}
 	input.Category = trimCategory(input.Category)
+	input.Source.NormalizeCollections()
+	// 源商品 URL 仅用于溯源，不能自动决定目标卖家的发货地址、库存或发布资格。
+	if len(input.Source.Attributes) > 30 || len(input.Source.Specs) > 2 || len(input.Source.SKUs) > 300 || len(input.Source.Missing) > 30 {
+		return Template{}, invalid("原商品来源资料超出安全数量限制")
+	}
 	if categoryIncomplete(input.Category) {
 		return Template{}, invalid("类目信息不完整，请重新通过关键词获取类目")
 	}

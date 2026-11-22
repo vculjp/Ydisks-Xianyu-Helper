@@ -12,6 +12,10 @@ export interface AutomationIssuePanelProps {
   onResolveRun: (id: number, resolution: AutomationResolution) => void;
   // onResolveDeferredTask 处理延迟任务的重试或忽略动作。
   onResolveDeferredTask: (id: number, resolution: 'retry' | 'dismiss') => void;
+  // isRunPending 判断某个运行异常的某个恢复决策是否正在提交。
+  isRunPending?: (id: number, resolution: AutomationResolution) => boolean;
+  // isDeferredPending 判断某个延迟任务的某个处理决策是否正在提交。
+  isDeferredPending?: (id: number, resolution: 'retry' | 'dismiss') => boolean;
 }
 
 // AutomationIssuePanel 展示规则执行失败后需要用户确认的外部动作状态。
@@ -20,6 +24,8 @@ export const AutomationIssuePanel = ({
   pendingTasks,
   onResolveRun,
   onResolveDeferredTask,
+  isRunPending,
+  isDeferredPending,
 }: AutomationIssuePanelProps) => (
   <section className="rounded-2xl border border-red-200 bg-red-50 p-5 space-y-4">
     <div className="flex items-start gap-3">
@@ -32,49 +38,65 @@ export const AutomationIssuePanel = ({
     <div className="space-y-3">
       {runs.map(
         // 运行异常渲染器展示外部动作状态和允许的处理按钮。
-        issue => (
-        <div key={`run-${issue.id}`} className="rounded-xl border border-red-100 bg-white p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="font-bold text-gray-900">账号 {issue.cookie_id} · 订单 {issue.order_id || '-'} · 已记录发送 {issue.sent_count} 条</div>
-            <div className="text-xs font-bold text-red-800 mt-1">{automationIssueKindLabel(issue.issue_kind)}</div>
-            <div className="text-xs text-red-700 mt-1 break-words">{issue.error_message}</div>
+        issue => {
+          // continuePending 表示“已执行，继续”动作是否正在提交。
+          const continuePending = isRunPending?.(issue.id, 'continue') === true;
+          // retryPending 表示“安全重试”动作是否正在提交。
+          const retryPending = isRunPending?.(issue.id, 'retry') === true;
+          // cancelPending 表示“终止”动作是否正在提交。
+          const cancelPending = isRunPending?.(issue.id, 'cancel') === true;
+          return (
+          <div key={`run-${issue.id}`} className="rounded-xl border border-red-100 bg-white p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="font-bold text-gray-900">账号 {issue.cookie_id} · 订单 {issue.order_id || '-'} · 已记录发送 {issue.sent_count} 条</div>
+              <div className="text-xs font-bold text-red-800 mt-1">{automationIssueKindLabel(issue.issue_kind)}</div>
+              <div className="text-xs text-red-700 mt-1 break-words">{issue.error_message}</div>
+            </div>
+            <div className="flex flex-wrap gap-2 shrink-0">
+              {canResolveAutomationIssue(issue, 'continue') && <button disabled={continuePending} onClick={
+                // 继续动作由父级统一执行并刷新规则状态。
+                () => onResolveRun(issue.id, 'continue')
+              } className="px-3 py-2 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50">{continuePending ? '处理中…' : '已执行，继续下一步'}</button>}
+              {canResolveAutomationIssue(issue, 'retry') && <button disabled={retryPending} onClick={
+                // 重试动作由父级统一执行并刷新规则状态。
+                () => onResolveRun(issue.id, 'retry')
+              } className="px-3 py-2 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50">{retryPending ? '处理中…' : '未执行，安全重试'}</button>}
+              {canResolveAutomationIssue(issue, 'cancel') && <button disabled={cancelPending} onClick={
+                // 终止动作由父级统一执行并刷新规则状态。
+                () => onResolveRun(issue.id, 'cancel')
+              } className="px-3 py-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50">{cancelPending ? '处理中…' : '终止'}</button>}
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2 shrink-0">
-            {canResolveAutomationIssue(issue, 'continue') && <button onClick={
-              // 继续动作由父级统一执行并刷新规则状态。
-              () => onResolveRun(issue.id, 'continue')
-            } className="px-3 py-2 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold">已执行，继续下一步</button>}
-            {canResolveAutomationIssue(issue, 'retry') && <button onClick={
-              // 重试动作由父级统一执行并刷新规则状态。
-              () => onResolveRun(issue.id, 'retry')
-            } className="px-3 py-2 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold">未执行，安全重试</button>}
-            {canResolveAutomationIssue(issue, 'cancel') && <button onClick={
-              // 终止动作由父级统一执行并刷新规则状态。
-              () => onResolveRun(issue.id, 'cancel')
-            } className="px-3 py-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-bold">终止</button>}
-          </div>
-        </div>
-      ))}
+          );
+        },
+      )}
       {pendingTasks.map(
         // 延迟任务渲染器展示重试和忽略按钮。
-        issue => (
-        <div key={`task-${issue.id}`} className="rounded-xl border border-red-100 bg-white p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="font-bold text-gray-900">账号 {issue.cookie_id} · 延迟任务重试已达 {issue.attempt_count} 次</div>
-            <div className="text-xs text-red-700 mt-1 break-words">{issue.error_message}</div>
+        issue => {
+          // retryPending 表示延迟任务重新入队是否正在提交。
+          const retryPending = isDeferredPending?.(issue.id, 'retry') === true;
+          // dismissPending 表示延迟任务忽略是否正在提交。
+          const dismissPending = isDeferredPending?.(issue.id, 'dismiss') === true;
+          return (
+          <div key={`task-${issue.id}`} className="rounded-xl border border-red-100 bg-white p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="font-bold text-gray-900">账号 {issue.cookie_id} · 延迟任务重试已达 {issue.attempt_count} 次</div>
+              <div className="text-xs text-red-700 mt-1 break-words">{issue.error_message}</div>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button disabled={retryPending} onClick={
+                // 重试延迟任务由父级统一执行。
+                () => onResolveDeferredTask(issue.id, 'retry')
+              } className="px-3 py-2 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50">{retryPending ? '处理中…' : '重新入队'}</button>
+              <button disabled={dismissPending} onClick={
+                // 忽略延迟任务由父级统一执行。
+                () => onResolveDeferredTask(issue.id, 'dismiss')
+              } className="px-3 py-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50">{dismissPending ? '处理中…' : '忽略'}</button>
+            </div>
           </div>
-          <div className="flex gap-2 shrink-0">
-            <button onClick={
-              // 重试延迟任务由父级统一执行。
-              () => onResolveDeferredTask(issue.id, 'retry')
-            } className="px-3 py-2 rounded-lg bg-amber-100 text-amber-800 text-xs font-bold">重新入队</button>
-            <button onClick={
-              // 忽略延迟任务由父级统一执行。
-              () => onResolveDeferredTask(issue.id, 'dismiss')
-            } className="px-3 py-2 rounded-lg bg-gray-100 text-gray-700 text-xs font-bold">忽略</button>
-          </div>
-        </div>
-      ))}
+          );
+        },
+      )}
     </div>
   </section>
 );

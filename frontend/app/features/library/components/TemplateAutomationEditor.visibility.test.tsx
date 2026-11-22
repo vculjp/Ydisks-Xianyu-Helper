@@ -35,3 +35,21 @@ test('商品模板自动化仅允许新增无需卡密绑定的发货模板', /*
   expect(screen.queryByRole('option', { name: '旧卡密模板' })).toBeNull();
   expect(screen.getByRole('option', { name: '网盘链接模板' })).toBeTruthy();
 });
+
+test('历史库存模板动作不展示，但新增普通发货动作仍保留完整原始数组', /* 历史模板不会以残缺绑定误编辑，也不影响链接模板添加。 */ () => {
+  // scope 表示单规格模板使用的动作范围。
+  const scope: SpecScope = { specName: '', specValue: '', label: '全部订单' };
+  // historical 保存一个曾绑定库存变量的发货模板动作。
+  const historical = { ...newAction('send_template', scope), deliveryTemplateId: 10, templateBindings: [{ variableKey: 'code', cardId: 2, deliveryCount: 1 }] };
+  // automation 包含旧动作，编辑其余内容时不得丢失。
+  const automation = emptyAutomation();
+  automation.paidDelivery = { enabled: true, actions: [historical] };
+  // onChange 断言新动作被追加而非覆盖。
+  const onChange = vi.fn();
+  render(<TemplateAutomationEditor automation={automation} scopes={[scope]} cards={[]} deliveryTemplates={[{ id: 10, name: '历史库存模板', keys: ['code'], customKeys: [] }, { id: 20, name: '网盘链接模板', keys: [], customKeys: ['link'] }]} onChange={onChange} />);
+  expect(screen.queryByText('历史库存模板')).toBeNull();
+  expect(screen.queryByRole('combobox', { name: '变量 code 的卡密组' })).toBeNull();
+  expect(screen.getByText(/部分历史发货配置在精简界面中不显示/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '发货模板' }));
+  expect(onChange).toHaveBeenCalledWith({ ...automation, paidDelivery: { enabled: true, actions: [historical, newAction('send_template', scope)] } });
+});

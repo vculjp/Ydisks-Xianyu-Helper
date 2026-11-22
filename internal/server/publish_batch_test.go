@@ -130,7 +130,7 @@ func TestPreviewItemPublishBatchCSV(t *testing.T) {
 	_ = mw.WriteField("publish_interval_seconds", "12")
 	// csvField 用于本次流程后续判断的csv字段
 	csvField, _ := mw.CreateFormFile("file", "products.csv")
-	csvField.Write([]byte("账号ID,标题,价格,库存,图片\nacc1,商品A,12.50,5,img/a.png\n"))
+	csvField.Write([]byte("账号ID,标题,描述,价格,库存,图片\nacc1,商品A,商品A详细介绍,12.50,5,img/a.png\n"))
 	// zipField 用于本次流程后续判断的zip字段
 	zipField, _ := mw.CreateFormFile("images_zip", "images.zip")
 	zipField.Write(zipBuf.Bytes())

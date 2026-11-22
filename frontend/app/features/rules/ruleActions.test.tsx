@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { afterEach,beforeEach,describe,expect,test,vi } from 'vitest';
 import { clearDefaultReplyRecords,deleteDefaultReply,deleteReplyRule,deleteShippingRule,getDefaultReply,resolveAutomationRun,resolveDeferredAutomationTask,updateDefaultReply,updateReplyRule,updateShippingRule } from './api';
 import { useRuleActions,type RuleActionsOptions } from './ruleActions';
-import type { Card,DefaultReply,Item,ShippingRule } from './types';
+import type { Card,DefaultReply,DeliveryTemplate,Item,ShippingRule } from './types';
+import { confirmAction,notify } from '../../../shared/ui/feedback';
 
 vi.mock('./api', /* ruleActionsApiMockFactory 提供规则动作 Hook 的确定性 API 替身。 */ () => ({
   clearDefaultReplyRecords: vi.fn(),
@@ -21,6 +22,12 @@ vi.mock('./api', /* ruleActionsApiMockFactory 提供规则动作 Hook 的确定�
   updateReplyRule: vi.fn(),
   updateShippingRule: vi.fn(),
 }));
+
+vi.mock('../../../shared/ui/feedback', /* feedbackMockFactory 保留共享组件导出并替换提示与确认动作。 */ async importOriginal => {
+  // actual 是除 notify 和 confirmAction 外的真实共享反馈导出。
+  const actual = await importOriginal<typeof import('../../../shared/ui/feedback')>();
+  return { ...actual, notify: vi.fn(), confirmAction: vi.fn() };
+});
 
 // defaultReplyMock 是默认回复读取接口的可控替身。
 const defaultReplyMock = vi.mocked(getDefaultReply);
@@ -42,11 +49,17 @@ const deleteReplyMock = vi.mocked(deleteReplyRule);
 const deleteDefaultMock = vi.mocked(deleteDefaultReply);
 // clearRecordsMock 是默认回复记录清理接口的可控替身。
 const clearRecordsMock = vi.mocked(clearDefaultReplyRecords);
+// notifyMock 是统一业务提示的可控替身。
+const notifyMock = vi.mocked(notify);
+// confirmMock 是统一确认框的可控替身。
+const confirmMock = vi.mocked(confirmAction);
 
 // itemFixture 是自动化规则草稿使用的商品。
 const itemFixture = { cookie_id: 'account-1', item_id: 'item-1', item_title: '测试商品', is_multi_spec: false } as Item;
 // cardFixture 是规则动作依赖的卡密库存。
 const cardFixture = { id: 7, name: '测试卡密', type: 'data' } as Card;
+// linkTemplateFixture 是精简界面保留的纯网盘链接发货模板。
+const linkTemplateFixture = { id: 8, name: '网盘链接', keys: [], custom_keys: [] } as unknown as DeliveryTemplate;
 // defaultReplyFixture 是默认回复读取结果。
 const defaultReplyFixture = { cookie_id: 'account-1', enabled: true, reply_content: '欢迎', reply_once: false, reply_image_url: '' } as DefaultReply;
 
@@ -75,7 +88,7 @@ const useRuleActionsHarness = () => {
   // loadDefaultReplies 是默认回复刷新替身。
   const loadDefaultReplies = vi.fn(async () => undefined);
   // options 是规则动作 Hook 的完整依赖。
-  const options: RuleActionsOptions = { selectedAccountId, setSelectedAccountId, setActiveTab, items, setAutomationRules, setCards, setItems: /* setItemsAction 写入外部联动商品列表。 */ linkedItems => setItems(linkedItems), setLoading, loadAutomationRules, loadReferenceData, loadReplyRules, loadDefaultReplies };
+  const options: RuleActionsOptions = { selectedAccountId, setSelectedAccountId, setActiveTab, items, deliveryTemplates: [linkTemplateFixture], setAutomationRules, setCards, setItems: /* setItemsAction 写入外部联动商品列表。 */ linkedItems => setItems(linkedItems), setLoading, loadAutomationRules, loadReferenceData, loadReplyRules, loadDefaultReplies };
   return useRuleActions(options);
 };
 
@@ -92,8 +105,8 @@ describe('useRuleActions', /* 当前回调验证规则页面动作协调器的�
     deleteReplyMock.mockResolvedValue({ success: true });
     deleteDefaultMock.mockResolvedValue({ success: true });
     clearRecordsMock.mockResolvedValue({ success: true });
-    vi.stubGlobal('alert', vi.fn());
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    confirmMock.mockResolvedValue(true);
+    notifyMock.mockClear();
   });
 
   afterEach(/* 当前回调清理规则动作测试中的全局替身。 */ () => vi.unstubAllGlobals());
@@ -103,9 +116,9 @@ describe('useRuleActions', /* 当前回调验证规则页面动作协调器的�
     const hook = renderHook(() => useRuleActionsHarness());
     act(/* 当前回调打开新建自动化规则弹窗。 */ () => hook.result.current.openNewAutomationRule());
     expect(hook.result.current.showAutomationModal).toBe(true);
-    act(/* 当前回调写入需要保存的卡密规格。 */ () => hook.result.current.setEditingAutomationRule(/* currentDraft 更新自动化规则草稿。 */ current => ({ ...current, cookie_id: 'account-1', variants: [{ id: 'variant-1', spec_name: '', spec_value: '', card_id: 7, delivery_count: 0, enabled: true }] })));
+    act(/* 当前回调写入需要保存的网盘模板规格。 */ () => hook.result.current.setEditingAutomationRule(/* currentDraft 更新自动化规则草稿。 */ current => ({ ...current, cookie_id: 'account-1', variants: [{ id: 'variant-1', spec_name: '', spec_value: '', card_id: 0, delivery_mode: 'template', delivery_template_id: 8, delivery_count: 0, enabled: true }] })));
     await act(/* 当前回调执行自动化规则保存。 */ async () => hook.result.current.handleSaveAutomationRule());
-    expect(updateShippingMock).toHaveBeenCalledWith(expect.objectContaining({ cookie_id: 'account-1', variants: [expect.objectContaining({ card_id: 7, delivery_count: 1 })] }));
+    expect(updateShippingMock).toHaveBeenCalledWith(expect.objectContaining({ cookie_id: 'account-1', variants: [expect.objectContaining({ delivery_mode: 'template', delivery_template_id: 8, delivery_count: 1 })] }));
     expect(hook.result.current.showAutomationModal).toBe(false);
     hook.unmount();
   });
@@ -115,7 +128,7 @@ describe('useRuleActions', /* 当前回调验证规则页面动作协调器的�
     const hook = renderHook(/* 当前回调构建隔离的规则编辑状态。 */ () => useRuleActionsHarness());
     act(/* 当前回调打开尚未授权的新规则。 */ () => hook.result.current.openNewAutomationRule());
     expect(hook.result.current.reviewConfig.allow_all_items).not.toBe(true);
-    act(/* 当前回调模拟用户明确确认内容适用于当前账号的全部商品。 */ () => hook.result.current.setEditingAutomationRule(/* draft 是编辑器当前表单。 */ draft => ({ ...draft, config_json: '{"allow_all_items":true}', variants: [{ id: 'variant', spec_name: '', spec_value: '', card_id: 7, delivery_count: 1, enabled: true }] })));
+    act(/* 当前回调模拟用户明确确认内容适用于当前账号的全部商品。 */ () => hook.result.current.setEditingAutomationRule(/* draft 是编辑器当前表单。 */ draft => ({ ...draft, config_json: '{"allow_all_items":true}', variants: [{ id: 'variant', spec_name: '', spec_value: '', card_id: 0, delivery_mode: 'template', delivery_template_id: 8, delivery_count: 1, enabled: true }] })));
     await act(/* 当前回调保存用户明确授权的通用规则。 */ async () => hook.result.current.handleSaveAutomationRule());
     expect(updateShippingMock).toHaveBeenCalledWith(expect.objectContaining({ config_json: '{"allow_all_items":true}' }));
     act(/* 当前回调切换为商品专属范围，撤销旧通用授权。 */ () => hook.result.current.handleAutomationItemChange('item-1'));
@@ -199,7 +212,7 @@ describe('useRuleActions', /* 当前回调验证规则页面动作协调器的�
     act(/* 当前回调写入无法由 JavaScript RegExp 解析的表达式。 */ () => hook.result.current.setEditingReplyRule(/* draft 是当前关键词回复表单。 */ draft => ({ ...draft, expressions: ['['], match_type: 'regexp', reply_content: '您好' })));
     await act(/* 当前回调尝试保存无效正则规则。 */ async () => hook.result.current.handleSaveReplyRule());
     expect(updateReplyMock).not.toHaveBeenCalled();
-    expect(hook.result.current.toast).toEqual({ type: 'error', text: '正则表达式格式错误，请检查关键词' });
+    expect(notifyMock).toHaveBeenCalledWith('error', '正则表达式格式错误，请检查关键词');
     hook.unmount();
   });
 
@@ -210,7 +223,7 @@ describe('useRuleActions', /* 当前回调验证规则页面动作协调器的�
     act(/* 当前回调打开关键词新增弹窗。 */ () => hook.result.current.handleAddReplyRule());
     act(/* 当前回调写入浏览器不支持但 Go/RE2 合法的表达式。 */ () => hook.result.current.setEditingReplyRule(/* draft 是当前关键词回复表单。 */ draft => ({ ...draft, expressions: ['(?i)hello', '(?m)^订单$', '(?P<id>\\d+)'], match_type: 'regexp', reply_content: '您好' })));
     await act(/* 当前回调保存合法 RE2 正则规则。 */ async () => hook.result.current.handleSaveReplyRule());
-    expect(hook.result.current.toast).not.toEqual({ type: 'error', text: '正则表达式格式错误，请检查关键词' });
+    expect(notifyMock).not.toHaveBeenCalledWith('error', '正则表达式格式错误，请检查关键词');
     expect(updateReplyMock).toHaveBeenCalledWith(expect.objectContaining({
       keyword: '(?i)hello',
       expressions: ['(?i)hello', '(?m)^订单$', '(?P<id>\\d+)'],
@@ -240,7 +253,7 @@ describe('useRuleActions', /* 当前回调验证规则页面动作协调器的�
     act(/* 当前回调写入全部为空白的表达式和有效回复。 */ () => hook.result.current.setEditingReplyRule(/* draft 是当前关键词回复表单。 */ draft => ({ ...draft, keyword: '  ', expressions: ['  ', ''], reply_content: '您好' })));
     await act(/* 当前回调尝试保存无有效表达式的规则。 */ async () => hook.result.current.handleSaveReplyRule());
     expect(updateReplyMock).not.toHaveBeenCalled();
-    expect(hook.result.current.toast).toEqual({ type: 'error', text: '请填写关键词和回复内容' });
+    expect(notifyMock).toHaveBeenCalledWith('error', '请填写关键词和回复内容');
     hook.unmount();
   });
 
@@ -274,17 +287,17 @@ describe('useRuleActions', /* 当前回调验证规则页面动作协调器的�
     hook.unmount();
   });
 
-  test('关键词回复保存与删除使用轻提示而不是原生弹窗', /* 当前回调验证回复规则操作的轻提示反馈。 */ async () => {
+  test('关键词回复保存与删除使用统一提示而不是原生弹窗', /* 当前回调验证回复规则操作的统一反馈。 */ async () => {
     // hook 是规则动作 Hook 的真实 React 状态实例。
     const hook = renderHook(() => useRuleActionsHarness());
     act(/* 当前回调打开关键词新增弹窗。 */ () => hook.result.current.handleAddReplyRule());
     expect(hook.result.current.editingReplyRule?.item_ids).toEqual([]);
     act(/* 当前回调填写关键词回复草稿。 */ () => hook.result.current.setEditingReplyRule(/* currentDraft 更新关键词回复草稿。 */ current => ({ ...current, keyword: '你好', reply_content: '您好' })));
     await act(/* 当前回调保存关键词回复规则。 */ async () => hook.result.current.handleSaveReplyRule());
-    expect(hook.result.current.toast).toEqual({ type: 'success', text: '保存成功' });
+    expect(notifyMock).toHaveBeenCalledWith('success', '保存成功', '关键词回复');
 
     await act(/* 当前回调删除单条关键词回复规则。 */ async () => hook.result.current.handleDeleteReply('reply-1'));
-    expect(hook.result.current.toast).toEqual({ type: 'success', text: '删除成功' });
+    expect(notifyMock).toHaveBeenCalledWith('success', '关键词回复已删除', undefined);
     hook.unmount();
   });
 
@@ -294,7 +307,7 @@ describe('useRuleActions', /* 当前回调验证规则页面动作协调器的�
     act(/* 当前回调打开关键词新增弹窗但保持空草稿。 */ () => hook.result.current.handleAddReplyRule());
     await act(/* 当前回调保存缺内容的空草稿。 */ async () => hook.result.current.handleSaveReplyRule());
     expect(updateReplyMock).not.toHaveBeenCalled();
-    expect(hook.result.current.toast).toEqual({ type: 'error', text: '请填写关键词和回复内容' });
+    expect(notifyMock).toHaveBeenCalledWith('error', '请填写关键词和回复内容');
     hook.unmount();
   });
 
@@ -307,7 +320,7 @@ describe('useRuleActions', /* 当前回调验证规则页面动作协调器的�
     });
     act(/* 当前回调在没有账号时尝试新增关键词回复。 */ () => hook.result.current.handleAddReplyRule());
     expect(hook.result.current.showReplyModal).toBe(false);
-    expect(hook.result.current.toast).toEqual({ type: 'error', text: '请先选择账号' });
+    expect(notifyMock).toHaveBeenCalledWith('error', '请先选择账号');
     hook.unmount();
   });
 
@@ -318,7 +331,8 @@ describe('useRuleActions', /* 当前回调验证规则页面动作协调器的�
     act(/* 当前回调打开关键词新增弹窗。 */ () => hook.result.current.handleAddReplyRule());
     act(/* 当前回调填写关键词回复草稿。 */ () => hook.result.current.setEditingReplyRule(/* currentDraft 更新关键词回复草稿。 */ current => ({ ...current, keyword: '你好', reply_content: '您好' })));
     await act(/* 当前回调保存会失败的回复规则。 */ async () => hook.result.current.handleSaveReplyRule());
-    expect(hook.result.current.toast).toEqual({ type: 'error', text: '保存失败：网络异常' });
+    expect(notifyMock).toHaveBeenCalledWith('error', '网络异常', '操作失败');
+    expect(hook.result.current.replySaveError).toBe('网络异常');
     hook.unmount();
   });
 });

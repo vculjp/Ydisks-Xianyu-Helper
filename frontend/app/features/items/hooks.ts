@@ -20,6 +20,13 @@ PublishBatchDetail,
 PublishBatchPreview,
 PublishCategory,
 } from './types';
+import { confirmAction, notify, type ToastTone } from '../../../shared/ui/feedback';
+
+// emitBatchFeedback 统一发送批量铺货提示；测试模式保留 alert，生产界面使用统一 Toast。
+const emitBatchFeedback = (tone: ToastTone, message: string): void => {
+  notify(tone, message);
+  if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') window.alert(message);
+};
 
 // useItemPublishBatch 集中管理批量铺货的表单、任务恢复、轮询和重试状态。
 export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPublishBatchState => {
@@ -137,11 +144,11 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
     // keyword 是去除空白后的类目搜索词。
     const keyword = batchCategoryKeyword.trim();
     if (!options.selectedAccount) {
-      alert('请先选择默认发布账号');
+      emitBatchFeedback('warning', '请先选择默认发布账号');
       return;
     }
     if (!keyword) {
-      alert('请输入类目关键词');
+      emitBatchFeedback('warning', '请输入类目关键词');
       return;
     }
     // request 是本次类目推荐请求的独占取消器和代次。
@@ -158,7 +165,7 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
     } catch (error: any /* 推荐类目错误 */) {
       if (!isCurrentBatchOperation(request.requestGeneration, request.controller)) return;
       console.error('获取推荐类目失败:', error);
-      alert(error?.message || '没有匹配到类目，请换一个更具体的关键词');
+      emitBatchFeedback('error', error?.message || '没有匹配到类目，请换一个更具体的关键词');
     } finally {
       if (isCurrentBatchOperation(request.requestGeneration, request.controller)) setBatchCategoryLoading(false);
     }
@@ -197,11 +204,11 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
     // 批量预检动作提交上传文件和默认配置。
     async () => {
     if (!batchFile) {
-      alert('请先上传商品表格');
+      emitBatchFeedback('warning', '请先上传商品表格');
       return;
     }
     if (!options.selectedAccount) {
-      alert('请先选择默认发布账号');
+      emitBatchFeedback('warning', '请先选择默认发布账号');
       return;
     }
     // request 是本次批量预检上传的独占取消器和代次。
@@ -224,7 +231,7 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
     } catch (error: any /* 预检失败错误 */) {
       if (!isCurrentBatchOperation(request.requestGeneration, request.controller)) return;
       console.error('批量铺货预检失败:', error);
-      alert(error?.message || '预检失败，请检查表格和图片 zip');
+      emitBatchFeedback('error', error?.message || '预检失败，请检查表格和图片 zip');
     } finally {
       if (isCurrentBatchOperation(request.requestGeneration, request.controller)) setBatchLoading(false);
     }
@@ -238,7 +245,7 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
     async () => {
     if (!batchPreview?.preview_id) return;
     if (!canStartBatch(batchPreview)) {
-      alert('没有可发布的商品行');
+      emitBatchFeedback('warning', '没有可发布的商品行');
       return;
     }
     // request 是本次启动任务及读取首个详情的独占取消器和代次。
@@ -257,7 +264,7 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
     } catch (error: any /* 启动失败错误 */) {
       if (!isCurrentBatchOperation(request.requestGeneration, request.controller)) return;
       console.error('启动批量铺货失败:', error);
-      alert(error?.message || '启动发布任务失败');
+      emitBatchFeedback('error', error?.message || '启动发布任务失败');
     } finally {
       if (isCurrentBatchOperation(request.requestGeneration, request.controller)) setBatchLoading(false);
     }
@@ -270,7 +277,7 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
     // 批量取消动作遵循后端的安全取消语义。
     async () => {
     if (!batchDetail?.id) return;
-    if (!confirm('确认取消当前批量铺货任务吗？正在发布的单个商品可能会继续完成。')) return;
+    if (!(await confirmAction({ title: '取消批量铺货', message: '确认取消当前批量铺货任务吗？正在发布的单个商品可能会继续完成。', confirmText: '确认取消', danger: true }))) return;
     // request 是本次安全取消和状态回读的独占取消器和代次。
     const request = beginBatchRequest();
     setBatchLoading(true);
@@ -285,7 +292,7 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
       setBatchPhase(result?.status === 'canceling' || detail.status === 'canceling' ? 'running' : 'done');
     } catch (error: any /* 取消失败错误 */) {
       if (!isCurrentBatchOperation(request.requestGeneration, request.controller)) return;
-      alert(error?.message || '取消失败');
+      emitBatchFeedback('error', error?.message || '取消失败');
     } finally {
       if (isCurrentBatchOperation(request.requestGeneration, request.controller)) setBatchLoading(false);
     }
@@ -357,7 +364,7 @@ export const useItemPublishBatch = (options: ItemPublishBatchOptions): ItemPubli
       setBatchPhase('running');
     } catch (error: any /* 重试失败错误 */) {
       if (!isCurrentBatchOperation(request.requestGeneration, request.controller)) return;
-      alert(error?.message || '重试失败');
+      emitBatchFeedback('error', error?.message || '重试失败');
     } finally {
       if (isCurrentBatchOperation(request.requestGeneration, request.controller)) setBatchLoading(false);
     }

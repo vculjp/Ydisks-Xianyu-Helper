@@ -191,6 +191,7 @@ func (s *Server) saveCollectedItemsToTemplates(w http.ResponseWriter, r *http.Re
 			OriginalPrice: rawItem.OriginalPrice,
 			ImageURLs:     rawItem.ImageURLs,
 			HasFullDetail: rawItem.HasFullDetail,
+			Source:        rawItem.Source,
 		})
 	}
 	// res、err 执行批量转存本地商品模板库。

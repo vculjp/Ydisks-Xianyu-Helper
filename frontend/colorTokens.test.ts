@@ -37,8 +37,8 @@ describe('global color token contract', () => {
   test('the primary brand and highlight colors are defined in the central stylesheet', () => {
     const globalStyles = readFileSync(resolve(__dirname, 'index.css'), 'utf8'); /* globalStyles 表示globalStyles。 */
 
-    expect(globalStyles).toContain('--color-brand: 0 148 247;');
-    expect(globalStyles).toContain('--color-brand-highlight: 0 113 227;');
+    expect(globalStyles).toContain('--color-brand: 2 86 255;');
+    expect(globalStyles).toContain('--color-brand-highlight: 0 70 217;');
     expect(globalStyles).toContain('--color-success-500:');
     expect(globalStyles).toContain('--color-warning-500:');
     expect(globalStyles).toContain('--color-danger-500:');

@@ -43,15 +43,18 @@ export const OrderFilterBar: React.FC<OrderFilterBarProps> = ({
 
   return (
     <div className="p-4 border-b border-gray-50 flex flex-col md:flex-row gap-4 justify-between items-center bg-surface-muted">
-      <div className="flex gap-1 p-1 bg-gray-200/50 rounded-xl overflow-x-auto max-w-full">
+      <div className="console-tabs console-tabs-inline max-w-full" role="tablist" aria-label="订单状态">
         {orderStatusOptions.map(
           // option 是当前订单状态筛选标签配置。
           option => (
             <button
               key={option.key}
+              type="button"
+              role="tab"
+              aria-selected={filter === option.key}
               data-status={option.key}
               onClick={handleStatusClick}
-              className={`px-5 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${filter === option.key ? 'bg-white text-black shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+              className={`console-tab ${filter === option.key ? 'is-active' : ''}`}
             >
               {option.label}
             </button>

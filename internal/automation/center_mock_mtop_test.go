@@ -15,6 +15,13 @@ import (
 
 // fakeMTop 是 mtop.Client 接口的纯内存实现，用于无需 HTTP 服务的单测。
 type fakeMTop struct {
+	// redFlowerCalls、redFlowerOrderIn 记录对平台原生求花接口的调用数量与目标订单。
+	redFlowerCalls   int
+	redFlowerOrderIn string
+	// redFlowerOK、redFlowerRet、redFlowerErr 是测试设定的原生求花响应。
+	redFlowerOK     bool
+	redFlowerRet    []string
+	redFlowerErr    error
 	consignErr      error
 	consignOk       bool
 	consignRet      []string
@@ -70,6 +77,13 @@ type fakeMTop struct {
 	adjustStarted chan struct{}
 	// adjustRelease 控制测试订单改价外部调用何时返回。
 	adjustRelease chan struct{}
+}
+
+// RequestRedFlowerContext 只记录被测运行是否调用原生求花，不触达真实平台。
+func (f *fakeMTop) RequestRedFlowerContext(_ context.Context, _ string, orderID string) (bool, []string, string, error) {
+	f.redFlowerCalls++
+	f.redFlowerOrderIn = orderID
+	return f.redFlowerOK, f.redFlowerRet, "", f.redFlowerErr
 }
 
 // fakeConsignResult 用于本次流程后续判断的fakeConsign结果

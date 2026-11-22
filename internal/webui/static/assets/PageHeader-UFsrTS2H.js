@@ -1,0 +1,1 @@
+import{j as e}from"./react-vendor-Bf9ELcll.js";const l=({title:o,description:s,children:a})=>e.jsxs("header",{className:"console-page-header",children:[e.jsxs("div",{className:"console-page-heading",children:[e.jsx("h1",{children:o}),s&&e.jsx("p",{children:s})]}),a&&e.jsx("div",{className:"console-page-actions",children:a})]});export{l as P};

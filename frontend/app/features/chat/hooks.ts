@@ -7,6 +7,7 @@ import { publishChatUnreadStatus,subscribeToChatLiveEvents } from './liveEvents'
 import { collectChatReadReceipts,filterChatSessions,formatClock,isChatAbortError,isCurrentChatRequest,markOutgoingMessagesReadByIncoming,mergeChatSessions,mergeLiveMessage,mergeOlderMessages,messageTime,newestUnreadChat } from './state';
 import type { ChatFeatureState,ChatLiveState,SessionsByAccount } from './types';
 import { libraryImageContentUrl,type LibraryImageChoice } from '../../../shared/ui/imageSource';
+import { notify } from '../../../shared/ui/feedback';
 
 /** ChatImageSource 是一次图片发送的来源：本地文件，或图片库图片（由服务端读取字节）。 */
 type ChatImageSource = File | {
@@ -49,7 +50,22 @@ export type UseChatResult = ChatFeatureState & {
   /** 更新表情选择器状态。 */
   setEmojiOpen: React.Dispatch<React.SetStateAction<boolean>>;
   /** 刷新当前账号会话。 */
-  reloadSessions: (accountID: string) => Promise<ChatSession[]>;
+  reloadSessions: (accountID: string, options?: {
+    /** announce 表示用户显式刷新时需要展示成功或失败提示；自动刷新保持静默。 */
+    announce?: boolean;
+  }) => Promise<ChatSession[]>;
+  /** initialError 是首次账号、会话和消息初始化失败原因；空字符串表示加载成功。 */
+  initialError: string;
+  /** retryInitial 重新执行首次初始化，只允许最新一次请求更新状态。 */
+  retryInitial: () => Promise<void>;
+  /** sessionsRefreshing 表示用户显式会话刷新是否仍在进行。 */
+  sessionsRefreshing: boolean;
+  /** sessionsError 是会话首页刷新失败原因，已有会话数据会继续保留。 */
+  sessionsError: string;
+  /** messagesError 是当前会话消息或历史分页失败原因，已有消息会继续保留。 */
+  messagesError: string;
+  /** retryMessages 从当前会话首页重新读取消息，不自动重发失败消息。 */
+  retryMessages: () => void;
   /** 加载更早的联系人。 */
   loadMoreContacts: () => Promise<void>;
   /** 加载更早的消息。 */
@@ -124,6 +140,14 @@ export const useChat = (): UseChatResult => {
   const [pendingImage, setPendingImage] = useState<PendingImagePreview | null>(null);
   // loading 表示聊天初始数据加载状态。
   const [loading, setLoading] = useState(true);
+  // initialError 保存首次初始化失败原因，避免把加载失败显示成“暂无账号”。
+  const [initialError, setInitialError] = useState('');
+  // sessionsRefreshing 表示用户显式刷新会话首页是否仍在进行。
+  const [sessionsRefreshing, setSessionsRefreshing] = useState(false);
+  // sessionsError 保存会话首页刷新失败原因，已有会话保持不变。
+  const [sessionsError, setSessionsError] = useState('');
+  // messagesError 保存当前会话消息读取失败原因，已有消息保持不变。
+  const [messagesError, setMessagesError] = useState('');
   // messagesLoading 表示当前会话消息加载状态。
   const [messagesLoading, setMessagesLoading] = useState(false);
   // olderLoading 表示历史消息分页状态。
@@ -180,6 +204,10 @@ export const useChat = (): UseChatResult => {
   const refreshedAccountsRef = useRef(new Set<string>());
   // sessionSequence 隔离联系人刷新请求。
   const sessionSequence = useRef(0);
+  // initialSequence 隔离首次初始化请求，重试和卸载后的旧响应不得覆盖状态。
+  const initialSequence = useRef(0);
+  // initialController 保存首次初始化请求控制器，重试时取消旧请求。
+  const initialController = useRef<AbortController | null>(null);
   // sessionController 保存当前联系人请求控制器。
   const sessionController = useRef<AbortController | null>(null);
   // messageSequence 隔离会话切换产生的旧消息响应。
@@ -212,6 +240,8 @@ export const useChat = (): UseChatResult => {
 	const deletingSessionIDRef = useRef('');
 	// deletionNeedsLocalReloadRef 记录删除隔离期间是否收到目标事件，收口后只追加一次本地读取。
 	const deletionNeedsLocalReloadRef = useRef(false);
+  // messagesReloadKey 是当前会话消息重试版本号，变化时重新触发消息首页读取。
+  const [messagesReloadKey, setMessagesReloadKey] = useState(0);
 
   useEffect(/* 当前回调同步 React 副作用和资源生命周期。 */ () => { activeAccountRef.current = activeAccountID; }, [activeAccountID]);
   useEffect(/* 当前回调同步当前会话并在用户主动选择后解除该账号的自动选择屏蔽。 */ () => {
@@ -222,10 +252,17 @@ export const useChat = (): UseChatResult => {
   useEffect(/* 当前回调在切换账号或会话时清理只针对旧会话的发送状态收口提示。 */ () => { setSendNotice(''); }, [activeAccountID, activeChatID]);
 
   /** 刷新指定账号的联系人列表，并丢弃过期响应。 */
-  const reloadSessions = useCallback(/* 当前回调封装可复用的交互处理逻辑。 */ async (accountID: string): Promise<ChatSession[]> => {
+  const reloadSessions = useCallback(/* 当前回调封装可复用的交互处理逻辑。 */ async (
+    accountID: string,
+    options: {
+      /** announce 表示用户显式刷新时展示结果提示。 */ announce?: boolean;
+    } = {},
+  ): Promise<ChatSession[]> => {
     // sequence 请求序号。
     const sequence = ++sessionSequence.current;
     sessionReloadingRef.current = true;
+    setSessionsRefreshing(true);
+    setSessionsError('');
     contactSequence.current += 1;
     contactController.current?.abort();
     setContactsLoading(false);
@@ -249,12 +286,24 @@ export const useChat = (): UseChatResult => {
       setPlatformHasMoreContacts(/* 当前回调写入平台联系人是否还有下一页。 */ current => ({ ...current, [accountID]: page.platform_has_more ?? page.has_more }));
       setStoredHasMoreContacts(/* 当前回调写入本地联系人是否还有下一页。 */ current => ({ ...current, [accountID]: page.stored_has_more ?? page.has_more }));
       setSendNotice('');
+      if (options.announce) {
+        notify('success', sessions.length > 0 ? `已同步 ${sessions.length} 个会话` : '会话已同步，当前没有会话');
+      }
       return sessions;
     } catch (/* error 保存会话列表请求的失败原因；仅最新请求可以更新错误状态。 */ error) {
-      if (isCurrentChatRequest(sessionSequence.current, sequence, controller.signal) && !isChatAbortError(error)) setError(error instanceof Error ? error.message : '同步会话失败');
+      if (isCurrentChatRequest(sessionSequence.current, sequence, controller.signal) && !isChatAbortError(error)) {
+        // failureMessage 是会话首页刷新失败的可展示原因。
+        const failureMessage = error instanceof Error ? error.message : '同步会话失败';
+        setSessionsError(failureMessage);
+        setError(failureMessage);
+        if (options.announce) notify('error', failureMessage);
+      }
       return [];
     } finally {
-      if (sessionSequence.current === sequence) sessionReloadingRef.current = false;
+      if (sessionSequence.current === sequence) {
+        sessionReloadingRef.current = false;
+        setSessionsRefreshing(false);
+      }
     }
   }, []);
 
@@ -288,49 +337,63 @@ export const useChat = (): UseChatResult => {
     }
 	}, []);
 
-  useEffect(/* 当前回调同步 React 副作用和资源生命周期。 */ () => {
+  /** loadInitial 读取账号、运行状态和各账号会话首页；重试时只允许最新请求写入状态。 */
+  const loadInitial = useCallback(/* 加载聊天首屏数据。 */ async (): Promise<void> => {
+    // sequence 是本次首屏初始化的代次，用于丢弃重试或卸载后的旧响应。
+    const sequence = ++initialSequence.current;
+    initialController.current?.abort();
     // controller 请求取消控制器。
     const controller = new AbortController();
-    // load 加载当前数据。
-    const load = async (): Promise<void> => {
-      setLoading(true);
-      try {
-        // [details, 解构得到当前 Hook 返回的状态和操作函数。
-        const [details, statuses] = await Promise.all([
-          getAccountDetails({ signal: controller.signal }),
-          getAccountRuntimeStatuses({ signal: controller.signal }),
-        ]);
-        // withRuntime with运行状态，负责当前功能中的对应处理。
-        const withRuntime = details.map(/* 当前回调处理集合中的单个元素。 */ account => ({
-          ...account,
-          runtime_state: statuses[account.id]?.state || (account.enabled ? 'connecting' : 'disabled'),
-          runtime_connected: statuses[account.id]?.connected === true,
-        }));
-        // enabled 启用状态。
-        const enabled = withRuntime.filter(/* 当前回调处理集合中的单个元素。 */ account => account.enabled);
-        // sessionPages 会话Pages，负责当前功能中的对应处理。
-        const sessionPages = await Promise.all(enabled.map(/* 当前回调处理集合中的单个元素。 */ async account => [account.id, await getChatSessionPage(account.id, undefined, { signal: controller.signal })] as const));
-        if (controller.signal.aborted) return;
-        setAccounts(enabled);
-        setSessionsByAccount(Object.fromEntries(sessionPages.map(/* 当前回调处理集合中的单个元素。 */ ([id, page]) => [id, page.sessions])));
-        setContactCursors(Object.fromEntries(sessionPages.map(/* 当前回调处理集合中的单个元素。 */ ([id, page]) => [id, page.next_cursor])));
-        setStoredContactCursors(Object.fromEntries(sessionPages.map(/* 当前回调记录每个账号本地联系人首页的下一游标。 */ ([id, page]) => [id, page.next_stored_cursor])));
-        setPlatformHasMoreContacts(Object.fromEntries(sessionPages.map(/* 当前回调记录每个账号平台联系人分页状态。 */ ([id, page]) => [id, page.platform_has_more ?? page.has_more])));
-        setStoredHasMoreContacts(Object.fromEntries(sessionPages.map(/* 当前回调记录每个账号本地联系人分页状态。 */ ([id, page]) => [id, page.stored_has_more ?? page.has_more])));
-        // stored 已保存数据。
-        const stored = window.localStorage.getItem('ydisks.chat.account.v1') || '';
-        // first 首项。
-        const first = enabled.some(/* 当前回调处理集合中的单个元素。 */ account => account.id === stored) ? stored : enabled[0]?.id || '';
-        setActiveAccountID(first);
-      } catch (/* loadError 表示加载错误。 */ loadError) {
-        if (!controller.signal.aborted) setError(loadError instanceof Error ? loadError.message : '加载聊天数据失败');
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
+    initialController.current = controller;
+    setLoading(true);
+    setInitialError('');
+    try {
+      // [details, statuses] 是账号详情与运行状态的并行读取结果。
+      const [details, statuses] = await Promise.all([
+        getAccountDetails({ signal: controller.signal }),
+        getAccountRuntimeStatuses({ signal: controller.signal }),
+      ]);
+      // withRuntime 是合并运行状态后的账号详情。
+      const withRuntime = details.map(/* account 是待合并运行状态的账号详情。 */ account => ({
+        ...account,
+        runtime_state: statuses[account.id]?.state || (account.enabled ? 'connecting' : 'disabled'),
+        runtime_connected: statuses[account.id]?.connected === true,
+      }));
+      // enabled 是当前允许进入聊天页的启用账号。
+      const enabled = withRuntime.filter(/* account 只保留已启用账号。 */ account => account.enabled);
+      // sessionPages 是每个启用账号的会话首页读取结果。
+      const sessionPages = await Promise.all(enabled.map(/* account 是当前读取会话首页的启用账号。 */ async account => [account.id, await getChatSessionPage(account.id, undefined, { signal: controller.signal })] as const));
+      if (sequence !== initialSequence.current || controller.signal.aborted) return;
+      setAccounts(enabled);
+      setSessionsByAccount(Object.fromEntries(sessionPages.map(/* [id, page] 是账号标识与其会话页。 */ ([id, page]) => [id, page.sessions])));
+      setContactCursors(Object.fromEntries(sessionPages.map(/* [id, page] 是账号标识与其会话页。 */ ([id, page]) => [id, page.next_cursor])));
+      setStoredContactCursors(Object.fromEntries(sessionPages.map(/* [id, page] 是账号标识与其会话页。 */ ([id, page]) => [id, page.next_stored_cursor])));
+      setPlatformHasMoreContacts(Object.fromEntries(sessionPages.map(/* [id, page] 是账号标识与其会话页。 */ ([id, page]) => [id, page.platform_has_more ?? page.has_more])));
+      setStoredHasMoreContacts(Object.fromEntries(sessionPages.map(/* [id, page] 是账号标识与其会话页。 */ ([id, page]) => [id, page.stored_has_more ?? page.has_more])));
+      // stored 是上次选择的账号标识。
+      const stored = window.localStorage.getItem('ydisks.chat.account.v1') || '';
+      // first 是本次应默认选中的账号标识。
+      const first = enabled.some(/* account 判断是否为上次选择账号。 */ account => account.id === stored) ? stored : enabled[0]?.id || '';
+      setActiveAccountID(first);
+    } catch (/* loadError 表示首屏初始化错误。 */ loadError) {
+      if (sequence === initialSequence.current && !controller.signal.aborted && !isChatAbortError(loadError)) {
+        // failureMessage 是首屏初始化失败的可展示原因。
+        const failureMessage = loadError instanceof Error ? loadError.message : '加载聊天数据失败';
+        setInitialError(failureMessage);
+        setError(failureMessage);
       }
-    };
-    void load();
-    return /* 当前回调处理用户交互或异步状态变化。 */ () => controller.abort();
+    } finally {
+      if (sequence === initialSequence.current) setLoading(false);
+    }
   }, []);
+
+  useEffect(/* initialEffect 挂载时加载聊天首屏，卸载时取消未完成请求。 */ () => {
+    void loadInitial();
+    return /* cleanup 使首屏初始化响应失效并取消网络请求。 */ () => {
+      initialSequence.current += 1;
+      initialController.current?.abort();
+    };
+  }, [loadInitial]);
 
   useEffect(/* 当前回调同步 React 副作用和资源生命周期。 */ () => {
     // disposed disposed，负责当前功能中的对应处理。
@@ -396,6 +459,7 @@ export const useChat = (): UseChatResult => {
       olderController.current?.abort();
       skipNextMessageScrollRef.current = false;
       setMessages([]);
+      setMessagesError('');
       return;
     }
     // sequence 请求序号。
@@ -405,6 +469,7 @@ export const useChat = (): UseChatResult => {
     const controller = new AbortController();
     messageController.current = controller;
     setMessagesLoading(true);
+    setMessagesError('');
     void getChatMessagePage(activeAccountID, activeChatID, undefined, undefined, { signal: controller.signal }).then(/* 当前回调处理用户交互或异步状态变化。 */ page => {
       if (!isCurrentChatRequest(messageSequence.current, sequence, controller.signal)) return;
       // readReceipts 只确认可被平台接受的普通入站消息。
@@ -416,12 +481,17 @@ export const useChat = (): UseChatResult => {
       if (page.session) setSessionsByAccount(/* 当前回调处理集合中的单个元素。 */ current => ({ ...current, [activeAccountID]: (current[activeAccountID] || []).map(/* 当前回调处理集合中的单个元素。 */ session => session.chat_id === page.session?.chat_id ? page.session! : session) }));
       setSessionsByAccount(/* 当前回调处理集合中的单个元素。 */ current => ({ ...current, [activeAccountID]: (current[activeAccountID] || []).map(/* 当前回调处理集合中的单个元素。 */ session => session.chat_id === activeChatID ? { ...session, unread_count: 0 } : session) }));
     }).catch(/* 当前回调处理用户交互或异步状态变化。 */ loadError => {
-      if (isCurrentChatRequest(messageSequence.current, sequence, controller.signal) && !isChatAbortError(loadError)) setError(loadError instanceof Error ? loadError.message : '加载消息失败');
+      if (isCurrentChatRequest(messageSequence.current, sequence, controller.signal) && !isChatAbortError(loadError)) {
+        // failureMessage 是当前会话消息读取失败的可展示原因。
+        const failureMessage = loadError instanceof Error ? loadError.message : '加载消息失败';
+        setMessagesError(failureMessage);
+        setError(failureMessage);
+      }
     }).finally(/* 当前回调处理用户交互或异步状态变化。 */ () => {
       if (isCurrentChatRequest(messageSequence.current, sequence, controller.signal)) setMessagesLoading(false);
     });
     return /* 当前回调处理用户交互或异步状态变化。 */ () => controller.abort();
-  }, [activeAccountID, activeChatID]);
+  }, [activeAccountID, activeChatID, messagesReloadKey]);
 
   useEffect(/* 当前回调同步 React 副作用和资源生命周期。 */ () => {
     contactController.current?.abort();
@@ -495,6 +565,7 @@ export const useChat = (): UseChatResult => {
     olderController.current = controller;
     skipNextMessageScrollRef.current = true;
     setOlderLoading(true);
+    setMessagesError('');
     setError('');
     try {
       // oldestID 最早标识，负责当前功能中的对应处理。
@@ -512,7 +583,12 @@ export const useChat = (): UseChatResult => {
       });
     } catch (/* loadError 表示加载错误。 */ loadError) {
       skipNextMessageScrollRef.current = false;
-      if (!isChatAbortError(loadError)) setError(loadError instanceof Error ? loadError.message : '加载历史消息失败');
+      if (!isChatAbortError(loadError)) {
+        // failureMessage 是历史消息分页失败的可展示原因。
+        const failureMessage = loadError instanceof Error ? loadError.message : '加载历史消息失败';
+        setMessagesError(failureMessage);
+        setError(failureMessage);
+      }
     } finally {
       if (olderRequestSequence === olderSequence.current) setOlderLoading(false);
     }
@@ -664,6 +740,7 @@ export const useChat = (): UseChatResult => {
       if (clearDraft) setDraft('');
       setRetryText(null);
       setMessages(/* 当前回调处理用户交互或异步状态变化。 */ current => mergeLiveMessage(current, result.message));
+      notify('success', '消息已发送');
     } catch (/* sendError 表示发送错误。 */ sendError) {
       if (isCurrentChatRequest(sendSequence.current, sequence, controller.signal)) {
         // confirmed 保存远端已确认投递、仅本地状态收口失败时返回的不可重试消息。
@@ -677,9 +754,15 @@ export const useChat = (): UseChatResult => {
           setRetryText(null);
           setMessages(/* 当前回调把已确认或待确认的消息合并到当前会话。 */ current => mergeLiveMessage(current, resolved));
           setSendNotice(confirmed ? '消息已发送，但本地状态同步失败，请刷新会话确认状态。' : '发送结果待确认，请先到闲鱼核对，避免重复发送。');
+          notify('warning', confirmed ? '消息已发送，但本地状态同步失败' : '发送结果待确认，请先到闲鱼核对');
         } else {
           if (rememberRetry) setRetryText(text);
-          if (!isChatAbortError(sendError)) setError(sendError instanceof Error ? sendError.message : '消息发送失败');
+          if (!isChatAbortError(sendError)) {
+            // failureMessage 是文字消息发送失败的可展示原因。
+            const failureMessage = sendError instanceof Error ? sendError.message : '消息发送失败';
+            setError(failureMessage);
+            notify('error', failureMessage);
+          }
         }
       }
     } finally {
@@ -710,6 +793,7 @@ export const useChat = (): UseChatResult => {
       if (!isCurrentChatRequest(sendSequence.current, sequence, controller.signal)) return;
       setRetryImage(null);
       setMessages(/* 当前回调处理用户交互或异步状态变化。 */ current => mergeLiveMessage(current, result.message));
+      notify('success', '图片已发送');
     } catch (/* sendError 表示发送错误。 */ sendError) {
       if (isCurrentChatRequest(sendSequence.current, sequence, controller.signal)) {
         // confirmed 保存远端已确认投递、仅本地状态收口失败时返回的不可重试图片消息。
@@ -723,9 +807,15 @@ export const useChat = (): UseChatResult => {
           setRetryImage(null);
           setMessages(/* 当前回调把已确认或待确认的图片消息合并到当前会话。 */ current => mergeLiveMessage(current, resolved));
           setSendNotice(confirmed ? '消息已发送，但本地状态同步失败，请刷新会话确认状态。' : '发送结果待确认，请先到闲鱼核对，避免重复发送。');
+          notify('warning', confirmed ? '图片已发送，但本地状态同步失败' : '图片发送结果待确认，请先到闲鱼核对');
         } else {
           if (rememberRetry) setRetryImage(source);
-          if (!isChatAbortError(sendError)) setError(sendError instanceof Error ? sendError.message : '图片发送失败');
+          if (!isChatAbortError(sendError)) {
+            // failureMessage 是图片发送失败的可展示原因。
+            const failureMessage = sendError instanceof Error ? sendError.message : '图片发送失败';
+            setError(failureMessage);
+            notify('error', failureMessage);
+          }
         }
       }
     } finally {
@@ -867,10 +957,14 @@ export const useChat = (): UseChatResult => {
 				deletionNeedsLocalReloadRef.current = false;
 				if (needsFollowupLocalReload && isCurrentChatRequest(deleteSequence.current, sequence, controller.signal)) await reloadLocalSessions(accountID);
         if (!isCurrentChatRequest(deleteSequence.current, sequence, controller.signal)) return false;
+				notify('success', '会话已从本机删除');
 				return true;
 		} catch (/* deleteRequestError 保存本次删除请求失败原因；取消和过期响应保持静默。 */ deleteRequestError) {
 			if (isCurrentChatRequest(deleteSequence.current, sequence, controller.signal) && !isChatAbortError(deleteRequestError)) {
-				setDeleteError(deleteRequestError instanceof Error ? deleteRequestError.message : '删除会话失败，请重试');
+				// failureMessage 是会话删除失败的可展示原因。
+				const failureMessage = deleteRequestError instanceof Error ? deleteRequestError.message : '删除会话失败，请重试';
+				setDeleteError(failureMessage);
+				notify('error', failureMessage);
 			}
 				if (isCurrentChatRequest(deleteSequence.current, sequence, controller.signal)) {
 					await reloadLocalSessions(accountID);
@@ -895,6 +989,13 @@ export const useChat = (): UseChatResult => {
 	/** 清除确认框打开前遗留的删除错误。 */
 	const clearDeleteError = useCallback(/* 当前回调只重置删除流程错误，不影响聊天页其他提示。 */ (): void => setDeleteError(''), []);
 
+  /** retryMessages 从当前会话首页重新读取消息，保留旧消息直到新结果返回。 */
+  const retryMessages = useCallback(/* 当前回调触发消息首页重新读取。 */ (): void => {
+    if (!activeAccountID || !activeChatID) return;
+    setMessagesError('');
+    setMessagesReloadKey(/* value 是当前消息重试版本号。 */ value => value + 1);
+  }, [activeAccountID, activeChatID]);
+
 	/** 将商品卡片等独立发送器的结果合并到当前会话，不改动文本和图片重试状态。 */
 	const acceptOutgoingMessage = useCallback(/* 当前回调接收已经过后端状态机确认的出站消息。 */ (message: ChatMessage, notice = ''): void => {
 		if (message.account_id !== activeAccountRef.current || message.chat_id !== activeChatRef.current) return;
@@ -904,7 +1005,7 @@ export const useChat = (): UseChatResult => {
 
   return {
     accounts, activeAccountID, activeSessions, selectedSession, activeAccount, messages, search, unreadOnly, draft, loading, messagesLoading, olderLoading, hasOlder, contactsLoading, hasMoreContacts: platformHasMoreContacts[activeAccountID] === true || storedHasMoreContacts[activeAccountID] === true, emojiOpen, sending, error, sendNotice, liveState, pendingImage,
-    activeChatID, filteredSessions, scrollRef, imageInputRef, setActiveAccountID, setActiveChatID, setSearch, setUnreadOnly, setDraft, setEmojiOpen,
+    activeChatID, filteredSessions, scrollRef, imageInputRef, setActiveAccountID, setActiveChatID, setSearch, setUnreadOnly, setDraft, setEmojiOpen, initialError, retryInitial: loadInitial, sessionsRefreshing, sessionsError, messagesError, retryMessages,
 		reloadSessions, loadMoreContacts, loadOlderMessages, handleMessageScroll, handleSend, handleQuickReply, handleQuickReplyImage, handleLibraryImage, handleImage, handlePastedImages, confirmSendImage, closeImagePreview, retrySend, retryAvailable: Boolean(retryText || retryImage), deletingChatID, deleteError, deleteConversation, clearDeleteError, acceptOutgoingMessage, unreadForAccount, jumpToUnreadConversation,
     emojiURL, xianyuEmojis, renderXianyuText, formatClock, messageTime,
   };

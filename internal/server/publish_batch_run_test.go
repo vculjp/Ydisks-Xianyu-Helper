@@ -60,6 +60,11 @@ func TestPublishBatchFailurePreservesUncertainRemoteWarningWhenCanceled(t *testi
 	if kind != "publish" || message != "任务已取消" {
 		t.Fatalf("ordinary cancel message=%q kind=%q", message, kind)
 	}
+	// unsupportedMessage、unsupportedKind 验证平台明确拒绝网页端发布时错误分类与人工 APP 指引。
+	unsupportedMessage, unsupportedKind := publishBatchFailure(itemapp.ErrPCPublishUnsupported, "running")
+	if unsupportedKind != "pc_unsupported" || !strings.Contains(unsupportedMessage, "闲鱼APP") || strings.Contains(unsupportedMessage, "远端结果未知") {
+		t.Fatalf("unsupported failure: kind=%q message=%q", unsupportedKind, unsupportedMessage)
+	}
 }
 
 // buildImageZip 构造含一张图片的 zip 字节流。
@@ -89,7 +94,7 @@ func previewPublishBatch(t *testing.T, h http.Handler, cookie *http.Cookie) stri
 	_ = mw.WriteField("fallback_channel_category_id", "6001")
 	// csvField 用于本次流程后续判断的csv字段
 	csvField, _ := mw.CreateFormFile("file", "products.csv")
-	csvField.Write([]byte("账号ID,标题,价格,库存,图片\nacc1,商品A,12.50,5,img/a.png\n"))
+	csvField.Write([]byte("账号ID,标题,描述,价格,库存,图片\nacc1,商品A,商品A详细介绍,12.50,5,img/a.png\n"))
 	// zipField 用于本次流程后续判断的zip字段
 	zipField, _ := mw.CreateFormFile("images_zip", "images.zip")
 	zipField.Write(buildImageZip(t))
@@ -127,7 +132,7 @@ func previewTwoRowPublishBatch(t *testing.T, h http.Handler, cookie *http.Cookie
 	_ = mw.WriteField("fallback_channel_category_id", "6001")
 	// csvField 用于本次流程后续判断的csv字段
 	csvField, _ := mw.CreateFormFile("file", "products.csv")
-	csvField.Write([]byte("账号ID,标题,价格,库存,图片\nacc1,商品A,12.50,5,img/a.png\nacc1,商品B,13.50,5,img/a.png\n"))
+	csvField.Write([]byte("账号ID,标题,描述,价格,库存,图片\nacc1,商品A,商品A详细介绍,12.50,5,img/a.png\nacc1,商品B,商品B详细介绍,13.50,5,img/a.png\n"))
 	// zipField 用于本次流程后续判断的zip字段
 	zipField, _ := mw.CreateFormFile("images_zip", "images.zip")
 	zipField.Write(buildImageZip(t))

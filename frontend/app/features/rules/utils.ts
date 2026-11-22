@@ -6,8 +6,20 @@ AutomationTriggerType,
 Card,
 ShippingRule,
 ShippingVariant,
+DeliveryTemplate,
 } from './api';
 import type { TriggerMeta } from './types';
+import { SHOW_CARD_UI } from '../../../shared/ui/featureVisibility';
+
+// isVisibleShippingVariant 仅允许当前精简界面编辑无库存绑定的发货模板；历史动作保留在提交草稿中。
+export const isVisibleShippingVariant = (variant: ShippingVariant, deliveryTemplates: DeliveryTemplate[]): boolean => {
+  if (SHOW_CARD_UI) return true;
+  if (variant.delivery_mode !== 'template') return false;
+  if (!variant.delivery_template_id) return true;
+  // selected 检查当前模板是否有库存变量；缺失的旧引用不能在精简模式中被误编辑。
+  const selected = deliveryTemplates.find(/* template 用当前模板主键查找。 */ template => template.id === variant.delivery_template_id);
+  return !!selected && selected.keys.length === 0;
+};
 
 // triggerMeta 是自动化触发类型的统一展示元数据，供列表和编辑器复用。
 export const triggerMeta: Record<AutomationTriggerType, TriggerMeta> = {
@@ -22,15 +34,15 @@ export const triggerMeta: Record<AutomationTriggerType, TriggerMeta> = {
   order_paid: {
     label: '付款后自动发货',
     shortLabel: '自动发货',
-    description: '闲鱼付款系统卡片进入自动化中心后，先发送卡密；发送成功后，按账号“自动确认发货”开关决定是否确认发货。',
-    flow: ['付款系统卡片', '匹配商品/规格', '发送卡密', '确认发货'],
+    description: '买家付款后按商品和规格匹配发货模板；内容发送成功后，按账号“自动确认发货”开关决定是否更新闲鱼订单状态。',
+    flow: ['付款系统消息', '匹配商品/规格', '发送发货内容', '确认发货'],
     accent: 'blue',
     icon: PackageCheck,
   },
   buyer_reviewed: {
     label: '评价后发送赠品',
     shortLabel: '评价赠品',
-    description: '闲鱼评价系统卡片进入自动化中心后，给买家发送赠品卡密。',
+    description: '收到买家评价后，按商品和规格匹配赠品发货模板并发送给买家。',
     flow: ['评价系统卡片', '匹配商品/规格', '发送赠品'],
     accent: 'emerald',
     icon: Gift,
@@ -113,7 +125,7 @@ export const reviewLookbackHours = (raw?: string) => {
 };
 
 // buildReviewConfig 规范化求评价规则的时间参数，并应用编辑器的局部修改。
-export const buildReviewConfig = (raw?: string, patch: Record<string, number> = {}) => {
+export const buildReviewConfig = (raw?: string, patch: Record<string, number | boolean> = {}) => {
   // current 是求评价配置的已有字段。
   const current = parseJSONObject(raw);
   // lookback 仅在用户显式配置过时写回，未配置时保持后端按其他字段推导的默认窗口。
@@ -122,6 +134,7 @@ export const buildReviewConfig = (raw?: string, patch: Record<string, number> = 
     after_shipped_hours: Number(current.after_shipped_hours || 72),
     repeat_interval_hours: Number(current.repeat_interval_hours || 24),
     max_attempts: Number(current.max_attempts || 1),
+    trigger_on_completed: current.trigger_on_completed === true,
     ...lookback,
     ...patch,
   });
@@ -215,16 +228,22 @@ export const actionSummary = (rule: ShippingRule) => {
       action => action.action_type === 'send_text',
     )?.message_template || '发送求评价文案';
   }
-  // cards 是当前规则中的卡密或模板动作列表。
-  const cards = (rule.actions || []).filter(
-    // 卡密动作筛选器保留两种可发货动作。
-    action => action.action_type === 'send_card' || action.action_type === 'send_template',
+  // templateActions 只展示发货模板，不暴露历史隐藏模式的库存名称或编号。
+  const templateActions = (rule.actions || []).filter(
+    // action 表示当前待汇总的非库存发货动作。
+    action => action.action_type === 'send_template',
   );
-  if (!cards.length) return '未配置卡密库存';
-  return cards.map(
-    // 卡密动作格式化器优先展示模板名称或库存名称。
-    action => action.action_type === 'send_template' ? action.delivery_template_name || `模板 ${action.delivery_template_id}` : action.card_name || `卡密 ${action.card_id}`,
-  ).join(' / ');
+  if (templateActions.length > 0) {
+    return templateActions.map(
+      // action 是已绑定的发货模板，显示名称或模板主键。
+      action => action.delivery_template_name || `发货模板 ${action.delivery_template_id}`,
+    ).join(' / ');
+  }
+  // 历史发货配置继续由后端兼容执行，但当前精简界面不显示其专属资源信息。
+  return (rule.actions || []).some(
+    // action 检查该规则是否保留旧版发货动作。
+    action => action.action_type === 'send_card',
+  ) ? '已有历史发货配置' : '未配置发货内容';
 };
 
 // accentClasses 将触发类型主题色映射为规则页 Tailwind 类名。

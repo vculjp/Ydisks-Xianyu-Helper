@@ -84,21 +84,6 @@ vi.mock('../qrPolling', /* qrPollingMockFactory 提供二维码轮询器替身�
   }),
 }));
 
-vi.mock('../components/AccountCard', /* accountCardMockFactory 提供账号卡片交互替身。 */ () => {
-  // AccountCardMock 渲染页面测试需要的账号操作入口。
-  const AccountCardMock: React.FC<any> = (props /* props 表示账号卡片及其事件回调。 */) => (
-    <div data-testid={`account-card-${props.account.id}`}>
-      <span>{props.account.nickname}</span>
-      <button onClick={/* deleteAction 触发账号删除确认。 */ () => props.onDelete(props.account)}>删除</button>
-      <button onClick={/* toggleAction 切换账号启用状态。 */ () => props.onToggle(props.account.id, props.account.enabled)}>切换</button>
-      <button onClick={/* refreshAction 刷新账号资料。 */ () => props.onRefreshProfile(props.account)}>刷新资料</button>
-      <button onClick={/* reauthorizeAction 启动账号二维码重新授权。 */ () => props.onReauthorize(props.account)}>重新授权</button>
-      <button onClick={/* editAction 打开账号编辑弹窗。 */ () => props.onEdit(props.account)}>编辑</button>
-    </div>
-  );
-  return { AccountCard: AccountCardMock };
-});
-
 vi.mock('../components/AccountDeleteDialog', /* deleteDialogMockFactory 提供删除确认弹窗替身。 */ () => {
   // AccountDeleteDialogMock 展示删除错误并暴露确认/关闭操作。
   const AccountDeleteDialogMock: React.FC<any> = (props /* props 表示删除弹窗及其操作回调。 */) => (
@@ -182,12 +167,12 @@ describe('AccountList 页面组合行为', /* 当前回调验证账号列表页�
   test('搜索只展示匹配账号并保留总数提示', /* 当前回调验证账号搜索过滤行为。 */ () => {
     render(<AccountList />);
 
-    expect(screen.getByTestId('account-card-account-1')).toBeTruthy();
-    expect(screen.getByTestId('account-card-account-2')).toBeTruthy();
+    expect(screen.getByText('Alpha')).toBeTruthy();
+    expect(screen.getByText('Beta')).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText('搜索昵称 / 备注 / 账号ID'), { target: { value: 'Alpha' } });
 
-    expect(screen.getByTestId('account-card-account-1')).toBeTruthy();
-    expect(screen.queryByTestId('account-card-account-2')).toBeNull();
+    expect(screen.getByText('Alpha')).toBeTruthy();
+    expect(screen.queryByText('Beta')).toBeNull();
     expect(screen.getByText('当前显示 1 / 2 个账号')).toBeTruthy();
   });
 
@@ -206,7 +191,7 @@ describe('AccountList 页面组合行为', /* 当前回调验证账号列表页�
 
   test('账号卡片操作分别触发状态切换和资料刷新', /* 当前回调验证账号卡片向页面协调器转发操作。 */ async () => {
     render(<AccountList />);
-    fireEvent.click(screen.getAllByText('切换')[0]);
+    fireEvent.click(screen.getAllByRole('switch')[0]);
     await waitFor(/* toggleAssertion 等待账号状态更新请求完成。 */ () => expect(accountListMocks.updateAccountStatus).toHaveBeenCalledWith('account-1', false));
     expect(accountListMocks.loadAccounts).toHaveBeenCalled();
 

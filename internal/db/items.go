@@ -14,7 +14,8 @@ func (i *Items) AllForCookie(ctx context.Context, cookieID string) ([]ItemInfoRo
 	rows, err := i.DB.QueryContext(ctx,
 		`SELECT i.id, i.cookie_id, i.item_id, COALESCE(i.item_title,''), COALESCE(i.item_description,''),
 		        COALESCE(i.item_category,''), COALESCE(i.item_price,''), COALESCE(i.item_detail,''),
-		        i.is_multi_spec, COALESCE(i.multi_quantity_delivery,0), COALESCE(s.ai_override,'inherit')
+		        i.is_multi_spec, COALESCE(i.multi_quantity_delivery,0), COALESCE(s.ai_override,'inherit'),
+		        COALESCE(i.created_at,''), COALESCE(i.updated_at,'')
 		 FROM item_info i LEFT JOIN item_ai_settings s ON s.cookie_id=i.cookie_id AND s.item_id=i.item_id
 		 WHERE i.cookie_id=? AND i.deleted_at IS NULL ORDER BY i.id DESC`, cookieID)
 	if err != nil {
@@ -71,7 +72,8 @@ func (i *Items) ListForUser(ctx context.Context, userID int64, cookieID string) 
 	rows, err := i.DB.QueryContext(ctx,
 		`SELECT i.id, i.cookie_id, i.item_id, COALESCE(i.item_title,''), COALESCE(i.item_description,''),
 		        COALESCE(i.item_category,''), COALESCE(i.item_price,''), COALESCE(i.item_detail,''),
-		        i.is_multi_spec, COALESCE(i.multi_quantity_delivery,0), COALESCE(s.ai_override,'inherit')
+		        i.is_multi_spec, COALESCE(i.multi_quantity_delivery,0), COALESCE(s.ai_override,'inherit'),
+		        COALESCE(i.created_at,''), COALESCE(i.updated_at,'')
 		 FROM item_info i JOIN cookies c ON c.id=i.cookie_id
 		 LEFT JOIN item_ai_settings s ON s.cookie_id=i.cookie_id AND s.item_id=i.item_id
 		 WHERE c.user_id=? AND (?='' OR i.cookie_id=?) AND i.deleted_at IS NULL
@@ -94,7 +96,8 @@ func scanItemInfoRows(rows *sql.Rows) ([]ItemInfoRow, error) {
 		var isMulti, multiQty int
 		if // err 用于本次流程后续判断的err
 		err := rows.Scan(&r.ID, &r.CookieID, &r.ItemID, &r.ItemTitle, &r.ItemDescription,
-			&r.ItemCategory, &r.ItemPrice, &r.ItemDetail, &isMulti, &multiQty, &r.AIOverride); err != nil {
+			&r.ItemCategory, &r.ItemPrice, &r.ItemDetail, &isMulti, &multiQty, &r.AIOverride,
+			&r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		r.IsMultiSpec = isMulti != 0
@@ -129,6 +132,7 @@ func (i *Items) Upsert(ctx context.Context, r *ItemInfoRow) error {
 }
 
 // UpsertBasic 插入或补全商品基础信息，不覆盖已有的多规格/多数量发货设置。
+// 普通同步缺失记录会恢复；用户显式删除的商品由删除墓碑表在同步前过滤，不会被平台列表复活。
 func (i *Items) UpsertBasic(ctx context.Context, r *ItemInfoRow) error {
 	return i.upsertBasic(ctx, i.DB, r)
 }
@@ -179,6 +183,22 @@ func (i *Items) SyncFromRemote(ctx context.Context, cookieID string, rows []Item
 	rollback := func(err error) (ItemSyncResult, error) {
 		_ = tx.Rollback()
 		return ItemSyncResult{}, err
+	}
+	// tombstones 是账号内用户显式删除的商品集合，同步时这些 ID 不得被远端列表复活。
+	tombstones, tombErr := i.loadDeleteTombstones(ctx, tx, cookieID)
+	if tombErr != nil {
+		return rollback(tombErr)
+	}
+	if len(tombstones) > 0 {
+		// filtered 只保留未被显式删除的远端商品，仍保留墓碑 ID 在 remoteIDs 中避免重复软删除。
+		filtered := make([]ItemInfoRow, 0, len(validRows))
+		for _, row := range validRows {
+			if _, tombstoned := tombstones[row.ItemID]; tombstoned {
+				continue
+			}
+			filtered = append(filtered, row)
+		}
+		validRows = filtered
 	}
 	// index 表示当前遍历过程中的index
 	for index := range validRows {
@@ -386,7 +406,45 @@ func (i *Items) Delete(ctx context.Context, cookieID, itemID string) error {
 		WHERE cookie_id=? AND item_id=? AND deleted_at IS NULL`, cookieID, itemID); err != nil {
 		return err
 	}
+	// 记录显式删除墓碑，避免下次同步把同一商品 ID 从远端列表写回。
+	if err := i.insertDeleteTombstone(ctx, tx, cookieID, itemID); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// insertDeleteTombstone 幂等记录用户显式删除的商品，重复删除不会产生错误。
+func (i *Items) insertDeleteTombstone(ctx context.Context, execer sqlExecer, cookieID, itemID string) error {
+	// query 按方言选择幂等插入语法。
+	var query string
+	if i.Dialect == DialectMySQL {
+		query = `INSERT IGNORE INTO item_delete_tombstones (cookie_id, item_id) VALUES (?, ?)`
+	} else {
+		query = `INSERT INTO item_delete_tombstones (cookie_id, item_id) VALUES (?, ?) ON CONFLICT(cookie_id, item_id) DO NOTHING`
+	}
+	_, err := execer.ExecContext(ctx, query, cookieID, itemID)
+	return err
+}
+
+// loadDeleteTombstones 在同步事务内读取账号的显式删除商品集合，读取失败会阻止同步避免误复活。
+func (i *Items) loadDeleteTombstones(ctx context.Context, tx *sql.Tx, cookieID string) (map[string]struct{}, error) {
+	// rows、err 保存账号墓碑查询结果；扫描失败不能继续写入远端商品。
+	rows, err := tx.QueryContext(ctx, `SELECT item_id FROM item_delete_tombstones WHERE cookie_id=?`, cookieID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	// out 以商品 ID 为键保存需要跳过的显式删除记录。
+	out := make(map[string]struct{})
+	for rows.Next() {
+		// itemID 是当前墓碑对应的商品 ID。
+		var itemID string
+		if err := rows.Scan(&itemID); err != nil {
+			return nil, err
+		}
+		out[itemID] = struct{}{}
+	}
+	return out, rows.Err()
 }
 
 // SetMultiSpec 设置多规格开关。

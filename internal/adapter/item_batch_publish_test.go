@@ -131,7 +131,7 @@ func TestItemBatchPublishPortWaitsBeforeNetworkDeadline(t *testing.T) {
 	// batch 保存最小有效的待发布批次。
 	batch := &db.ItemPublishBatch{ID: "batch-wait-budget", UserID: admin.ID, DefaultCookieID: "cid", UploadDir: t.TempDir(), LocationJSON: `{}`, Status: "pending"}
 	// rows 保存批次中尚未发布的一条带图片明细。
-	rows := []db.ItemPublishBatchRow{{RowNo: 1, CookieID: "cid", Title: "节流商品", Price: "1", Quantity: 1, PostageMode: "free", ImagesJSON: `["wait-image.png"]`, CategoryJSON: `{"cat_id":"1","cat_name":"类目","channel_cat_id":"2"}`, Status: "pending"}}
+	rows := []db.ItemPublishBatchRow{{RowNo: 1, CookieID: "cid", Title: "节流商品", Description: "节流商品的完整详情说明", Price: "1", Quantity: 1, PostageMode: "free", ImagesJSON: `["wait-image.png"]`, CategoryJSON: `{"cat_id":"1","cat_name":"类目","channel_cat_id":"2"}`, Status: "pending"}}
 	// createErr 是创建测试批次及明细的持久化错误。
 	if createErr := store.PublishBatches.Create(ctx, batch, rows); createErr != nil {
 		t.Fatal(createErr)
@@ -203,6 +203,61 @@ func TestItemBatchPublishPortRejectsMissingDependencies(t *testing.T) {
 	_, publishErr := port.PublishRemoteRow(context.Background(), 1, itemapp.BatchRow{BatchID: "batch"}, "worker", nil)
 	if publishErr == nil {
 		t.Fatal("缺少数据库时不应伪装批量远端发布成功")
+	}
+}
+
+// TestItemBatchPublishPortPCRejectionIsDeterministic 验证平台已明确拒绝网页发布时，
+// 批量适配器不会错误返回 uncertain_remote，也不会保存一个不存在的远端商品 ID。
+func TestItemBatchPublishPortPCRejectionIsDeterministic(t *testing.T) {
+	// store、cleanup 是隔离的本地数据库与生命周期，避免任何真实账号副作用。
+	store, cleanup := newAdapterTestStore(t)
+	defer cleanup()
+	// ctx 是本次单行发布的测试执行上下文。
+	ctx := context.Background()
+	// admin 是测试账号的持有者。
+	admin, adminErr := store.Users.GetByUsername(ctx, "admin")
+	if adminErr != nil {
+		t.Fatal(adminErr)
+	}
+	// batch、rows 保存包含一张测试图片及人工类目的单行发布任务。
+	batch := &db.ItemPublishBatch{ID: "batch-pc-unsupported", UserID: admin.ID, DefaultCookieID: "cid", UploadDir: t.TempDir(), LocationJSON: "{}", Status: "pending"}
+	rows := []db.ItemPublishBatchRow{{RowNo: 1, CookieID: "cid", Title: "测试商品", Description: "测试商品的完整介绍及真实详情", Price: "5.00", Quantity: 1, PostageMode: "free", ImagesJSON: `["cover.png"]`, CategoryJSON: `{"cat_id":"1","cat_name":"类目","channel_cat_id":"2"}`, Status: "pending"}}
+	if err := store.PublishBatches.Create(ctx, batch, rows); err != nil {
+		t.Fatal(err)
+	}
+	// claimed、claimErr 领取测试任务的唯一发布租约。
+	claimed, claimErr := store.PublishBatches.ClaimBatch(ctx, batch.ID, "pc-worker", time.Now().Add(time.Minute).Unix())
+	if claimErr != nil || !claimed {
+		t.Fatalf("claim batch: claimed=%v err=%v", claimed, claimErr)
+	}
+	// storedRows 是从持久化仓储恢复的待发布行。
+	storedRows, rowsErr := store.PublishBatches.Rows(ctx, batch.ID)
+	if rowsErr != nil || len(storedRows) != 1 {
+		t.Fatalf("rows=%v err=%v", storedRows, rowsErr)
+	}
+	claimed, claimErr = store.PublishBatches.ClaimRow(ctx, storedRows[0].ID, "pc-worker")
+	if claimErr != nil || !claimed {
+		t.Fatalf("claim row: claimed=%v err=%v", claimed, claimErr)
+	}
+	// calls 记录实际发送的发布请求次数；平台回传确定失败后不应内部再次发布。
+	calls := 0
+	// client 是不向外网发起请求的模拟平台，明确返回 PC_NOT_SUPPORT。
+	client := batchPublishClientStub{publish: func(context.Context, string, mtop.PublishItemRequest) (*mtop.PublishItemResult, error) {
+		calls++
+		return nil, &mtop.PublishError{Code: mtop.PublishErrorPCUnsupported, Ret: []string{"FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT::该商品暂不支持网页发布"}}
+	}}
+	// port 使用正式远端发布协调器，但图片内容和平台调用完全由本测试替换。
+	port := NewItemBatchPublishPort(store, func() mtop.Client { return client }, nil, nil, nil,
+		func(string, string) ([]byte, string, string, error) {
+			return []byte("image"), "image/png", "cover.png", nil
+		},
+		func(context.Context, string) ([]byte, string, error) { return nil, "", nil })
+	// outcome、publishErr 验证平台拒绝被映射到可明确阻止重试的业务错误。
+	outcome, publishErr := port.PublishRemoteRow(ctx, admin.ID, batchRowApplicationModel(storedRows[0]), "pc-worker", nil)
+	// uncertainErr 是不允许出现的远端结果未知错误类型。
+	var uncertainErr *itemapp.UncertainRemotePublishError
+	if !errors.Is(publishErr, itemapp.ErrPCPublishUnsupported) || errors.As(publishErr, &uncertainErr) || outcome.Result != nil || calls != 1 {
+		t.Fatalf("pc rejection misclassified: outcome=%+v err=%v calls=%d", outcome, publishErr, calls)
 	}
 }
 

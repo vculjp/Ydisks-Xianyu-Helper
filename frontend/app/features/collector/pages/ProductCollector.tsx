@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronLeft,
@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { PageHeader } from '../../../../shared/ui/PageHeader';
+import { notify } from '../../../../shared/ui/feedback';
 import {
   cancelManualVerifyWindow,
   collectProductDetails,
@@ -30,7 +31,9 @@ import {
 import { CollectorItemModal } from '../components/CollectorItemModal';
 import { SaveTemplatesModal } from '../components/SaveTemplatesModal';
 import { RadarPanel } from '../components/RadarPanel';
+import { selectManualVerifyTarget } from '../manualVerifyTarget';
 import { exportLibraryImportCsv, exportSelectionCsv } from '../csvExport';
+import { sellerSortProducts } from '../sellerSort';
 import type {
   CollectedProduct,
   CollectorAccountOption,
@@ -53,6 +56,10 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
   const [selectedCookieId, setSelectedCookieId] = useState('');
   // deliveryTemplates 与 setDeliveryTemplates 保存转存弹窗可选绑定的发货模板选项。
   const [deliveryTemplates, setDeliveryTemplates] = useState<CollectorDeliveryTemplateOption[]>([]);
+  // optionsLoading 表示采集账号与发货模板选项是否仍在首次读取。
+  const [optionsLoading, setOptionsLoading] = useState(true);
+  // optionsError 保存账号或发货模板选项读取失败原因；空字符串表示读取成功。
+  const [optionsError, setOptionsError] = useState('');
 
   // activeTab 与 setActiveTab 控制当前激活的采集模式页签。
   const [activeTab, setActiveTab] = useState<CollectorTab>('search');
@@ -83,6 +90,8 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
   const [sellerInput, setSellerInput] = useState('');
   // sellerMaxPages 与 setSellerMaxPages 保存单次采集同行店铺的最大页数（1–5）。
   const [sellerMaxPages, setSellerMaxPages] = useState(1);
+  // sellerSortMode 是同行全部已采集页的展示和导出排序，默认按想要人数倒序，与全站关键词排序互不影响。
+  const [sellerSortMode, setSellerSortMode] = useState<CollectorSortMode>('want_desc');
 
   // items 与 setItems 保存当前采集结果表格中的商品集合。
   const [items, setItems] = useState<CollectedProduct[]>([]);
@@ -91,7 +100,11 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
   // loading 与 setLoading 表示是否正在请求闲鱼采集接口。
   const [loading, setLoading] = useState(false);
   // banner 与 setBanner 展示错误告警、风控熔断提醒或采集完成摘要。
-  const [banner, setBanner] = useState<{ /** tone 区分消息等级颜色。 */ tone: 'info' | 'warn' | 'err'; /** text 是提示正文。 */ text: string } | null>(null);
+  const [banner, setBanner] = useState<{
+    /** tone 区分消息等级颜色。 */ tone: 'info' | 'warn' | 'err';
+    /** text 是提示正文。 */ text: string;
+    /** retry 是可安全重试的采集动作；风控或验证窗口异常时保持为空。 */ retry?: () => void;
+  } | null>(null);
 
   // editingItem 与 setEditingItem 控制单品详情补抓与 AI 改写弹窗。
   const [editingItem, setEditingItem] = useState<CollectedProduct | null>(null);
@@ -105,10 +118,51 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
   const requestSeqRef = useRef(0);
   // requestAbortRef 持有普通采集的当前请求，切换账号、模式或卸载时取消。
   const requestAbortRef = useRef<AbortController | null>(null);
+  // collectionPendingRef 是采集动作的同步锁，避免同一渲染帧内重复发起平台请求。
+  const collectionPendingRef = useRef(false);
+  // optionsSequenceRef 隔离初始化选项的过期响应，只允许最新读取写入状态。
+  const optionsSequenceRef = useRef(0);
+  // optionsControllerRef 持有初始化选项请求，重试或卸载时取消旧请求。
+  const optionsControllerRef = useRef<AbortController | null>(null);
 
   useEffect(/* collectUnmountEffect 使卸载前发起的采集请求失效并释放网络请求。 */ () => /* 清理回调取消当前尚未完成的采集请求。 */ () => {
     ++requestSeqRef.current;
     requestAbortRef.current?.abort();
+    ++optionsSequenceRef.current;
+    optionsControllerRef.current?.abort();
+  }, []);
+
+  /** loadOptions 读取账号与发货模板选项；旧请求失效时不会覆盖最新一次重试结果。 */
+  const loadOptions = useCallback(/* 加载采集页初始化选项。 */ async (): Promise<void> => {
+    // sequence 是本次选项读取的代次，用于丢弃过期响应。
+    const sequence = ++optionsSequenceRef.current;
+    optionsControllerRef.current?.abort();
+    // controller 控制本次账号与模板选项读取。
+    const controller = new AbortController();
+    optionsControllerRef.current = controller;
+    setOptionsLoading(true);
+    setOptionsError('');
+    try {
+      // [loadedAccounts, loadedTemplates] 是并行读取到的账号与发货模板选项。
+      const [loadedAccounts, loadedTemplates] = await Promise.all([
+        listCollectorAccounts({ signal: controller.signal }),
+        listCollectorDeliveryTemplates({ signal: controller.signal }),
+      ]);
+      if (sequence !== optionsSequenceRef.current || controller.signal.aborted) return;
+      setAccounts(loadedAccounts);
+      setDeliveryTemplates(loadedTemplates);
+      if (loadedAccounts.length > 0) {
+        // preferred 优先挑选在线账号作为初始采集号。
+        const preferred = loadedAccounts.find(/* acc 判断账号是否在线。 */ acc => acc.online) ?? loadedAccounts[0];
+        setSelectedCookieId(/* prev 若已选择有效账号则保持不变。 */ prev => prev || preferred.id);
+      }
+    } catch (failure /* failure 是账号或发货模板选项读取失败原因。 */) {
+      if (sequence === optionsSequenceRef.current && !controller.signal.aborted) {
+        setOptionsError(collectorErrorMessage(failure, '加载采集账号列表失败'));
+      }
+    } finally {
+      if (sequence === optionsSequenceRef.current) setOptionsLoading(false);
+    }
   }, []);
 
   /** beginRequest 取消旧请求并返回新一轮采集的代次及信号。 */
@@ -133,31 +187,14 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
     setBanner(null);
     setEditingItem(null);
     setSaveModalItems([]);
+    collectionPendingRef.current = false;
   };
 
   /** effect 在进入采集工作台时并行加载可选采集账号与发货模板列表。 */
   useEffect(/* initCollectorOptionsEffect 初始化账号与发货模板下拉数据并在卸载时取消请求。 */ () => {
-    // controller 在页面卸载时取消未完成的初始化请求。
-    const controller = new AbortController();
-    Promise.all([
-      listCollectorAccounts({ signal: controller.signal }),
-      listCollectorDeliveryTemplates({ signal: controller.signal }),
-    ])
-      .then(/* ([loadedAccounts, loadedTemplates]) 写入初始选项并默认选中第一个在线账号。 */ ([loadedAccounts, loadedTemplates]) => {
-        setAccounts(loadedAccounts);
-        setDeliveryTemplates(loadedTemplates);
-        if (loadedAccounts.length > 0) {
-          // preferred 优先挑选在线账号作为初始采集号。
-          const preferred = loadedAccounts.find(/* acc 判断账号是否在线。 */ acc => acc.online) ?? loadedAccounts[0];
-          setSelectedCookieId(/* prev 若已选择有效账号则保持不变。 */ prev => prev || preferred.id);
-        }
-      })
-      .catch(/* err 忽略组件卸载导致的主动取消，其余异常展示提示。 */ err => {
-        if (controller.signal.aborted) return;
-        setBanner({ tone: 'err', text: collectorErrorMessage(err, '加载采集账号列表失败') });
-      });
-    return /* cleanup 卸载时终止初始化请求。 */ () => controller.abort();
-  }, []);
+    void loadOptions();
+    return /* cleanup 卸载时终止初始化请求。 */ () => optionsControllerRef.current?.abort();
+  }, [loadOptions]);
 
   /** runKeywordSearch 执行指定页码的全站关键词搜索采集。 */
   const runKeywordSearch = async (targetPage: number): Promise<void> => {
@@ -173,6 +210,8 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       setBanner({ tone: 'err', text: '请输入要搜索采集的商品关键词（如：电子资料、简历模板、Excel表格）' });
       return;
     }
+    if (collectionPendingRef.current) return;
+    collectionPendingRef.current = true;
     // seq、signal 分别隔离过期响应和取消旧采集请求。
     const { seq, signal } = beginRequest();
     setLoading(true);
@@ -200,11 +239,18 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
         tone: 'info',
         text: `第 ${res.pageNumber} 页采集完成，共获取 ${res.items.length} 件符合条件的商品`,
       });
+      notify('success', `第 ${res.pageNumber} 页采集完成，共获取 ${res.items.length} 件商品`);
     } catch (failure /* failure 是关键词搜索请求失败原因。 */) {
       if (seq !== requestSeqRef.current) return;
-      setBanner({ tone: 'err', text: collectorErrorMessage(failure, '全站商品搜索采集失败') });
+      // message 是可展示的全站搜索失败原因。
+      const message = collectorErrorMessage(failure, '全站商品搜索采集失败');
+      setBanner({ tone: 'err', text: message, retry: /* retryKeywordSearch 重试当前页码搜索。 */ () => void runKeywordSearch(targetPage) });
+      notify('error', message);
     } finally {
-      if (seq === requestSeqRef.current) setLoading(false);
+      if (seq === requestSeqRef.current) {
+        collectionPendingRef.current = false;
+        setLoading(false);
+      }
     }
   };
 
@@ -218,6 +264,8 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       setBanner({ tone: 'err', text: '请粘贴至少一条闲鱼商品链接、分享口令或纯数字商品 ID' });
       return;
     }
+    if (collectionPendingRef.current) return;
+    collectionPendingRef.current = true;
     // seq 标记请求代次。
     const { seq, signal } = beginRequest();
     setLoading(true);
@@ -230,19 +278,34 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       setHasMore(false);
       setSelectedIds(new Set(res.items.map(/* it 默认自动全选刚精准采集成功的商品。 */ it => it.itemId)));
       if (res.abortedByRisk) {
-        setBanner({ tone: 'warn', text: `本批次已安全停止：获取 ${res.items.length} 件，失败或未处理 ${res.errors.length} 件（${res.errors[0]?.message ?? ''}）` });
+        // riskText 是本批次因风控安全停止的可展示摘要。
+        const riskText = `本批次已安全停止：获取 ${res.items.length} 件，失败或未处理 ${res.errors.length} 件（${res.errors[0]?.message ?? ''}）`;
+        setBanner({ tone: 'warn', text: riskText });
+        notify('warning', riskText);
       } else if (res.errors.length > 0) {
-        setBanner({ tone: 'warn', text: `采集完成：成功 ${res.items.length} 件，失败 ${res.errors.length} 件（${res.errors.map(/* e 格式化单条失败提示。 */ e => `${e.itemId}: ${e.message}`).join('；')}）` });
+        // partialText 是部分商品失败的可展示摘要。
+        const partialText = `采集完成：成功 ${res.items.length} 件，失败 ${res.errors.length} 件（${res.errors.map(/* e 格式化单条失败提示。 */ e => `${e.itemId}: ${e.message}`).join('；')}）`;
+        setBanner({ tone: 'warn', text: partialText });
+        notify('warning', partialText);
       } else {
         // incomplete 是平台返回正文或图片不完整的商品数，不把部分数据标为完整成功。
         const incomplete = res.items.filter(/* item 是已返回的详情快照。 */ item => !item.hasFullDetail).length;
-        setBanner(incomplete > 0 ? { tone: 'warn', text: `已获取 ${res.items.length} 件，其中 ${incomplete} 件详情不完整，请人工核对` } : { tone: 'info', text: `精准采集完成：已获取 ${res.items.length} 件商品的详情文案与主图` });
+        // successText 是精准采集完成或详情不完整的可展示摘要。
+        const successText = incomplete > 0 ? `已获取 ${res.items.length} 件，其中 ${incomplete} 件详情不完整，请人工核对` : `精准采集完成：已获取 ${res.items.length} 件商品的详情文案与主图`;
+        setBanner({ tone: incomplete > 0 ? 'warn' : 'info', text: successText });
+        notify(incomplete > 0 ? 'warning' : 'success', successText);
       }
     } catch (failure /* failure 是详情采集请求失败原因。 */) {
       if (seq !== requestSeqRef.current) return;
-      setBanner({ tone: 'err', text: collectorErrorMessage(failure, '单品详情采集失败') });
+      // message 是可展示的详情采集失败原因。
+      const message = collectorErrorMessage(failure, '单品详情采集失败');
+      setBanner({ tone: 'err', text: message, retry: /* retryDetailCollect 重试当前详情输入。 */ () => void runDetailCollect() });
+      notify('error', message);
     } finally {
-      if (seq === requestSeqRef.current) setLoading(false);
+      if (seq === requestSeqRef.current) {
+        collectionPendingRef.current = false;
+        setLoading(false);
+      }
     }
   };
 
@@ -258,6 +321,8 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       setBanner({ tone: 'err', text: '请输入对标同行主页链接（含 userId=...）或卖家数字 ID' });
       return;
     }
+    if (collectionPendingRef.current) return;
+    collectionPendingRef.current = true;
     // seq 标记请求代次。
     const { seq, signal } = beginRequest();
     setLoading(true);
@@ -271,14 +336,24 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       setSelectedIds(new Set());
       if (res.warning) {
         setBanner({ tone: 'warn', text: res.warning });
+        notify('warning', res.warning);
       } else {
-        setBanner({ tone: 'info', text: `同行店铺采集完成：共获取 ${res.items.length} 件在售商品` });
+        // successText 是同行店铺采集完成的可展示摘要。
+        const successText = `同行店铺采集完成：共获取 ${res.items.length} 件在售商品`;
+        setBanner({ tone: 'info', text: successText });
+        notify('success', successText);
       }
     } catch (failure /* failure 是店铺采集失败原因。 */) {
       if (seq !== requestSeqRef.current) return;
-      setBanner({ tone: 'err', text: collectorErrorMessage(failure, '同行店铺商品采集失败') });
+      // message 是可展示的同行采集失败原因。
+      const message = collectorErrorMessage(failure, '同行店铺商品采集失败');
+      setBanner({ tone: 'err', text: message, retry: /* retrySellerCollect 重试当前同行目标。 */ () => void runSellerCollect(targetSeller) });
+      notify('error', message);
     } finally {
-      if (seq === requestSeqRef.current) setLoading(false);
+      if (seq === requestSeqRef.current) {
+        collectionPendingRef.current = false;
+        setLoading(false);
+      }
     }
   };
 
@@ -315,7 +390,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
     setItems(/* prev 是当前列表商品数组。 */ prev => prev.map(/* it 替换同 ID 条目。 */ it => (it.itemId === updated.itemId ? updated : it)));
   };
 
-  /** handleOpenManualVerify 一键在电脑桌面弹出带登录态的闲鱼窗口供用户手动滑过滑块（免 F12 抓包）。 */
+  /** handleOpenManualVerify 打开带登录态的闲鱼官方页面；优先定位转存失败的已选商品，供用户查看是否存在官方验证。 */
   const handleOpenManualVerify = async (): Promise<void> => {
     if (!selectedCookieId) {
       setBanner({ tone: 'err', text: '请先在顶部选择一个需要过验证的闲鱼账号' });
@@ -323,14 +398,14 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
     }
     setVerifyBusy(true);
     try {
-      // targetInput 根据当前页签传递商品链接或卖家 ID，以便直接打开对应闲鱼页面触发精确路径的 x5sec。
-      const targetInput = activeTab === 'detail' ? detailInputText.trim() : sellerInput.trim();
-      // opened 返回已在桌面浏览器打开的闲鱼网址。
-      const opened = await openManualVerifyWindow(selectedCookieId, activeTab, keyword.trim(), targetInput);
+      // verifyScene、targetInput 把“转存时补抓详情”的错误定位到已勾选商品，不再误打开卖家主页。
+      const { scene: verifyScene, targetInput } = selectManualVerifyTarget(activeTab, items, selectedIds, detailInputText, sellerInput);
+      // opened 只确认官方网页已打开，不代表闲鱼一定下发可见滑块或已解除风控。
+      const opened = await openManualVerifyWindow(selectedCookieId, verifyScene, keyword.trim(), targetInput);
       setVerifyWindowOpen(true);
       setBanner({
         tone: 'warn',
-        text: `已在你电脑桌面弹出闲鱼窗口（${opened.targetUrl}）！请切到该窗口用鼠标滑过滑块（滑完前先不要手动关闭该窗口），待页面正常显示商品后点击「我已滑完，一键同步恢复」即可。`,
+        text: `已打开闲鱼官方页面（${opened.targetUrl}）。只有页面实际出现官方滑块或验证提示时才需要手动完成，再点击同步。若打开的是正常网页、完全没有滑块，说明本次 RGV587 没有提供可操作的验证页；不要把同步 Cookie 当作解封，也不要反复触发采集，可先关闭窗口并在转存时跳过详情补抓。`,
       });
     } catch (failure /* failure 是打开桌面验证窗口失败原因。 */) {
       setBanner({ tone: 'err', text: collectorErrorMessage(failure, '弹出闲鱼验证窗口失败') });
@@ -339,7 +414,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
     }
   };
 
-  /** handleCompleteManualVerify 读取用户滑完验证后的完整浏览器 Cookie Jar 快照自动落库并关闭窗口。 */
+  /** handleCompleteManualVerify 在用户明确完成官网验证后同步窗口 Cookie；只报告同步结果，不冒充风控解除成功。 */
   const handleCompleteManualVerify = async (): Promise<void> => {
     if (!selectedCookieId) return;
     setVerifyBusy(true);
@@ -349,7 +424,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
       setVerifyWindowOpen(false);
       setBanner({
         tone: 'info',
-        text: `验证解除成功！已免 F12 自动提取并同步 ${synced.syncedCount} 项最新 Cookie 与安全票据，现在可直接点击开始采集。`,
+        text: `已从官方浏览器窗口同步 ${synced.syncedCount} 项 Cookie。同步成功不等于闲鱼风控已经解除；只有确认页面完成了官方验证后，才能在风控允许时重新采集。不要在 RGV587 仍出现时连续重试。`,
       });
     } catch (failure /* failure 是同步验证窗口 Cookie 失败原因。 */) {
       setBanner({ tone: 'err', text: collectorErrorMessage(failure, '同步验证窗口 Cookie 失败') });
@@ -387,10 +462,13 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
     ),
   );
 
-  // selectedProducts 计算已勾选的商品切片；未勾选时导出操作可退回使用全部当前结果。
-  const selectedProducts = items.filter(/* it 过滤已勾选条目。 */ it => selectedIds.has(it.itemId));
+  // visibleItems 合并排序同行整店采集的所有已获得页；其他采集入口保持原有服务端结果顺序。
+  const visibleItems = useMemo(/* 仅当商品集合、页签或同行排序规则变化时计算展示顺序。 */ () =>
+    activeTab === 'seller' ? sellerSortProducts(items, sellerSortMode) : items, [items, activeTab, sellerSortMode]);
+  // selectedProducts 按当前可见顺序提取勾选项，使导出与界面所见的排序一致。
+  const selectedProducts = visibleItems.filter(/* it 过滤已勾选条目。 */ it => selectedIds.has(it.itemId));
   // exportTargetProducts 导出表格时优先导出勾选项，未勾选则导出当前页全部结果。
-  const exportTargetProducts = selectedProducts.length > 0 ? selectedProducts : items;
+  const exportTargetProducts = selectedProducts.length > 0 ? selectedProducts : visibleItems;
 
   return (
     <div className="space-y-6">
@@ -399,9 +477,21 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
         description="支持全站关键词挖爆款、单品链接提取多图与对标同行整店采集，无缝衔接 AI 防重改写与本地资源库多店铺货。"
       />
 
+      {optionsLoading && accounts.length === 0 && (
+        <div role="status" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+          正在加载采集账号与发货模板…
+        </div>
+      )}
+      {optionsError && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <span>{optionsError}</span>
+          <button type="button" onClick={/* 重试初始化采集选项。 */ () => void loadOptions()} className="rounded-xl border border-red-200 bg-white px-3 py-1.5 text-xs font-bold">重新加载</button>
+        </div>
+      )}
+
       <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xs">
         <div className="flex flex-col justify-between gap-4 border-b border-slate-100 pb-4 lg:flex-row lg:items-center">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="console-tabs console-tabs-inline" role="tablist" aria-label="商品采集模式">
             {(
               [
                 { id: 'search', label: '全站关键词挖爆款', icon: Search },
@@ -418,11 +508,11 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
                 <button
                   key={tabItem.id}
                   type="button"
+                  role="tab"
+                  aria-selected={active}
                   disabled={verifyBusy || verifyWindowOpen}
                   onClick={/* 切换当前采集模式并清除旧结果。 */ () => { if (activeTab !== tabItem.id) { resetResults(); setActiveTab(tabItem.id); } }}
-                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-extrabold transition-colors ${
-                    active ? 'bg-brand text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200/70 hover:text-slate-900'
-                  }`}
+                  className={`console-tab inline-flex items-center gap-2 ${active ? 'is-active' : ''}`}
                 >
                   <TabIcon className="h-4 w-4" />
                   {tabItem.label}
@@ -456,12 +546,12 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
               <button
                 type="button"
                 disabled={!selectedCookieId || verifyBusy || activeTab === 'radar'}
-                onClick={/* 在桌面弹出闲鱼网页窗口供用户手动滑过滑块。 */ () => void handleOpenManualVerify()}
+                onClick={/* 在桌面打开官方网页，验证是否有可手动处理的安全挑战。 */ () => void handleOpenManualVerify()}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-extrabold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
-                title="遇到 RGV587 滑块时无需按 F12 抓包：点此弹出闲鱼窗口手动滑一下，再点一键同步即可"
+                title="打开闲鱼官方页面检查安全验证；RGV587 也可能仅为平台风控或拥堵，不一定有滑块"
               >
                 <MonitorUp className="h-3.5 w-3.5 text-amber-700" />
-                {verifyBusy ? '正在弹出窗口...' : '弹出窗口过滑块（免 F12）'}
+                {verifyBusy ? '正在打开窗口...' : '打开闲鱼官方验证窗口'}
               </button>
             ) : (
               <div className="inline-flex items-center gap-1.5">
@@ -472,7 +562,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
                   className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-extrabold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50"
                 >
                   <CheckCircle2 className="h-3.5 w-3.5" />
-                  {verifyBusy ? '正在同步恢复...' : '我已滑完，一键同步恢复'}
+                  {verifyBusy ? '正在同步 Cookie...' : '已完成官网验证，同步登录态'}
                 </button>
                 <button
                   type="button"
@@ -627,6 +717,21 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
                   <option value={5}>前 5 页 (约 100 件)</option>
                 </select>
               </div>
+              <div className="w-full sm:w-52">
+                <label htmlFor="collector-seller-sort" className="mb-1 block text-xs font-bold text-slate-700">排序方式</label>
+                <select
+                  id="collector-seller-sort"
+                  value={sellerSortMode}
+                  onChange={/* event 只重排已采集的所有页商品，不再次访问闲鱼接口。 */ event => setSellerSortMode(event.target.value as CollectorSortMode)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-800"
+                >
+                  <option value="want_desc">想要人数从高到低（默认）</option>
+                  <option value="default">综合排序（店铺原始顺序）</option>
+                  <option value="newest">最新发布优先</option>
+                  <option value="price_asc">价格从低到高</option>
+                  <option value="price_desc">价格从高到低</option>
+                </select>
+              </div>
               <button
                 type="button"
                 disabled={loading}
@@ -646,35 +751,44 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
         <div
           className={`flex flex-col justify-between gap-3 rounded-2xl px-4 py-3.5 text-xs font-bold sm:flex-row sm:items-center ${
             banner.tone === 'err'
-              ? 'bg-rose-50 text-rose-700 ring-1 ring-rose-200'
+                      ? 'bg-danger-50 text-danger-700 ring-1 ring-danger-200'
               : banner.tone === 'warn'
                 ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-200'
                 : 'bg-sky-50 text-sky-800 ring-1 ring-sky-200'
           }`}
         >
           <span className="leading-relaxed">{banner.text}</span>
+          {banner.retry && (
+            <button
+              type="button"
+              onClick={/* 重试最近一次可安全重放的采集动作。 */ banner.retry}
+              className="shrink-0 rounded-xl border border-current/20 bg-white/70 px-3 py-1.5 text-xs font-extrabold text-slate-700 hover:bg-white"
+            >
+              重试
+            </button>
+          )}
           {isRiskBanner && (
             <div className="flex shrink-0 flex-wrap items-center gap-2">
               {!verifyWindowOpen ? (
                 <button
                   type="button"
                   disabled={!selectedCookieId || verifyBusy}
-                  onClick={/* 在风控提示条内一键弹出闲鱼桌面窗口过滑块。 */ () => void handleOpenManualVerify()}
+                    onClick={/* 在风控提示条内打开闲鱼官方页面，供人工检查验证控件是否出现。 */ () => void handleOpenManualVerify()}
                   className="inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 py-2 text-xs font-extrabold text-white shadow-xs hover:bg-amber-700 disabled:opacity-50"
                 >
                   <MonitorUp className="h-4 w-4" />
-                  {verifyBusy ? '正在弹出闲鱼窗口...' : '① 一键弹出闲鱼窗口过滑块（免 F12）'}
+                    {verifyBusy ? '正在打开闲鱼窗口...' : '① 打开闲鱼官方页面检查验证'}
                 </button>
               ) : (
                 <>
                   <button
                     type="button"
                     disabled={verifyBusy}
-                    onClick={/* 在提示条内确认已滑完并一键同步恢复。 */ () => void handleCompleteManualVerify()}
+                    onClick={/* 在提示条内确认用户已完成官方验证后同步登录态。 */ () => void handleCompleteManualVerify()}
                     className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-extrabold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50"
                   >
                     <CheckCircle2 className="h-4 w-4" />
-                    {verifyBusy ? '正在同步 Cookie...' : '② 我已滑完，一键同步恢复'}
+                    {verifyBusy ? '正在同步 Cookie...' : '② 已完成官网验证，同步登录态'}
                   </button>
                   <button
                     type="button"
@@ -741,7 +855,13 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
           </div>
         </div>
 
-        {items.length === 0 ? (
+        {loading && items.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center" role="status">
+            <Radar className="h-7 w-7 animate-spin text-sky-500" />
+            <div className="mt-3 text-sm font-bold text-slate-700">正在采集商品…</div>
+            <p className="mt-1 max-w-md text-xs text-slate-400">请求可能需要数十秒，请勿重复点击；失败后会保留错误原因并可重试。</p>
+          </div>
+        ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
               <Radar className="h-7 w-7" />
@@ -753,7 +873,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {items.map(/* item 是当前结果行对应的采集商品对象。 */ item => {
+            {visibleItems.map(/* item 是按当前页签排序后的采集商品对象。 */ item => {
               // checked 表示当前行是否已被勾选。
               const checked = selectedIds.has(item.itemId);
               return (
@@ -795,7 +915,7 @@ const ProductCollector: React.FC<ProductCollectorProps> = ({ onNavigateToLibrary
                     )}
 
                     <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                      <span className="text-base font-black text-rose-600">{item.price ? `¥${item.price}` : '售价未知'}</span>
+                            <span className="text-base font-black text-red-600">{item.price ? `¥${item.price}` : '售价未知'}</span>
                       {item.originalPrice && <span className="text-slate-400 line-through">¥{item.originalPrice}</span>}
                       <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-2.5 py-0.5 font-bold text-orange-600">
                         <Flame className="h-3.5 w-3.5" /> {item.wantCount < 0 ? '想要人数未知' : `${item.wantCount} 人想要`}

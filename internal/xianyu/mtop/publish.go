@@ -43,6 +43,8 @@ const (
 	PublishErrorUnknown                PublishErrorCode = "publish_failed"
 	PublishErrorTokenExpired           PublishErrorCode = "auth_expired"
 	PublishErrorStockPermissionMissing PublishErrorCode = "stock_permission_missing"
+	// PublishErrorPCUnsupported 表示闲鱼明确拒绝该商品通过网页端发布或编辑，属于确定性平台业务失败。
+	PublishErrorPCUnsupported PublishErrorCode = "pc_publish_unsupported"
 )
 
 // PublishError 用于本次流程后续判断的发布错误
@@ -713,6 +715,10 @@ func classifyPublishError(ret []string, decoded map[string]any) error {
 	body := string(bodyBytes)
 	// joined 用于本次流程后续判断的joined
 	joined := strings.ToLower(strings.Join(append(ret, body), " "))
+	// 平台明确返回 PC_NOT_SUPPORT 时请求已被业务拒绝，不能误归类成远端结果未知或库存权限不足。
+	if strings.Contains(joined, "fail_biz_pc_not_support_publish_or_edit") {
+		return &PublishError{Code: PublishErrorPCUnsupported, Ret: ret, Body: body}
+	}
 	if isTokenExpiredRet(ret) || strings.Contains(joined, "login") || strings.Contains(joined, "session") {
 		return &PublishError{Code: PublishErrorTokenExpired, Ret: ret, Body: body}
 	}

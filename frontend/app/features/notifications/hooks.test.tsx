@@ -4,6 +4,7 @@ import { beforeEach,describe,expect,test,vi } from 'vitest';
 import type { NotificationChannel,SystemSettings } from './api';
 import { createNotificationChannel,deleteNotificationChannel,getNotificationChannel,getNotificationChannels,getSystemSettings,testNotificationChannel,updateNotificationChannel,updateSystemSettings } from './api';
 import { useNotifications } from './hooks';
+import { confirmAction,notify } from '../../../shared/ui/feedback';
 
 vi.mock('./api', /* notificationsApiMockFactory 提供通知 Hook 的确定性 API 替身。 */ () => ({
   createNotificationChannel: vi.fn(),
@@ -14,6 +15,10 @@ vi.mock('./api', /* notificationsApiMockFactory 提供通知 Hook 的确定性 A
   testNotificationChannel: vi.fn(),
   updateNotificationChannel: vi.fn(),
   updateSystemSettings: vi.fn(),
+}));
+vi.mock('../../../shared/ui/feedback', /* feedbackMockFactory 提供统一确认框和全局提示替身。 */ () => ({
+  confirmAction: vi.fn(),
+  notify: vi.fn(),
 }));
 
 // createChannelMock 是新建通知渠道请求的可控替身。
@@ -32,6 +37,10 @@ const testChannelMock = vi.mocked(testNotificationChannel);
 const updateChannelMock = vi.mocked(updateNotificationChannel);
 // updateSmtpMock 是系统 SMTP 保存请求的可控替身。
 const updateSmtpMock = vi.mocked(updateSystemSettings);
+// confirmActionMock 是删除渠道时统一确认框的可控替身。
+const confirmActionMock = vi.mocked(confirmAction);
+// notifyMock 是业务成功和失败提示的可控替身。
+const notifyMock = vi.mocked(notify);
 
 // channelFixture 是覆盖启用状态和事件订阅的通知渠道对象。
 const channelFixture: NotificationChannel = { id: 'channel-1', name: '测试渠道', type: 'bark', config: { server_url: 'https://api.day.app', device_key: 'device-key' }, event_types: ['system_error'], enabled: true };
@@ -49,7 +58,7 @@ describe('useNotifications', /* 当前回调处理通知渠道、SMTP 和动作�
     testChannelMock.mockResolvedValue({ success: true });
     updateChannelMock.mockResolvedValue({ success: true });
     updateSmtpMock.mockResolvedValue({ success: true });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    confirmActionMock.mockResolvedValue(true);
   });
 
   test('管理员加载渠道和 SMTP 后可以新建、切换和保存', /* 当前回调验证通知 Hook 的成功动作路径。 */ async () => {
@@ -80,6 +89,7 @@ describe('useNotifications', /* 当前回调处理通知渠道、SMTP 和动作�
     expect(createChannelMock).toHaveBeenCalledWith(expect.objectContaining({ name: '新渠道', type: 'bark' }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(hook.result.current.showModal).toBe(false);
     expect(hook.result.current.toast).toEqual({ type: 'success', text: '已创建' });
+    expect(notifyMock).toHaveBeenCalledWith('success', '已创建');
 
     await act(
       // toggleAction 切换渠道启用状态。
@@ -161,6 +171,7 @@ describe('useNotifications', /* 当前回调处理通知渠道、SMTP 和动作�
     );
     expect(deleteChannelMock).toHaveBeenCalledWith('channel-1', expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(hook.result.current.toast).toEqual({ type: 'success', text: '已删除' });
+    expect(confirmActionMock).toHaveBeenCalledWith(expect.objectContaining({ danger: true }));
   });
 
   test('测试通知失败时清理测试状态并展示错误', /* 当前回调验证通知发送失败路径。 */ async () => {
@@ -198,6 +209,7 @@ describe('useNotifications', /* 当前回调处理通知渠道、SMTP 和动作�
       // loadErrorAction 触发通知渠道读取错误。
       async () => hook.result.current.loadChannels(),
     );
+    expect(hook.result.current.loadError).toBe('渠道读取失败');
 
     await act(
       // openEditAction 打开已有渠道编辑表单。
@@ -230,10 +242,8 @@ describe('useNotifications', /* 当前回调处理通知渠道、SMTP 和动作�
     hook.unmount();
   });
 
-  test('SMTP 初始加载失败时记录错误并保持渠道加载完成', /* 当前回调验证管理员 SMTP 初始化错误分支。 */ async () => {
+  test('SMTP 初始加载失败时暴露可见错误并保持渠道加载完成', /* 当前回调验证管理员 SMTP 初始化错误分支。 */ async () => {
     getSmtpMock.mockRejectedValueOnce(new Error('SMTP读取失败'));
-    // consoleError 是 SMTP 加载错误日志的可控替身。
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(/* errorLogger 忽略测试日志输出。 */ () => undefined);
     // hook 是 SMTP 初始化失败场景的通知 Hook 渲染结果。
     const hook = renderHook(
       // smtpFailureHookFactory 创建 SMTP 初始化失败场景的 Hook。
@@ -243,9 +253,35 @@ describe('useNotifications', /* 当前回调处理通知渠道、SMTP 和动作�
       // loadingAssertion 等待通知渠道列表加载完成。
       () => expect(hook.result.current.loading).toBe(false),
     );
-    expect(consoleError).toHaveBeenCalledWith('加载 SMTP 配置失败', expect.any(Error));
+    await waitFor(/* smtpErrorAssertion 等待 SMTP 加载错误写入可见状态。 */ () => expect(hook.result.current.smtpLoadError).toBe('SMTP读取失败'));
+    expect(hook.result.current.smtpLoading).toBe(false);
     hook.unmount();
-    consoleError.mockRestore();
+  });
+
+  test('同一渠道测试通知执行期间阻止重复提交', /* 当前回调验证单项 pending 锁在请求结束前保持有效。 */ async () => {
+    // resolveTest 控制当前渠道测试通知的完成时机。
+    let resolveTest!: (value: Awaited<ReturnType<typeof testNotificationChannel>>) => void;
+    testChannelMock.mockReturnValueOnce(new Promise(/* pendingTestExecutor 暂存测试通知完成函数。 */ resolve => {
+      resolveTest = resolve;
+    }));
+    // hook 是单项动作锁验证使用的通知 Hook 渲染结果。
+    const hook = renderHook(/* pendingHookFactory 创建普通用户通知 Hook。 */ () => useNotifications(false));
+    await waitFor(/* loadingAssertion 等待渠道列表加载完成。 */ () => expect(hook.result.current.loading).toBe(false));
+    // firstTask 保存第一次测试通知请求，第二次重复点击应立即返回。
+    let firstTask!: Promise<void>;
+    act(/* duplicateTestAction 连续提交同一渠道测试。 */ () => {
+      firstTask = hook.result.current.handleTest(channelFixture);
+      void hook.result.current.handleTest(channelFixture);
+    });
+    await waitFor(/* pendingAssertion 等待单项动作锁可见。 */ () => expect(hook.result.current.isActionPending(channelFixture.id, 'test')).toBe(true));
+    expect(testChannelMock).toHaveBeenCalledTimes(1);
+    await act(/* resolveTestAction 完成当前测试并释放单项动作锁。 */ async () => {
+      resolveTest({ success: true });
+      await firstTask;
+    });
+    expect(hook.result.current.isActionPending(channelFixture.id, 'test')).toBe(false);
+    expect(notifyMock).toHaveBeenCalledWith('success', '测试通知已发送，请检查对应渠道');
+    hook.unmount();
   });
 
   test('提示自动消失、弹窗关闭和删除拒绝均清理状态', /* 当前回调验证通知 Hook 的定时器与守卫分支。 */ async () => {
@@ -275,14 +311,14 @@ describe('useNotifications', /* 当前回调处理通知渠道、SMTP 和动作�
         () => hook.result.current.closeModal(),
       );
       expect(hook.result.current.showModal).toBe(false);
-      // confirmMock 是用户取消删除时的浏览器确认框替身。
-      vi.mocked(window.confirm).mockReturnValue(false);
+      // confirmActionMock 是用户取消删除时的统一确认框替身。
+      confirmActionMock.mockResolvedValueOnce(false);
       await act(
         // rejectedDeleteAction 触发用户拒绝删除。
         async () => hook.result.current.handleDelete(channelFixture),
       );
       expect(deleteChannelMock).not.toHaveBeenCalled();
-      vi.mocked(window.confirm).mockReturnValue(true);
+      confirmActionMock.mockResolvedValueOnce(true);
       deleteChannelMock.mockRejectedValueOnce(new Error('删除失败'));
       await act(
         // failedDeleteAction 触发删除请求失败。

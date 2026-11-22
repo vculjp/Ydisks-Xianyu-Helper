@@ -6,6 +6,7 @@ import (
 
 	itemapp "xianyu-go/internal/application/items"
 	libraryapp "xianyu-go/internal/application/library"
+	"xianyu-go/internal/catalog"
 )
 
 // libraryImageResponse 是资源库图片的元数据响应 DTO；图片字节通过 content 端点读取，响应不暴露存储路径。
@@ -170,6 +171,8 @@ type libraryTemplateRequest struct {
 	Postage string `json:"postage"`
 	// Category 是类目，cat_id 为空表示发布时沿用兜底或自动推荐。
 	Category publishCategoryResponse `json:"category"`
+	// Source 是采集自原商品的只读发布资料快照，用户编辑模板时保留其来源。
+	Source catalog.SourceInfo `json:"source"`
 	// ImageIDs 是商品主图的图片库主键，顺序即发布顺序。
 	ImageIDs []int64 `json:"image_ids"`
 	// Specs 是多规格配置。
@@ -200,6 +203,8 @@ type libraryTemplateResponse struct {
 	Postage string `json:"postage"`
 	// Category 是类目。
 	Category publishCategoryResponse `json:"category"`
+	// Source 用于显示原商品类目、规格、运费、来源链接及待核实项。
+	Source catalog.SourceInfo `json:"source"`
 	// ImageIDs 是商品主图主键。
 	ImageIDs []int64 `json:"image_ids"`
 	// Specs 是多规格配置。
@@ -273,7 +278,7 @@ func (req libraryTemplateRequest) toTemplate(userID, id int64) (libraryapp.Templ
 		PriceCents: priceCents, OriginalPriceCents: originalCents, Quantity: req.Quantity,
 		PostageMode: req.PostageMode, PostageCents: postageCents,
 		Category: itemapp.BatchPreviewCategory{CatID: req.Category.CatID, CatName: req.Category.CatName, ChannelCatID: req.Category.ChannelCatID, TBCatID: req.Category.TBCatID},
-		ImageIDs: req.ImageIDs, Specs: specs, Automation: req.Automation.toApplication(),
+		ImageIDs: req.ImageIDs, Specs: specs, Automation: req.Automation.toApplication(), Source: req.Source,
 	}, nil
 }
 
@@ -352,6 +357,9 @@ func newLibraryTemplateResponse(template libraryapp.Template) libraryTemplateRes
 	if imageIDs == nil {
 		imageIDs = []int64{}
 	}
+	// source 是旧模板兼容的可公开展示数据，即使无来源也不能返回 null 数组。
+	source := template.Source
+	source.NormalizeCollections()
 	// original 保存原价文本，未设置时为空串。
 	original := ""
 	if template.OriginalPriceCents > 0 {
@@ -362,7 +370,7 @@ func newLibraryTemplateResponse(template libraryapp.Template) libraryTemplateRes
 		Price: centsDecimal(template.PriceCents), OriginalPrice: original, Quantity: template.Quantity,
 		PostageMode: template.PostageMode, Postage: centsDecimal(template.PostageCents),
 		Category: publishCategoryResponse{CatID: template.Category.CatID, CatName: template.Category.CatName, ChannelCatID: template.Category.ChannelCatID, TBCatID: template.Category.TBCatID},
-		ImageIDs: imageIDs, Specs: newLibraryTemplateSpecs(template.Specs), Automation: newLibraryTemplateAutomation(template.Automation),
+		ImageIDs: imageIDs, Specs: newLibraryTemplateSpecs(template.Specs), Automation: newLibraryTemplateAutomation(template.Automation), Source: source,
 		CreatedAt: template.CreatedAt, UpdatedAt: template.UpdatedAt,
 	}
 }

@@ -1,4 +1,4 @@
-import { Activity,AlertCircle,DollarSign,ExternalLink,Package,PackageCheck,ShoppingCart,TrendingUp,Users } from 'lucide-react';
+import { Activity,AlertCircle,Box,ChevronRight,DollarSign,ExternalLink,Info,Library,MessageCircleMore,Package,PackageCheck,Radar,ShoppingCart,Store,TrendingUp,Users,Zap } from 'lucide-react';
 import { SHOW_CARD_UI } from '../../../../shared/ui/featureVisibility';
 import React,{ useState } from 'react';
 import { Cell,Legend,Pie,PieChart,ResponsiveContainer,Tooltip } from 'recharts';
@@ -7,7 +7,12 @@ import { formatLocalDateTime } from '../../../../dateTime';
 import { OrderStatus } from '../api';
 import { DashboardTrendChart } from '../DashboardTrendChart';
 import { useDashboard } from '../hooks';
-import { PageHeader } from '../../../../shared/ui/PageHeader';
+
+/** DashboardProps 描述仪表盘页面可用的跨页面导航能力。 */
+interface DashboardProps {
+  /** onNavigate 接收参考首页快捷入口选择的业务页面标识。 */
+  onNavigate?: (tab: string) => void;
+}
 
 // cssColor 状态颜色样式。
 const cssColor = (token: string, alpha?: number) => (
@@ -66,8 +71,103 @@ const StatCard: React.FC<{ /** title 表示标题。 */ title: string; /** value
   </div>
 );
 
+/** DashboardQuickAction 描述首页快捷宫格中的单个业务入口。 */
+interface DashboardQuickAction {
+  /** tab 是现有路由表使用的业务页面标识。 */
+  tab: string;
+  /** label 是入口展示名称。 */
+  label: string;
+  /** description 是入口的辅助说明。 */
+  description: string;
+  /** icon 是入口使用的图标组件。 */
+  icon: React.ElementType;
+  /** tone 是图标底色使用的语义类名。 */
+  tone: string;
+}
+
+// dashboardQuickActions 是首页快捷入口的唯一配置，所有入口都调用现有 onNavigate。
+const dashboardQuickActions: DashboardQuickAction[] = [
+  { tab: 'accounts', label: '账号管理', description: '授权与运行状态', icon: Store, tone: 'console-quick-tone-blue' },
+  { tab: 'items', label: '商品管理', description: '同步、发布与上下架', icon: Box, tone: 'console-quick-tone-green' },
+  { tab: 'orders', label: '订单管理', description: '同步与发货处理', icon: ShoppingCart, tone: 'console-quick-tone-cyan' },
+  { tab: 'library', label: '本地资源库', description: '模板与图片素材', icon: Library, tone: 'console-quick-tone-violet' },
+  { tab: 'collector', label: '商品采集', description: '挖款、同行与雷达', icon: Radar, tone: 'console-quick-tone-green' },
+  { tab: 'rules', label: '自动化规则', description: '交易、回复与 AI', icon: Zap, tone: 'console-quick-tone-orange' },
+  { tab: 'chat', label: '在线聊天', description: '实时买家会话', icon: MessageCircleMore, tone: 'console-quick-tone-cyan' },
+  { tab: 'sales', label: '销售统计', description: '营收与订单趋势', icon: TrendingUp, tone: 'console-quick-tone-rose' },
+];
+
+/** DashboardHomeHeader 渲染真实数据状态和八个现有业务快捷入口。 */
+const DashboardHomeHeader: React.FC<{
+  /** onNavigate 接收快捷入口目标。 */ onNavigate?: (tab: string) => void;
+  /** overviewState 表示概览数据最近一次请求状态。 */ overviewState: 'idle' | 'loading' | 'success' | 'error';
+  /** rangeState 表示经营数据最近一次请求状态。 */ rangeState: 'idle' | 'loading' | 'success' | 'error';
+  /** statusError 是页面当前可见的读取错误，用于区分部分失败。 */ statusError: string;
+}> = ({ onNavigate, overviewState, rangeState, statusError }) => {
+  // loading 表示任一核心数据仍在刷新，状态卡不能提前宣称全部正常。
+  const loading = overviewState === 'loading' || rangeState === 'loading';
+  // degraded 表示最近一次核心数据读取失败，页面展示的可能是旧数据。
+  const degraded = Boolean(statusError) || overviewState === 'error' || rangeState === 'error';
+  // healthLabel 是状态卡主文案，只根据当前请求事实生成。
+  const healthLabel = degraded ? '部分数据异常' : loading ? '数据同步中' : '系统正常运行';
+  // healthDetail 是状态卡辅助说明，明确当前数据读取结果。
+  const healthDetail = degraded ? '可查看旧数据并重试' : loading ? '正在读取服务端数据' : '数据实时读取';
+  return (
+    <section className="console-home" aria-label="运营首页">
+      <div className="console-home-status-row">
+        <div className={`console-home-status ${degraded ? 'is-error' : loading ? 'is-loading' : ''}`} role="status">
+          <span />
+          {healthLabel}
+          <small>{healthDetail}</small>
+        </div>
+      </div>
+
+      <div className="console-home-quick-grid">
+        {dashboardQuickActions.map(/* action 是快捷宫格中的单个业务入口。 */ action => {
+          // Icon 是当前快捷入口的图标组件。
+          const Icon = action.icon;
+          return (
+            <button key={action.tab} type="button" className="console-home-quick-card" onClick={/* 点击快捷卡片切换到对应业务页面。 */ () => onNavigate?.(action.tab)}>
+              <span className={`console-home-quick-icon ${action.tone}`}><Icon className="h-5 w-5" /></span>
+              <span className="console-home-quick-copy">
+                <strong>{action.label}</strong>
+                <small>{action.description}</small>
+              </span>
+              <ChevronRight className="console-home-quick-arrow h-4 w-4" />
+            </button>
+          );
+        })}
+      </div>
+
+      <section className="console-home-notice" aria-labelledby="console-home-notice-title">
+        <header>
+          <span><Info className="h-4 w-4" /></span>
+          <h2 id="console-home-notice-title">系统通知公告</h2>
+        </header>
+        <div className="console-home-notice-list">
+          <div>
+            <strong>交易自动化顺序</strong>
+            <span>付款消息到达后按发货规则执行；自动确认发货始终在发卡或模板发送成功之后。</span>
+            <small>业务规则</small>
+          </div>
+          <div>
+            <strong>账号授权失效</strong>
+            <span>账号显示登录失效时请重新扫码；风控账号按提示粘贴无风控 Cookie，不要连续重试平台接口。</span>
+            <small>账号安全</small>
+          </div>
+          <div>
+            <strong>高风险平台操作</strong>
+            <span>商品上架、下架、远端编辑和删除等操作会要求二次确认，失败后请先到闲鱼核对实际状态。</span>
+            <small>操作提示</small>
+          </div>
+        </div>
+      </section>
+    </section>
+  );
+};
+
 // Dashboard 渲染仪表盘页面组件。
-const Dashboard: React.FC = () => {
+const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   // [timeRange, setTimeRange] 保存用户当前选中的范围标签，自定义标签在点击“应用”前不改变已生效范围。
   const [timeRange, setTimeRange] = useState<TimeRange>('7days');
   // [appliedRange, setAppliedRange] 保存真正用于请求的已生效范围，预设立即生效，自定义经校验后才生效。
@@ -182,17 +282,15 @@ const Dashboard: React.FC = () => {
           <button type="button" className="font-bold underline" onClick={refresh}>重试</button>
         </div>
       )}
-      <PageHeader title="运营概览" description="欢迎回来，以下是闲鱼店铺的实时经营数据。">
-        <div className="flex items-center gap-3">
-          <div className="text-sm font-bold text-gray-700 bg-white px-5 py-2.5 rounded-full shadow-sm border border-gray-100 flex items-center gap-2">
-            <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
-            系统正常运行
-          </div>
-        </div>
-      </PageHeader>
+      <DashboardHomeHeader
+        onNavigate={onNavigate}
+        overviewState={status.overview}
+        rangeState={status.range}
+        statusError={status.error}
+      />
 
       {/* Time Range Selector */}
-      <div className="flex flex-wrap gap-2 p-2 bg-gray-100/50 rounded-2xl">
+      <div className="console-filter-bar">
         {timeRangeOptions.map(/* 当前回调处理集合中的单个元素。 */ (option) => (
           <button
             key={option.key}

@@ -97,6 +97,11 @@ func TestPublishBatchFailureCoversStableClassifications(t *testing.T) {
 	if uncertainKind != "uncertain_remote" || !strings.Contains(uncertainMessage, "禁止自动重试") {
 		t.Fatalf("uncertain failure message=%q kind=%q", uncertainMessage, uncertainKind)
 	}
+	// unsupportedMessage、unsupportedKind 是平台明确拒绝网页发布时的分类，不应误报远端结果未知。
+	unsupportedMessage, unsupportedKind := publishBatchFailure(itemapp.ErrPCPublishUnsupported, "running")
+	if unsupportedKind != "pc_unsupported" || !strings.Contains(unsupportedMessage, "闲鱼APP") || strings.Contains(unsupportedMessage, "远端结果未知") {
+		t.Fatalf("pc rejection message=%q kind=%q", unsupportedMessage, unsupportedKind)
+	}
 	// canceledUncertainMessage、canceledUncertainKind 保存取消状态下的不确定错误文案。
 	canceledUncertainMessage, canceledUncertainKind := publishBatchFailure(&itemapp.UncertainRemotePublishError{Err: errors.New("远端未知")}, "canceled")
 	if canceledUncertainKind != "uncertain_remote" || !strings.HasPrefix(canceledUncertainMessage, "任务已取消；") {

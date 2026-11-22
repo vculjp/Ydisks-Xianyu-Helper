@@ -98,6 +98,10 @@ func (s *TemplatePublishService) PreviewPublish(ctx context.Context, input Publi
 		if err != nil {
 			return itemapp.BatchPreviewPersistenceResult{}, err
 		}
+		// 历史采集模板可能只保存了标题，预检前阻断，避免复用旧脏数据发布商品。
+		if strings.TrimSpace(template.Description) == "" || strings.TrimSpace(template.Description) == strings.TrimSpace(template.Title) {
+			return itemapp.BatchPreviewPersistenceResult{}, invalid(fmt.Sprintf("商品模板「%s」描述缺失或只有标题，请先编辑并补充真实商品详情", template.Name))
+		}
 		templates = append(templates, template)
 	}
 	// batchID 标识新批次；uploadDir 是其专属上传目录。

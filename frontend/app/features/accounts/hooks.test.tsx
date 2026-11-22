@@ -78,6 +78,7 @@ describe('useAccountsData', /* 当前回调处理账号详情、AI 配置和运�
       () => expect(detailsHook.result.current.loading).toBe(false),
     );
     expect(detailsHook.result.current.accounts).toEqual([]);
+    expect(detailsHook.result.current.loadError).toBe('账号服务失败');
     expect(console.error).toHaveBeenCalled();
     detailsHook.unmount();
   });

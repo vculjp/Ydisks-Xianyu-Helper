@@ -122,7 +122,7 @@ type BatchPreviewRow struct {
 	CookieID string
 	// Title 是商品标题。
 	Title string
-	// Description 是商品描述；为空时回退为标题。
+	// Description 是待发布的真实商品描述，缺失时必须报错，不能再用标题代替。
 	Description string
 	// Price 是商品售价文本。
 	Price string
@@ -257,9 +257,6 @@ func (service *BatchPreviewService) parseRow(ctx context.Context, input BatchPre
 	if row.CookieID == "" {
 		row.CookieID = input.DefaultCookieID
 	}
-	if row.Description == "" {
-		row.Description = row.Title
-	}
 	if row.PostageMode == "" {
 		row.PostageMode = "free"
 	}
@@ -290,6 +287,11 @@ func (service *BatchPreviewService) validateRow(ctx context.Context, input Batch
 	}
 	if strings.TrimSpace(row.Title) == "" {
 		row.Errors = append(row.Errors, "缺少标题")
+	}
+	if strings.TrimSpace(row.Description) == "" {
+		row.Errors = append(row.Errors, "缺少商品描述，不能以标题代替详情；请先补齐真实描述")
+	} else if strings.TrimSpace(row.Description) == strings.TrimSpace(row.Title) {
+		row.Errors = append(row.Errors, "商品描述与标题完全一致，请核对并填写实际商品详情后再发布")
 	}
 	// cents 和 err 表示售价的分值及解析错误。
 	if cents, err := parseMoneyCents(row.Price); err != nil || cents <= 0 {

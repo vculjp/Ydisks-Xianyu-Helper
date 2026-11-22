@@ -1,17 +1,19 @@
-import { ArrowRight,Bot,Box,CheckCircle2,CircleDashed,Edit,Link2,LocateFixed,PackagePlus,Plus,RefreshCw,Save,Search,ShoppingBag,Trash2,UploadCloud,User,X } from 'lucide-react';
+import { ArrowRight,Bot,Box,CheckCircle2,CircleDashed,Edit,Link2,LocateFixed,PackagePlus,Plus,RefreshCw,Search,ShoppingBag,Trash2,UploadCloud,User,X } from 'lucide-react';
 import React,{ Suspense,useCallback,useEffect,useMemo,useRef,useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AccountDetail,Item,ItemAIOverride,ItemAISettings,PublishLocation,ShippingRule } from '../api';
 import {
+deleteItem,
 getAccountDetails,
 getItemPublishBatches,
 getItems,
 getShippingRules,
+refreshItemMetrics,
 } from '../api';
 import { batchStatusClass,batchStatusText,toBatchFallbackCategory } from '../batchState';
 import { BatchPhaseIndicator } from '../components/BatchPhaseIndicator';
 import { CategoryCandidatePicker } from '../components/CategoryCandidatePicker';
-import ItemTable from '../components/ItemTable';
+import ItemTable,{ itemSelectionKey } from '../components/ItemTable';
 import { ManualLocationPicker } from '../components/ManualLocationPicker';
 import { consumeSelectedFile } from '../../../../shared/browser/fileInput';
 import { saveLastPublishLocation } from '../../../../shared/browser/publishLocationPreference';
@@ -19,9 +21,9 @@ import { useItemPublishBatch } from '../hooks';
 import { useItemActions } from '../itemActions';
 import { itemShelfState } from '../itemShelfState';
 import { readItemAccountPreference, saveItemAccountPreference, validItemAccountPreference } from '../accountSelectionPreference';
-import { matchesRuleCoverageFilter,paginateItems,TRADE_AUTOMATION_TRIGGERS,type RuleCoverageFilter } from '../ruleCoverage';
+import { itemHasTrigger,matchesRuleCoverageFilter,paginateItems,TRADE_AUTOMATION_TRIGGERS,type RuleCoverageFilter } from '../ruleCoverage';
 import type { ItemListProps } from '../types';
-import { PageHeader } from '../../../../shared/ui/PageHeader';
+import { AsyncStateView,confirmAction,notify } from '../../../../shared/ui/feedback';
 
 // formatItemPrice 将商品价格转换为本地化展示文本。
 const formatItemPrice = (price?: string) => {
@@ -36,16 +38,56 @@ const publishLocationText = (location: PublishLocation): string => [location.pro
 
 // ITEM_VIEW_MODE_KEY 是浏览器本地保存商品页视图偏好的存储键，只属于当前浏览器，不写入服务端。
 const ITEM_VIEW_MODE_KEY = 'ydisks.items.view_mode';
+// AUTO_SYNC_STORAGE_PREFIX 记录每个账号最近一次自动列表同步时间，避免每次打开页面都请求闲鱼。
+const AUTO_SYNC_STORAGE_PREFIX = 'ydisks.items.auto_sync.';
+// AUTO_METRICS_STORAGE_PREFIX 记录每个账号最近一次自动指标刷新时间，避免重复扇出详情请求。
+const AUTO_METRICS_STORAGE_PREFIX = 'ydisks.items.auto_metrics.';
+// AUTO_SYNC_INTERVAL_MS 是打开商品页时自动同步列表的最小间隔。
+const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+// AUTO_METRICS_INTERVAL_MS 是打开商品页时自动刷新本页指标的最小间隔。
+const AUTO_METRICS_INTERVAL_MS = 10 * 60 * 1000;
+// AUTO_METRICS_MAX_ITEMS 限制一次自动刷新最多读取的商品数，避免大页尺寸触发过多平台详情请求。
+const AUTO_METRICS_MAX_ITEMS = 20;
 
 // ItemViewMode 是商品页的两种展示模式：卡片或列表。
 type ItemViewMode = 'card' | 'list';
 
-// readItemViewMode 读取上次选择的视图模式；存储不可用或值非法时回到卡片模式。
+// ItemStatusTab 在参考商品状态标签外保留全部商品入口，未知货架状态不推断为在售。
+type ItemStatusTab = 'all' | 'active' | 'hidden' | 'sold' | 'configured' | 'unconfigured' | 'scheduled';
+
+// ITEM_STATUS_TABS 保留参考状态标签，并提供原有全部商品视图。
+const ITEM_STATUS_TABS: ReadonlyArray<{
+  /** key 是标签页的稳定状态标识。 */
+  key: ItemStatusTab;
+  /** label 是标签页展示的中文文案。 */
+  label: string;
+}> = [
+  { key: 'all', label: '全部商品' },
+  { key: 'active', label: '出售中的商品' },
+  { key: 'hidden', label: '已下架的商品' },
+  { key: 'sold', label: '已经售罄商品' },
+  { key: 'configured', label: '已配置发货' },
+  { key: 'unconfigured', label: '未配置发货' },
+  { key: 'scheduled', label: '定时上架商品' },
+];
+
+// itemMatchesStatusTab 将标签页映射到现有真实字段；缺失指标的状态返回空列表而不伪造数据。
+const itemMatchesStatusTab = (item: Item, tab: ItemStatusTab, rules: ShippingRule[]): boolean => {
+  if (tab === 'all') return true;
+  if (tab === 'active') return itemShelfState(item) === 'on';
+  if (tab === 'hidden') return itemShelfState(item) === 'off';
+  if (tab === 'sold' || tab === 'scheduled') return false;
+  // configured 只统计付款后发货，评价赠品或拍下改价不代表已配置自动发货。
+  const configured = itemHasTrigger(item, 'order_paid', rules);
+  return tab === 'configured' ? configured : !configured;
+};
+
+// readItemViewMode 读取上次选择的视图模式；存储不可用或没有偏好时默认使用参考控制台的列表模式。
 const readItemViewMode = (): ItemViewMode => {
   try {
-    return window.localStorage.getItem(ITEM_VIEW_MODE_KEY) === 'list' ? 'list' : 'card';
+    return window.localStorage.getItem(ITEM_VIEW_MODE_KEY) === 'card' ? 'card' : 'list';
   } catch {
-    return 'card';
+    return 'list';
   }
 };
 
@@ -64,11 +106,17 @@ const itemAIStatusClass: Record<ItemAIOverride, string> = {
 };
 
 // ItemList 渲染商品列表组件。
-const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesEditor: ImagesEditor, publishSpecsEditor: SpecsEditor, itemAISettingsModal: ItemAISettingsModal, libraryImagePicker: LibraryPicker }) => {
+const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesEditor: ImagesEditor, publishSpecsEditor: SpecsEditor, itemAISettingsModal: ItemAISettingsModal, itemEditorPage: ItemEditorPage, libraryImagePicker: LibraryPicker }) => {
   // libraryPickerOpen 表示单品发布的图片库选择器是否打开，属于瞬时 UI 状态。
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false);
   // [items, 解构得到当前 Hook 返回的状态和操作函数。
   const [items, setItems] = useState<Item[]>([]);
+  // initialLoading 表示商品、账号、规则首屏数据是否仍在读取。
+  const [initialLoading, setInitialLoading] = useState(true);
+  // loadError 保存首屏核心数据读取失败的可见说明；空字符串表示最近一次读取成功。
+  const [loadError, setLoadError] = useState('');
+  // retryGeneration 是用户点击重试时递增的首屏读取代次。
+  const [retryGeneration, setRetryGeneration] = useState(0);
   // [shippingRules, 解构得到当前 Hook 返回的状态和操作函数。
   const [shippingRules, setShippingRules] = useState<ShippingRule[]>([]);
   // [accounts, 解构得到当前 Hook 返回的状态和操作函数。
@@ -83,6 +131,30 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
   const [viewMode, setViewMode] = useState<ItemViewMode>(readItemViewMode);
   // listPage 是列表模式的请求页码，渲染时会修正到合法范围；筛选变化时回到第一页。
   const [listPage, setListPage] = useState(1);
+  // listPageSize 是参考页的每页条数，默认 15，可由底部分页器切换。
+  const [listPageSize, setListPageSize] = useState(15);
+  // pageJumpDraft 是分页器“前往 N 页”输入框的瞬时文本。
+  const [pageJumpDraft, setPageJumpDraft] = useState('');
+  // moreMenuOpen 控制批量操作条右侧“更多操作”菜单，收纳同步、发布等次级入口。
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  // moreMenuRef 指向“更多操作”菜单容器，用于点击外部时收起菜单。
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  // searchDraft 是搜索框里的即时文本，点击查询或回车后才写入生效搜索词。
+  const [searchDraft, setSearchDraft] = useState('');
+  // appliedSearch 是当前列表真正用于匹配标题和商品 ID 的搜索词。
+  const [appliedSearch, setAppliedSearch] = useState('');
+  // itemStatusTab 默认展示全部商品，避免未核实货架状态的历史商品从首屏消失。
+  const [itemStatusTab, setItemStatusTab] = useState<ItemStatusTab>('all');
+  // selectedKeys 按账号与商品 ID 的复合键保存批量操作勾选，避免同名商品互相覆盖。
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  // bulkBusy 表示批量上下架或批量删除正在串行请求平台，期间禁止重复提交。
+  const [bulkBusy, setBulkBusy] = useState(false);
+  // metricsRefreshLabel 保存“已完成/总数”的本页指标刷新进度；null 表示当前没有刷新任务。
+  const [metricsRefreshLabel, setMetricsRefreshLabel] = useState<string | null>(null);
+  // metricsRefreshBusyRef 在 React 渲染前同步拦截重复点击，避免同一页并发读取平台详情。
+  const metricsRefreshBusyRef = useRef(false);
+  // autoSyncBusyRef 阻止自动同步与手动同步并发执行。
+  const autoSyncBusyRef = useRef(false);
   // [itemAISettingsTarget, setItemAISettingsTarget] 保存当前打开商品级 AI 配置的商品。
   const [itemAISettingsTarget, setItemAISettingsTarget] = useState<Item | null>(null);
   // itemsRequestGeneration 标识商品列表最新一次读取，旧响应不得覆盖较新的同步或刷新结果。
@@ -189,8 +261,10 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
     handleEdit,
     handleSaveEdit,
     handleSaveRemoteEdit,
+    handleRefreshItemMetrics,
     remoteItemBusy,
     handleSetShelf,
+    handleToggleBargain,
     handleDelete,
     handleAddItem,
     handlePublishItem,
@@ -226,28 +300,61 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
     const initialRulesGeneration = ++shippingRulesRequestGeneration.current;
     // active 标识当前组件实例是否仍接受首屏响应。
     let active = true;
-    Promise.all([getAccountDetails({ signal: controller.signal }), getItems(undefined, { signal: controller.signal }), getShippingRules({ signal: controller.signal }), getItemPublishBatches(20, { signal: controller.signal })])
-      .then(/* 当前回调处理异步操作结果。 */ ([accountList, itemList, ruleList, batches]) => {
-        if (!active || controller.signal.aborted || initialItemsGeneration !== itemsRequestGeneration.current || initialRulesGeneration !== shippingRulesRequestGeneration.current) return;
-        setAccounts(accountList);
+    setInitialLoading(true);
+    setLoadError('');
+    Promise.allSettled([
+      getAccountDetails({ signal: controller.signal }),
+      getItems(undefined, { signal: controller.signal }),
+      getShippingRules({ signal: controller.signal }),
+      getItemPublishBatches(20, { signal: controller.signal }),
+    ]).then(/* 首屏并行请求完成后分别处理核心数据和可选批次结果。 */ results => {
+      if (!active || controller.signal.aborted || initialItemsGeneration !== itemsRequestGeneration.current || initialRulesGeneration !== shippingRulesRequestGeneration.current) return;
+      // accountResult、itemResult、ruleResult、batchResult 分别对应四个互不依赖的首屏请求。
+      const [accountResult, itemResult, ruleResult, batchResult] = results;
+      // failureMessages 保存核心数据失败时可展示的脱敏说明，不包含请求细节。
+      const failureMessages: string[] = [];
+      if (accountResult.status === 'fulfilled') {
+        setAccounts(accountResult.value);
         setAccountsReady(true);
-        setItems(itemList);
-        setShippingRules(ruleList);
-        // recoverable 可恢复任务。
-        const recoverable = batches.find(/* 当前回调处理集合中的单个元素。 */ batch => ['running', 'canceling'].includes(batch.status))
-          || batches.find(/* 当前回调处理集合中的单个元素。 */ batch => batch.status !== 'preview');
+      } else {
+        console.error('加载商品账号失败:', accountResult.reason);
+        failureMessages.push('账号列表读取失败');
+      }
+      if (itemResult.status === 'fulfilled') {
+        setItems(itemResult.value);
+      } else {
+        console.error('加载商品列表失败:', itemResult.reason);
+        failureMessages.push(itemResult.reason instanceof Error && itemResult.reason.message ? itemResult.reason.message : '商品列表读取失败');
+      }
+      if (ruleResult.status === 'fulfilled') {
+        setShippingRules(ruleResult.value);
+      } else {
+        console.error('加载发货规则失败:', ruleResult.reason);
+        failureMessages.push('发货规则读取失败，商品仍可查看但规则覆盖状态可能不准确');
+      }
+      if (batchResult.status === 'fulfilled') {
+        // recoverable 是可继续查看或恢复的最近批量任务。
+        const recoverable = batchResult.value.find(/* 当前回调处理集合中的单个元素。 */ batch => ['running', 'canceling'].includes(batch.status))
+          || batchResult.value.find(/* 当前回调处理集合中的单个元素。 */ batch => batch.status !== 'preview');
         setRecentBatch(recoverable || null);
-      })
-      .catch(/* 当前回调处理异步操作结果。 */ (e) => {
-        if (!controller.signal.aborted) console.error('加载商品配置失败:', e);
-      });
+      } else {
+        console.error('加载最近批量任务失败:', batchResult.reason);
+      }
+      if (failureMessages.length > 0) setLoadError(failureMessages.join('；'));
+    }).catch(/* 首屏聚合异常只转换为可见错误，不阻断页面生命周期。 */ error => {
+      if (!active || controller.signal.aborted) return;
+      console.error('加载商品配置失败:', error);
+      setLoadError(error instanceof Error && error.message ? error.message : '商品配置加载失败，请稍后重试');
+    }).finally(/* 首屏请求全部完成后结束加载占位。 */ () => {
+      if (active && !controller.signal.aborted) setInitialLoading(false);
+    });
     return /* 首屏请求清理回调在卸载时取消请求并阻止状态回写。 */ () => {
       active = false;
       controller.abort();
     };
-  }, []);
+  }, [retryGeneration]);
 
-  // 选择账号时记住偏好，并回到商品列表第一页；切换账号不会自动调用闲鱼同步接口。
+  // 选择账号时记住偏好，并回到商品列表第一页；自动同步由下方节流副作用统一执行。
   useEffect(/* persistAccountEffect 持久化唯一账号选择。 */ () => {
     saveItemAccountPreference(selectedAccount);
     setListPage(1);
@@ -273,13 +380,224 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
     /* 当前回调处理集合中的单个元素。 */ () => new Map(accounts.map(/* 当前回调处理集合中的单个元素。 */ account => [account.id, account])),
     [accounts],
   );
-  // visibleItems 可见商品列表。
-  const visibleItems = useMemo(
-    /* 统一账号选择同时作为列表筛选条件。 */ () => items.filter(/* item 是待判断的商品。 */ item => (!selectedAccount || item.cookie_id === selectedAccount) && matchesRuleCoverageFilter(item, ruleFilter, shippingRules)),
-    [selectedAccount, ruleFilter, items, shippingRules],
-  );
+  // visibleItems 同时应用店铺、规则、搜索词和顶部状态标签，所有筛选都基于真实列表数据。
+  const visibleItems = useMemo(/* 统一计算店铺、规则、搜索和状态标签后的可见商品。 */ () => {
+    // keyword 是归一化后的搜索词，只匹配商品标题和商品 ID。
+    const keyword = appliedSearch.trim().toLowerCase();
+    return items.filter(/* item 是待判断的商品。 */ item => {
+      if (selectedAccount && item.cookie_id !== selectedAccount) return false;
+      if (!matchesRuleCoverageFilter(item, ruleFilter, shippingRules)) return false;
+      if (!itemMatchesStatusTab(item, itemStatusTab, shippingRules)) return false;
+      if (!keyword) return true;
+      return `${item.item_title || ''} ${item.item_id}`.toLowerCase().includes(keyword);
+    });
+  }, [appliedSearch, itemStatusTab, items, ruleFilter, selectedAccount, shippingRules]);
   // pagedItems 是列表模式当前页的分页结果，由可见商品与页码推导。
-  const pagedItems = useMemo(/* 按请求页码切分可见商品。 */ () => paginateItems(visibleItems, listPage), [visibleItems, listPage]);
+  const pagedItems = useMemo(/* 按请求页码和每页条数切分可见商品。 */ () => paginateItems(visibleItems, listPage, listPageSize), [visibleItems, listPage, listPageSize]);
+  // 每页条数变化后回到第一页，避免停留在切换前的空页。
+  useEffect(/* 当前副作用在分页大小变化时重置页码。 */ () => {
+    setListPage(1);
+  }, [listPageSize]);
+  // “更多操作”菜单打开时监听外部点击和 Esc，点击菜单内按钮后立即收起。
+  useEffect(/* 当前副作用管理批量操作条右上角菜单的关闭行为。 */ () => {
+    if (!moreMenuOpen) return;
+    /** closeMoreOnPointerDown 收起点击菜单外部触发的次级菜单。 */
+    const closeMoreOnPointerDown = (event: PointerEvent) => {
+      // target 是本次点击的真实 DOM 节点。
+      const target = event.target as Node | null;
+      if (target && moreMenuRef.current?.contains(target)) return;
+      setMoreMenuOpen(false);
+    };
+    /** closeMoreOnKeyDown 支持按 Esc 收起次级菜单。 */
+    const closeMoreOnKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMoreMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', closeMoreOnPointerDown);
+    window.addEventListener('keydown', closeMoreOnKeyDown);
+    return /* 菜单关闭后释放全局监听。 */ () => {
+      window.removeEventListener('pointerdown', closeMoreOnPointerDown);
+      window.removeEventListener('keydown', closeMoreOnKeyDown);
+    };
+  }, [moreMenuOpen]);
+  // selectedItems 只保留当前筛选结果中仍可见的勾选商品，批量操作不会影响被筛选隐藏的行。
+  const selectedItems = useMemo(/* 按当前勾选键过滤可见商品。 */ () => visibleItems.filter(/* item 检查是否被勾选。 */ item => selectedKeys.has(itemSelectionKey(item))), [visibleItems, selectedKeys]);
+  // allPageSelected 表示当前页所有商品都已勾选，供表头复选框和批量按钮使用。
+  const allPageSelected = pagedItems.rows.length > 0 && pagedItems.rows.every(/* item 检查当前页每一行是否已勾选。 */ item => selectedKeys.has(itemSelectionKey(item)));
+
+  // refreshVisibleMetrics 按当前页顺序读取浏览和想要统计；all 为 true 时刷新整页，否则只补齐缺失项。
+  const refreshVisibleMetrics = useCallback(/* 当前回调串行刷新本页指标，失败立即停止。 */ async (options?: { all?: boolean }) => {
+    if (metricsRefreshBusyRef.current) return;
+    if (remoteItemBusy || loading || bulkBusy) {
+      notify('info', '当前有商品操作正在进行，请稍后再刷新指标');
+      return;
+    }
+    // targets 在自动模式下受最大商品数限制，手动模式只包含缺少浏览或想要数据的当前页商品。
+    const targets = options?.all
+      ? pagedItems.rows.slice(0, AUTO_METRICS_MAX_ITEMS)
+      : pagedItems.rows.filter(/* item 判断是否仍缺少至少一项可读取指标。 */ item =>
+        item.browse_count === undefined || item.want_count === undefined);
+    if (targets.length === 0) {
+      if (!options?.all) notify('info', '本页商品已有浏览和想要数据');
+      return;
+    }
+    metricsRefreshBusyRef.current = true;
+    setMetricsRefreshLabel(`0/${targets.length}`);
+    // updated 记录本次已经成功写回列表的商品数，失败提示会给出准确进度。
+    let updated = 0;
+    try {
+      for (let /* index 是当前串行刷新的商品下标，保证每次只触发一次平台请求。 */ index = 0; index < targets.length; index += 1) {
+        // refreshed 是本次单件详情读取并保存后返回的完整商品行。
+        const refreshed = await refreshItemMetrics(targets[index].cookie_id, targets[index].item_id);
+        setItems(/* current 是当前商品列表。 */ current => current.map(/* currentItem 是待比较的列表商品。 */ currentItem =>
+          currentItem.cookie_id === refreshed.cookie_id && currentItem.item_id === refreshed.item_id
+            ? { ...currentItem, ...refreshed } : currentItem,
+        ));
+        updated += 1;
+        setMetricsRefreshLabel(`${updated}/${targets.length}`);
+        if (index < targets.length - 1) {
+          await new Promise(/* 页面内也保留至少 2.2 秒间隔，与服务端账号节流一致。 */ resolve => {
+            window.setTimeout(resolve, 2200);
+          });
+        }
+      }
+      notify('success', `已更新 ${updated} 件商品的浏览和想要数据；曝光需在闲鱼卖家后台查看`);
+    } catch (/* error 是平台拒绝、会话失效或本地保存失败的原因，不自动重试后续商品。 */ error: unknown) {
+      notify('error', `指标刷新在 ${updated}/${targets.length} 件后停止：${error instanceof Error && error.message ? error.message : '请检查账号状态后重试'}`);
+    } finally {
+      metricsRefreshBusyRef.current = false;
+      setMetricsRefreshLabel(null);
+    }
+  }, [bulkBusy, loading, pagedItems.rows, remoteItemBusy, setItems]);
+
+  // 打开商品页时自动同步当前账号列表；每个账号五分钟内最多一次，避免普通浏览触发重复平台请求。
+  useEffect(/* autoSyncOnOpen 在首屏账号就绪后执行一次受节流保护的列表同步。 */ () => {
+    if (initialLoading || !accountsReady || !selectedAccount || autoSyncBusyRef.current) return;
+    if (!accounts.some(/* account 检查记忆账号是否仍然存在。 */ account => account.id === selectedAccount)) return;
+    // storageKey 是当前账号最近一次自动同步时间，浏览器禁写时按未同步处理。
+    const storageKey = `${AUTO_SYNC_STORAGE_PREFIX}${selectedAccount}`;
+    // lastSyncAt 是本地记录的毫秒时间戳，非法值按零处理。
+    let lastSyncAt = 0;
+    try {
+      lastSyncAt = Number(window.localStorage.getItem(storageKey) || 0);
+    } catch {
+      lastSyncAt = 0;
+    }
+    if (Number.isFinite(lastSyncAt) && Date.now() - lastSyncAt < AUTO_SYNC_INTERVAL_MS) return;
+    autoSyncBusyRef.current = true;
+    try {
+      window.localStorage.setItem(storageKey, String(Date.now()));
+    } catch {
+      // 隐私模式无法持久化节流时间时仍允许本次同步，下次打开会重新尝试。
+    }
+    // syncTask 可能是测试替身或同步包装返回的空值，只有真实 Promise 才注册完成回调。
+    const syncTask = handleSync({ silent: true }) as Promise<void> | undefined;
+    if (syncTask instanceof Promise) {
+      void syncTask.finally(/* 自动同步结束后释放并发锁。 */ () => {
+        autoSyncBusyRef.current = false;
+      });
+    } else {
+      autoSyncBusyRef.current = false;
+    }
+  }, [accounts, accountsReady, handleSync, initialLoading, selectedAccount]);
+
+  // 列表就绪后自动刷新当前页指标；每个账号十分钟内最多一次，仍按服务端节流串行读取详情。
+  useEffect(/* autoMetricsOnOpen 在自动同步结束后补齐本页真实浏览和想要数据。 */ () => {
+    if (initialLoading || loading || autoSyncBusyRef.current || metricsRefreshBusyRef.current) return;
+    if (!selectedAccount || pagedItems.rows.length === 0) return;
+    if (!accounts.some(/* account 检查当前账号仍属于已加载账号列表。 */ account => account.id === selectedAccount)) return;
+    // storageKey 是当前账号最近一次自动指标刷新时间。
+    const storageKey = `${AUTO_METRICS_STORAGE_PREFIX}${selectedAccount}`;
+    // lastRefreshAt 是本地记录的毫秒时间戳，非法值按零处理。
+    let lastRefreshAt = 0;
+    try {
+      lastRefreshAt = Number(window.localStorage.getItem(storageKey) || 0);
+    } catch {
+      lastRefreshAt = 0;
+    }
+    if (Number.isFinite(lastRefreshAt) && Date.now() - lastRefreshAt < AUTO_METRICS_INTERVAL_MS) return;
+    try {
+      window.localStorage.setItem(storageKey, String(Date.now()));
+    } catch {
+      // 节流记录失败不阻止用户显式等待的本次真实数据读取。
+    }
+    void refreshVisibleMetrics({ all: true });
+  }, [accounts, initialLoading, loading, pagedItems.rows, refreshVisibleMetrics, selectedAccount]);
+
+  // 切换店铺、规则、搜索词或状态标签后清理旧勾选，避免批量操作误伤已隐藏商品。
+  useEffect(/* 当前副作用在筛选条件变化时清空批量勾选。 */ () => {
+    setSelectedKeys(new Set());
+  }, [selectedAccount, ruleFilter, appliedSearch, itemStatusTab]);
+
+  // toggleItemSelection 切换单行商品的批量勾选状态。
+  const toggleItemSelection = useCallback(/* 当前回调更新单个商品的勾选集合。 */ (item: Item) => {
+    // key 是当前行的复合唯一键。
+    const key = itemSelectionKey(item);
+    setSelectedKeys(/* previous 是切换前的勾选集合。 */ previous => {
+      // next 复制旧集合，避免直接修改 React 状态。
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  // togglePageSelection 勾选或取消当前页全部商品。
+  const togglePageSelection = useCallback(/* 当前回调批量更新当前页勾选状态。 */ () => {
+    setSelectedKeys(/* previous 是切换前的勾选集合。 */ previous => {
+      // next 复制旧集合并根据当前页是否全选决定增删。
+      const next = new Set(previous);
+      pagedItems.rows.forEach(/* item 是当前页的一件商品。 */ item => {
+        // key 是当前行的复合唯一键。
+        const key = itemSelectionKey(item);
+        if (allPageSelected) next.delete(key); else next.add(key);
+      });
+      return next;
+    });
+  }, [allPageSelected, pagedItems.rows]);
+
+  // applySearch 把搜索框文本写入生效条件，并回到第一页。
+  const applySearch = useCallback(/* 当前回调应用商品标题或 ID 搜索。 */ () => {
+    setAppliedSearch(searchDraft.trim());
+    setListPage(1);
+  }, [searchDraft]);
+
+  // handleBulkDelete 经一次确认后逐件删除选中商品，并汇总失败数量。
+  const handleBulkDelete = useCallback(/* 当前回调执行经确认的批量删除。 */ async () => {
+    if (selectedItems.length === 0) return notify('info', '请先勾选需要删除的商品');
+    if (!(await confirmAction({ title: '删除本地商品及关联规则', message: `确认删除选中的 ${selectedItems.length} 件本地商品及其关联自动化规则吗？闲鱼商品不会下架或删除，商品级自动发货配置将失效，请先核对发货安排。`, confirmText: '确认删除本地记录', danger: true }))) return;
+    setBulkBusy(true);
+    // successCount 记录本地删除成功的商品数量。
+    let successCount = 0;
+    // failedCount 记录本地删除失败的商品数量。
+    let failedCount = 0;
+    for (const /* item 是当前待删除的选中商品。 */ item of selectedItems) {
+      try {
+        await deleteItem(item.cookie_id, item.item_id);
+        successCount += 1;
+      } catch {
+        failedCount += 1;
+      }
+    }
+    setBulkBusy(false);
+    setSelectedKeys(new Set());
+    try {
+      await loadItems();
+      notify(failedCount > 0 ? 'warning' : 'success', `批量删除完成：成功 ${successCount} 件${failedCount > 0 ? `，失败 ${failedCount} 件` : ''}`);
+    } catch {
+      notify('warning', `删除结果：成功 ${successCount} 件，失败 ${failedCount} 件；列表刷新失败，请重新加载页面核对。`);
+    }
+  }, [loadItems, selectedItems]);
+
+  // handleBulkCopy 把选中商品 ID 按行复制到剪贴板。
+  const handleBulkCopy = useCallback(/* 当前回调复制选中商品 ID 列表。 */ async () => {
+    if (selectedItems.length === 0) return notify('info', '请先勾选需要复制的商品');
+    try {
+      await navigator.clipboard.writeText(selectedItems.map(/* item 取商品 ID。 */ item => item.item_id).join('\n'));
+      notify('success', `已复制 ${selectedItems.length} 个商品 ID`);
+    } catch {
+      notify('error', '复制失败，请检查浏览器剪贴板权限');
+    }
+  }, [selectedItems]);
+
   // changeViewMode 切换展示模式并尽力保存偏好；存储失败不影响本次切换。
   const changeViewMode = (mode: ItemViewMode) => {
     setViewMode(mode);
@@ -314,128 +632,298 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
     )));
   }, [itemAISettingsTarget]);
 
-  return (
-    <div className="min-w-0 space-y-8 animate-fade-in">
-      <PageHeader title="商品管理" description="监控并管理所有账号下的闲鱼商品。">
-        <div className="flex flex-wrap items-end gap-3">
-            <div className="flex min-w-[200px] flex-col gap-1.5">
-              <label htmlFor="item-current-account" className="px-1 text-[11px] font-extrabold tracking-wide text-gray-500">
-                当前账号
-              </label>
-              <div className="relative">
-                <User className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                <select
-                  id="item-current-account"
-                  aria-label="当前账号"
-                  className="ios-input w-full pl-10 pr-9 py-3 rounded-xl text-sm"
-                  value={selectedAccount}
-                  onChange={/* 账号切换仅影响列表与后续操作，不自动执行平台同步。 */ e => setSelectedAccount(e.target.value)}
-                >
-                  <option value="">全部账号（仅查看）</option>
-                  {accounts.map(/* 当前回调处理集合中的单个元素。 */ acc => (
-                      <option key={acc.id} value={acc.id}>{accountName(acc.id)}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <button
-                onClick={handleSync}
-                disabled={loading || !selectedAccount || !accountMap.has(selectedAccount)}
-                className="ios-btn-primary flex items-center gap-2 px-6 py-3 rounded-2xl font-bold shadow-lg shadow-blue-200 disabled:opacity-50"
-            >
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                同步商品
-            </button>
-            <button
-              onClick={openAddModal}
-              disabled={!selectedAccount || !accountMap.has(selectedAccount)}
-              className="px-5 py-3 rounded-2xl font-bold bg-gray-900 text-white hover:bg-gray-800 transition-colors flex items-center gap-2 shadow-lg disabled:opacity-50"
-            >
-              <Plus className="w-4 h-4" />
-              添加商品
-            </button>
-            <button
-              onClick={openPublishModal}
-              disabled={!selectedAccount || !accountMap.has(selectedAccount)}
-              className="px-5 py-3 rounded-2xl font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors flex items-center gap-2 shadow-lg shadow-emerald-100 disabled:opacity-50"
-            >
-              <PackagePlus className="w-4 h-4" />
-              发布商品
-            </button>
-            <button
-              onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => void openBatchModal()}
-              disabled={!selectedAccount || !accountMap.has(selectedAccount)}
-              className="px-5 py-3 rounded-2xl font-bold bg-brand text-white hover:bg-brand-highlight transition-colors flex items-center gap-2 shadow-lg shadow-blue-100 disabled:opacity-50"
-            >
-              <UploadCloud className="w-4 h-4" />
-              {recentBatch && ['running', 'canceling'].includes(recentBatch.status) ? '继续批量任务' : '批量铺货'}
-            </button>
-            {recentBatch && !['running', 'canceling'].includes(recentBatch.status) && (
-              <button
-                onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => void openRecentBatchResult()}
-                className="px-4 py-3 rounded-2xl font-bold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
-              >
-                最近批次结果
-              </button>
-            )}
-        </div>
-      </PageHeader>
+  if (showEditModal && selectedItem && ItemEditorPage) {
+    return (
+      <Suspense fallback={<div role="status" className="product-filter-panel">正在加载商品编辑页…</div>}>
+        <ItemEditorPage
+          key={itemSelectionKey(selectedItem)}
+          item={selectedItem}
+          draft={editForm}
+          accountName={accountNickname(selectedItem.cookie_id)}
+          busy={remoteItemBusy !== null}
+          onChange={setEditForm}
+          onBack={/* 返回商品列表，保留原来的筛选和分页状态。 */ () => setShowEditModal(false)}
+          onSaveLocal={handleSaveEdit}
+          onSaveRemote={handleSaveRemoteEdit}
+        />
+      </Suspense>
+    );
+  }
 
-      <div className="flex flex-wrap items-end gap-3">
-            <div className="flex min-w-[200px] flex-col gap-1.5">
-              <label htmlFor="item-rule-filter" className="px-1 text-[11px] font-extrabold tracking-wide text-gray-500">
-                自动化规则筛选
-              </label>
+  if ((initialLoading || loadError) && items.length === 0) {
+    return (
+      <div className="products-view min-w-0 animate-fade-in">
+        <section className="product-filter-panel product-loading-panel">
+          <div className="product-source-info"><span>正在读取商品、店铺与自动化规则，请稍候。</span></div>
+          <AsyncStateView
+            loading={initialLoading}
+            error={loadError}
+            empty={false}
+            onRetry={/* 首屏失败后重新并行读取商品、账号和规则。 */ () => setRetryGeneration(/* 当前值仅用于触发新的首屏读取代次。 */ current => current + 1)}
+            loadingText="正在加载商品数据"
+          />
+        </section>
+      </div>
+    );
+  }
+
+  // emptyText 根据当前标签、搜索和店铺条件给出准确空态，避免把所有空列表都解释成“暂无数据”。
+  const emptyText = itemStatusTab === 'sold'
+    ? '当前接口未返回库存或售罄字段，暂时无法展示已售罄商品'
+    : itemStatusTab === 'scheduled'
+      ? '当前接口未返回定时上架字段，暂时无法展示定时上架商品'
+      : appliedSearch
+        ? '没有找到匹配搜索词的商品'
+        : ruleFilter
+          ? '没有符合该规则筛选条件的商品'
+          : itemStatusTab === 'active'
+            ? '暂无经平台确认上架的商品；货架状态未核实的商品请在“全部商品”中查看'
+            : itemStatusTab === 'hidden'
+              ? '暂无经平台确认下架的商品'
+              : selectedAccount
+            ? '该店铺暂无商品数据'
+            : '暂无商品数据，请选择店铺进行同步';
+
+  return (
+    <div className="products-view min-w-0 animate-fade-in">
+      {loadError && items.length > 0 && (
+        <div role="alert" className="product-error-bar">
+          <span>{loadError}。当前展示的是上一次成功读取的数据。</span>
+          <button type="button" className="console-link-button" onClick={/* 读取部分失败时允许用户重试并保留现有数据。 */ () => setRetryGeneration(/* 当前值仅用于触发新的首屏读取代次。 */ current => current + 1)}>重新加载</button>
+        </div>
+      )}
+
+      <section className="product-filter-panel">
+        <div className="product-source-info">
+          <span>配置好发货内容后，请在 <strong>店铺 → 账号管理</strong> 中检查自动发货开关，并在 <strong>配置 → 自动化规则</strong> 中启用付款后发货规则。</span>
+        </div>
+        <div className="product-filter-toolbar">
+          <form role="search" aria-label="商品筛选" className="product-filter-row" onSubmit={/* 提交查询时阻止页面跳转，只应用本地筛选。 */ event => { event.preventDefault(); applySearch(); }}>
+            <label htmlFor="item-current-account" className="product-filter-field">
+              <span>店铺：</span>
               <select
-                id="item-rule-filter"
-                aria-label="按交易自动化规则筛选商品列表"
-                className="ios-input w-full px-4 py-3 rounded-xl text-sm"
-                value={ruleFilter}
-                onChange={/* event 是规则筛选下拉框的选择事件；切换后回到列表第一页。 */ event => { setRuleFilter(event.target.value as RuleCoverageFilter); setListPage(1); }}
+                id="item-current-account"
+                aria-label="当前账号"
+                value={selectedAccount}
+                onChange={/* 账号切换立即更新本地视图，闲鱼同步由节流副作用在打开页面后执行。 */ e => setSelectedAccount(e.target.value)}
               >
-                <option value="">全部商品</option>
-                <option value="any">未配置任何交易自动化</option>
-                {TRADE_AUTOMATION_TRIGGERS.map(/* entry 是一类可筛选的交易自动化触发器。 */ entry => (
-                  <option key={entry.trigger} value={entry.trigger}>未配置{entry.label}</option>
+                <option value="">全部</option>
+                {accounts.map(/* 当前回调处理集合中的单个元素。 */ acc => (
+                  <option key={acc.id} value={acc.id}>{accountName(acc.id)}</option>
                 ))}
               </select>
+            </label>
+            <label htmlFor="item-search" className="product-filter-field is-search">
+              <span>搜索：</span>
+              <input
+                id="item-search"
+                type="search"
+                value={searchDraft}
+                placeholder="请输入需要查询的内容"
+                onChange={/* 搜索框只更新草稿，点击查询后才生效。 */ event => setSearchDraft(event.target.value)}
+              />
+            </label>
+            <button type="submit" className="product-query-button">查询</button>
+          </form>
+        </div>
+      </section>
+
+      <section className="product-list-panel">
+        <div className="product-tabs" role="tablist" aria-label="商品状态">
+          {ITEM_STATUS_TABS.map(/* tab 是一个商品状态标签。 */ tab => (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              aria-selected={itemStatusTab === tab.key}
+              className={`product-tab ${itemStatusTab === tab.key ? 'is-active' : ''}`}
+              onClick={/* 切换标签页时回到第一页并清理旧勾选。 */ () => { setItemStatusTab(tab.key); setListPage(1); }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="product-strip">
+          <div className="product-strip-left">
+            <button type="button" className="product-btn is-primary" onClick={openAddModal} disabled={!selectedAccount || !accountMap.has(selectedAccount)}>添加商品</button>
+            <span title="当前后端未提供批量设置接口，请使用商品编辑或自动化规则"><button type="button" className="product-btn is-green" disabled>批量设置</button></span>
+            <span title="当前未接入批量上下架，请使用行内上架或下架操作"><button type="button" className="product-btn is-white" disabled>批量上下架</button></span>
+            <button type="button" className="product-btn is-red" onClick={/* 执行经确认的批量删除。 */ () => void handleBulkDelete()} disabled={bulkBusy || selectedItems.length === 0}>批量删除</button>
+            <button type="button" className="product-btn is-orange" onClick={/* 复制选中商品的 ID 列表。 */ () => void handleBulkCopy()} disabled={bulkBusy || selectedItems.length === 0}>批量复制</button>
+            {selectedItems.length > 0 && <span className="product-selected-count">已选 {selectedItems.length} 件</span>}
+          </div>
+          <div className="product-strip-right">
+            <div className="product-strip-filter" role="group" aria-label="商品规则筛选">
+              <label htmlFor="item-rule-filter">
+                <span>规则：</span>
+                <select
+                  id="item-rule-filter"
+                  aria-label="按交易自动化规则筛选商品列表"
+                  value={ruleFilter}
+                  onChange={/* event 是规则筛选下拉框的选择事件；切换后回到列表第一页。 */ event => { setRuleFilter(event.target.value as RuleCoverageFilter); setListPage(1); }}
+                >
+                  <option value="">全部</option>
+                  <option value="any">未配置任何交易自动化</option>
+                  {TRADE_AUTOMATION_TRIGGERS.map(/* entry 是一类可筛选的交易自动化触发器。 */ entry => (
+                    <option key={entry.trigger} value={entry.trigger}>未配置{entry.label}</option>
+                  ))}
+                </select>
+              </label>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <span className="px-1 text-[11px] font-extrabold tracking-wide text-gray-500">展示方式</span>
-              <div role="group" aria-label="商品展示方式" className="flex rounded-xl bg-gray-100 p-1">
-                {(['card', 'list'] as const).map(/* mode 是一种展示模式按钮。 */ mode => (
-                  <button key={mode} type="button" aria-pressed={viewMode === mode} onClick={/* 点击切换到该展示模式。 */ () => changeViewMode(mode)}
-                    className={`rounded-lg px-4 py-2 text-sm font-bold ${viewMode === mode ? 'bg-white text-gray-900 shadow' : 'text-gray-500'}`}>
-                    {mode === 'card' ? '卡片' : '列表'}
+            <div className="product-tools" ref={moreMenuRef}>
+              <button
+                type="button"
+                className={`product-btn is-white product-more-toggle ${moreMenuOpen ? 'is-open' : ''}`}
+                aria-haspopup="menu"
+                aria-expanded={moreMenuOpen}
+                onClick={/* 展开或收起收纳同步、发布、批量铺货等次级入口的菜单。 */ () => setMoreMenuOpen(/* previous 是菜单切换前的展开状态。 */ previous => !previous)}
+              >
+                更多操作
+              </button>
+              {moreMenuOpen && (
+                <div className="product-tools-menu" role="menu" aria-label="商品列表工具">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    aria-label="同步商品"
+                    onClick={/* 收起菜单后执行既有的平台商品同步。 */ () => { setMoreMenuOpen(false); handleSync(); }}
+                    disabled={loading || !selectedAccount || !accountMap.has(selectedAccount)}
+                  >
+                    <RefreshCw className={loading ? 'animate-spin' : ''} aria-hidden="true" />
+                    同步商品
                   </button>
-                ))}
-              </div>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    aria-label="发布商品"
+                    onClick={/* 收起菜单后打开既有单品发布表单。 */ () => { setMoreMenuOpen(false); openPublishModal(); }}
+                    disabled={!selectedAccount || !accountMap.has(selectedAccount)}
+                  >
+                    <PackagePlus aria-hidden="true" />
+                    发布商品
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={/* 收起菜单后打开既有批量铺货流程。 */ () => { setMoreMenuOpen(false); void openBatchModal(); }}
+                    disabled={!selectedAccount || !accountMap.has(selectedAccount)}
+                  >
+                    <UploadCloud aria-hidden="true" />
+                    {recentBatch && ['running', 'canceling'].includes(recentBatch.status) ? '继续批量任务' : '批量铺货'}
+                  </button>
+                  {recentBatch && !['running', 'canceling'].includes(recentBatch.status) && (
+                    <button type="button" role="menuitem" onClick={/* 收起菜单后查看最近一次批量铺货结果。 */ () => { setMoreMenuOpen(false); void openRecentBatchResult(); }}>
+                      最近批次结果
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={/* 收起菜单后串行刷新当前页缺失的浏览和想要数据。 */ () => { setMoreMenuOpen(false); void refreshVisibleMetrics(); }}
+                    disabled={metricsRefreshLabel !== null || remoteItemBusy !== null || loading || bulkBusy}
+                    title="按当前页逐件读取浏览和想要数据，曝光需在闲鱼卖家后台查看"
+                  >
+                    <RefreshCw className={metricsRefreshLabel ? 'animate-spin' : ''} aria-hidden="true" />
+                    {metricsRefreshLabel ? `刷新中 ${metricsRefreshLabel}` : '刷新指标'}
+                  </button>
+                  <div className="product-tools-divider" role="separator" />
+                  <div role="group" aria-label="商品展示方式" className="product-view-toggle">
+                    {(['card', 'list'] as const).map(/* mode 是一种展示模式按钮。 */ mode => (
+                      <button key={mode} type="button" aria-pressed={viewMode === mode} onClick={/* 点击切换到该展示模式并收起菜单。 */ () => { changeViewMode(mode); setMoreMenuOpen(false); }} className={viewMode === mode ? 'is-active' : ''}>
+                        {mode === 'card' ? '卡片视图' : '列表视图'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-      </div>
+          </div>
+        </div>
 
       {viewMode === 'list' ? (
-        <div className="space-y-4">
+        <div className="product-table-region">
+          <div className="product-metric-note">
+            <span>打开商品页会按账号节流自动同步列表并补齐本页浏览/想要；曝光接口未公开，仅列表明确返回时缓存，缺失显示“—”。</span>
+            <button
+              type="button"
+              className="product-metric-refresh-link"
+              onClick={/* 串行刷新当前页缺失的浏览和想要数据。 */ () => void refreshVisibleMetrics()}
+              disabled={metricsRefreshLabel !== null || remoteItemBusy !== null || loading || bulkBusy}
+            >
+              {metricsRefreshLabel ? `刷新中 ${metricsRefreshLabel}` : '刷新本页缺失指标'}
+            </button>
+          </div>
           <ItemTable
             items={pagedItems.rows}
             rules={shippingRules}
             accountNickname={accountNickname}
             formatPrice={formatItemPrice}
             aiStatusText={itemAIStatusText}
+            selectedKeys={selectedKeys}
+            onToggleSelection={toggleItemSelection}
+            allPageSelected={allPageSelected}
+            onToggleAll={togglePageSelection}
             onConfigureDelivery={onConfigureDelivery}
             onOpenAISettings={setItemAISettingsTarget}
             onEdit={handleEdit}
             onSetShelf={handleSetShelf}
+            onToggleBargain={/* 由表格行内小刀开关触发的平台开关切换。 */ (item, enabled) => void handleToggleBargain(item, enabled)}
+            onRefreshMetrics={/* 由表格行末按钮触发的单件指标刷新。 */ handleRefreshItemMetrics}
             remoteItemBusy={remoteItemBusy}
             onDelete={handleDelete}
-            emptyText={ruleFilter ? '没有符合该规则筛选条件的商品' : selectedAccount ? '该账号暂无商品数据' : '暂无商品数据，请选择账号进行同步'}
+            emptyText={emptyText}
           />
-          {pagedItems.totalPages > 1 && (
-            <div className="flex items-center justify-center gap-3 text-sm text-gray-600">
-              <button type="button" disabled={pagedItems.page <= 1} onClick={/* 跳转到上一页。 */ () => setListPage(pagedItems.page - 1)} className="rounded-lg bg-gray-100 px-3 py-1.5 font-bold disabled:opacity-40">上一页</button>
-              <span>第 {pagedItems.page} / {pagedItems.totalPages} 页，共 {visibleItems.length} 件</span>
-              <button type="button" disabled={pagedItems.page >= pagedItems.totalPages} onClick={/* 跳转到下一页。 */ () => setListPage(pagedItems.page + 1)} className="rounded-lg bg-gray-100 px-3 py-1.5 font-bold disabled:opacity-40">下一页</button>
-            </div>
-          )}
+          <div className="product-pager">
+            <span className="product-pager-summary">共 {visibleItems.length} 件商品 · 第 {pagedItems.page} / {pagedItems.totalPages} 页</span>
+            <form
+              className="product-pager-actions"
+              onSubmit={/* 分页器跳转表单只接受合法页码，提交后回到最近的有效页。 */ event => {
+                event.preventDefault();
+                // target 是从输入框读取的页码；空值或非法值不改变当前页。
+                const target = Number.parseInt(pageJumpDraft, 10);
+                if (Number.isFinite(target)) setListPage(Math.min(Math.max(1, target), pagedItems.totalPages));
+                setPageJumpDraft('');
+              }}
+            >
+              <label className="product-pager-size">
+                每页
+                <select
+                  aria-label="每页条数"
+                  value={listPageSize}
+                  onChange={/* 切换每页条数后由独立副作用回到第一页。 */ event => setListPageSize(Number(event.target.value))}
+                >
+                  {[15, 30, 50].map(/* size 是参考页支持的每页条数。 */ size => <option key={size} value={size}>{size} 条/页</option>)}
+                </select>
+              </label>
+              <button type="button" disabled={pagedItems.page <= 1} onClick={/* 跳转到上一页。 */ () => setListPage(pagedItems.page - 1)}>上一页</button>
+              {Array.from({ length: pagedItems.totalPages }, /* 生成当前页数对应的页码按钮。 */ (_, index) => index + 1).filter(/* page 是参考页策略下需要展示的页码。 */ page => page === 1 || page === pagedItems.totalPages || Math.abs(page - pagedItems.page) < 3).map(/* page 是可直接跳转的页码。 */ page => (
+                <button
+                  key={page}
+                  type="button"
+                  className={page === pagedItems.page ? 'is-current' : ''}
+                  aria-current={page === pagedItems.page ? 'page' : undefined}
+                  onClick={/* 跳转到指定页码。 */ () => setListPage(page)}
+                >
+                  {page}
+                </button>
+              ))}
+              <button type="button" disabled={pagedItems.page >= pagedItems.totalPages} onClick={/* 跳转到下一页。 */ () => setListPage(pagedItems.page + 1)}>下一页</button>
+              <label className="product-pager-jump">
+                前往
+                <input
+                  aria-label="页码"
+                  type="number"
+                  min={1}
+                  max={pagedItems.totalPages}
+                  value={pageJumpDraft}
+                  placeholder={String(pagedItems.page)}
+                  onChange={/* 输入框只保存草稿，点击跳转后才改变页码。 */ event => setPageJumpDraft(event.target.value)}
+                />
+                页
+              </label>
+              <button type="submit">跳转</button>
+            </form>
+          </div>
         </div>
       ) : (
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
@@ -452,7 +940,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
             const shelfState = itemShelfState(item);
             return (
               <div key={`${item.cookie_id}-${item.item_id}`} className="ios-card p-3 rounded-2xl hover:shadow-lg transition-all group relative flex flex-col">
-                  <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                  <div className="absolute top-2 right-2 z-10 flex gap-1 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
                       <button
                         onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => handleEdit(item)}
                         className="p-1.5 bg-white/90 backdrop-blur rounded-lg shadow-md text-gray-600 hover:bg-brand hover:text-white transition-colors"
@@ -508,7 +996,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
                         <span className="shrink-0">{itemAIStatusText[aiOverride]}</span>
                       </button>
                       <button
-                        onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => onConfigureDelivery(item)}
+                        onClick={/* 移动卡片的发货规则入口固定进入付款后发货规则。 */ () => onConfigureDelivery(item, 'order_paid')}
                         className={`w-full flex items-center justify-between gap-1 px-2.5 py-2 rounded-lg text-[11px] font-extrabold transition-all ${hasRule ? 'bg-gray-900 text-white hover:bg-black' : 'bg-brand text-white hover:bg-brand-highlight shadow-md shadow-blue-100'}`}
                       >
                         <span className="flex items-center gap-1.5"><Link2 className="w-3.5 h-3.5" />{deliveryRuleCount > 0 ? `${deliveryRuleCount} 条发货规则` : hasRule ? '查看发货规则' : '关联发货规则'}</span>
@@ -521,43 +1009,12 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
           {visibleItems.length === 0 && (
              <div className="col-span-full py-20 text-center text-gray-400">
                  <ShoppingBag className="w-12 h-12 mx-auto mb-4 opacity-30" />
-                  {ruleFilter ? '没有符合该规则筛选条件的商品' : selectedAccount ? '该账号暂无商品数据' : '暂无商品数据，请选择账号进行同步'}
+                  {emptyText}
              </div>
           )}
       </div>
       )}
-
-      {showEditModal && selectedItem && createPortal(
-        <div className="modal-overlay-centered">
-          <div className="modal-container" style={{maxWidth: '560px'}}>
-            <div className="modal-header flex items-center justify-between">
-              <div>
-                <h3 className="text-xl font-extrabold text-gray-900">编辑商品</h3>
-                <p className="text-xs text-gray-500 mt-1">ID: {selectedItem.item_id}</p>
-              </div>
-              <button onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => setShowEditModal(false)} className="p-2 rounded-xl hover:bg-gray-100 transition-colors">
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <div className="modal-body space-y-4">
-              <p className="rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">「仅保存本地」不会修改闲鱼；「同步修改到闲鱼」只同步实际改动的标题、价格和描述，分类及发货规则暂不支持平台编辑。虚拟商品可能受平台限制。</p>
-              <input className="w-full ios-input px-4 py-3 rounded-xl" placeholder="商品标题" value={editForm.item_title || ''} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setEditForm({...editForm, item_title: e.target.value})} />
-              <input className="w-full ios-input px-4 py-3 rounded-xl" placeholder="价格" value={editForm.item_price || ''} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setEditForm({...editForm, item_price: e.target.value})} />
-              <input className="w-full ios-input px-4 py-3 rounded-xl" placeholder="分类" value={editForm.item_category || ''} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setEditForm({...editForm, item_category: e.target.value})} />
-              <textarea className="w-full ios-input px-4 py-3 rounded-xl h-28 resize-none" placeholder="描述" value={editForm.item_description || ''} onChange={/* 当前回调处理用户交互或异步状态变化。 */ e => setEditForm({...editForm, item_description: e.target.value})} />
-            </div>
-            <div className="modal-footer">
-              <button disabled={remoteItemBusy !== null} onClick={handleSaveEdit} className="flex-1 rounded-xl bg-gray-100 px-4 py-3 font-bold text-gray-800 hover:bg-gray-200 disabled:opacity-40">
-                <Save className="w-4 h-4" />
-                仅保存本地
-              </button>
-              <button disabled={remoteItemBusy !== null} onClick={handleSaveRemoteEdit} className="ios-btn-primary flex-1 rounded-xl px-4 py-3 font-bold disabled:opacity-40">
-                {remoteItemBusy ? '正在同步…' : '同步修改到闲鱼'}
-              </button>
-            </div>
-          </div>
-        </div>
-      , document.body)}
+      </section>
 
       {showAddModal && createPortal(
         <div className="modal-overlay-centered">
@@ -710,7 +1167,7 @@ const ItemList: React.FC<ItemListProps> = ({ onConfigureDelivery, publishImagesE
               {LibraryPicker && <LibraryPicker open={libraryPickerOpen} maxSelect={Math.max(1, 9 - publishForm.images.length)} onClose={/* 关闭图片库选择器。 */ () => setLibraryPickerOpen(false)} onPick={/* 图片库文件追加到发布草稿，最多 9 张。 */ files => { setPublishForm(/* previous 是追加前的发布草稿。 */ previous => ({ ...previous, images: [...previous.images, ...files].slice(0, 9) })); setLibraryPickerOpen(false); }} />}
             </div>
             <div className="modal-footer">
-              <button disabled={publishing} onClick={handlePublishItem} className="w-full bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white px-6 py-3.5 rounded-xl font-bold flex items-center justify-center gap-2">
+              <button disabled={publishing} onClick={handlePublishItem} className="w-full bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-60 px-6 py-3.5 rounded-xl font-bold flex items-center justify-center gap-2">
                 <PackagePlus className="w-4 h-4" />
                 {publishing ? '正在发布...' : '发布到闲鱼'}
               </button>

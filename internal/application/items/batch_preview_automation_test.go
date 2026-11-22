@@ -179,12 +179,12 @@ func TestBatchPreviewSheetTemplateActionsEndToEnd(t *testing.T) {
 	// link 是第一行的网盘链接，包含会被旧解析器拆坏的分隔符。
 	link := "https://pan.example.com/s/abc?a=1;b=2:3"
 	// csvText 包含：合法行（两个模板共享变量）、缺变量与缺卡密的行、停用模板行、不可绑定卡密行、旧格式行。
-	csvText := "账号ID,标题,价格,图片,邮费模式,付款发货启用,付款发货内容,评价赠品启用,评价赠品内容,变量.link,变量.code,变量.gift,模板卡密.main,模板卡密.unused\n" +
-		"acc,网盘资源A,9.9,a.jpg,无需邮寄,是,T1,是,T2:60,\"" + link + "\",x7k2,礼物,9:2,9\n" +
-		"acc,网盘资源B,9.9,a.jpg,none,是,T1,否,,\"" + link + "\",,,,\n" +
-		"acc,网盘资源C,9.9,a.jpg,none,是,T3,否,,\"" + link + "\",,,,\n" +
-		"acc,网盘资源D,9.9,a.jpg,none,是,T1,否,,\"" + link + "\",x,,10,\n" +
-		"acc,旧格式商品,9.9,a.jpg,free,是,9:1,否,,,,,,\n"
+	csvText := "账号ID,标题,描述,价格,图片,邮费模式,付款发货启用,付款发货内容,评价赠品启用,评价赠品内容,变量.link,变量.code,变量.gift,模板卡密.main,模板卡密.unused\n" +
+		"acc,网盘资源A,网盘资源A的完整说明,9.9,a.jpg,无需邮寄,是,T1,是,T2:60,\"" + link + "\",x7k2,礼物,9:2,9\n" +
+		"acc,网盘资源B,网盘资源B的完整说明,9.9,a.jpg,none,是,T1,否,,\"" + link + "\",,,,\n" +
+		"acc,网盘资源C,网盘资源C的完整说明,9.9,a.jpg,none,是,T3,否,,\"" + link + "\",,,,\n" +
+		"acc,网盘资源D,网盘资源D的完整说明,9.9,a.jpg,none,是,T1,否,,\"" + link + "\",x,,10,\n" +
+		"acc,旧格式商品,旧格式商品的真实介绍,9.9,a.jpg,free,是,9:1,否,,,,,,\n"
 	// fields、parseErr 保存 CSV 解析结果。
 	fields, parseErr := ParseSheet([]byte(csvText), "batch.csv", 50)
 	if parseErr != nil {
@@ -269,7 +269,7 @@ func TestPreviewRowsTemplateActionRequiresCustomVariables(t *testing.T) {
 	// service 使用模板需求替身。
 	service := newSheetTemplateService(t)
 	// base 是合法结构化行的模板，没有表格模板输入。
-	base := BatchPreviewRow{CookieID: "acc", Title: "商品", Price: "1", Quantity: 1, PostageMode: "none", Images: []string{"a.jpg"}}
+	base := BatchPreviewRow{CookieID: "acc", Title: "商品", Description: "商品正文说明", Price: "1", Quantity: 1, PostageMode: "none", Images: []string{"a.jpg"}}
 	// complete 携带模板 1 需要的全部输入。
 	complete := base
 	complete.Automation.PaidDelivery = BatchPreviewCardAutomation{Enabled: true, Actions: []BatchPreviewCardAction{{ActionType: BatchActionSendTemplate, DeliveryTemplateID: 1, CustomVariables: map[string]string{"link": "l", "code": "c"}, TemplateBindings: []BatchPreviewTemplateBinding{{VariableKey: "main", CardID: 9, DeliveryCount: 1}}}}}

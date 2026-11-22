@@ -32,6 +32,10 @@ type CatalogItem struct {
 	MultiQuantityDelivery bool
 	// AIOverride 是商品级 AI 启停覆盖状态。
 	AIOverride string
+	// CreatedAt 是本地首次写入商品的数据库时间，空值表示未读取。
+	CreatedAt string
+	// UpdatedAt 是本地最近一次写入或同步商品的数据库时间，空值表示未读取。
+	UpdatedAt string
 }
 
 // CatalogRepository 定义商品列表和详情读取所需的最小持久化能力。

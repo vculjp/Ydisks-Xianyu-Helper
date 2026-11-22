@@ -2,7 +2,7 @@ import { X } from 'lucide-react';
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { useRunTimeline } from '../auditLog';
-import { auditActionLabel,auditEventTypeLabel,auditStatusMeta } from '../auditState';
+import { auditActionLabel,auditDisplaySummary,auditEventTypeLabel,auditStatusMeta } from '../auditState';
 import DeliveredCardsReveal from './DeliveredCardsReveal';
 import { SHOW_CARD_UI } from '../../../../shared/ui/featureVisibility';
 
@@ -52,7 +52,7 @@ const AuditRunDrawer: React.FC<AuditRunDrawerProps> = ({ runId, orderId, onClose
                   <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${meta.badgeClass}`}>{meta.label}</span>
                 </div>
                 <p className="text-xs text-gray-400">{new Date(event.createdAtMs).toLocaleString()}</p>
-                {event.summary ? <p className="text-sm text-gray-700">{event.summary}</p> : null}
+                {event.summary ? <p className="text-sm text-gray-700">{auditDisplaySummary(event.summary, event.actionType)}</p> : null}
                 {event.reason ? <p className="text-sm text-red-600">{event.reason}</p> : null}
               </div>
             );

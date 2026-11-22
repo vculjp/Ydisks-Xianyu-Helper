@@ -117,6 +117,15 @@ export default defineConfig({
           ) {
             return 'rules-reply-controls';
           }
+          // 规则页的 Agent、商品首响和模板变量面板体积较大且只在对应页签或弹窗使用，
+          // 独立分片避免规则主页面重新突破既有 81 KiB 预算。
+          if (
+            modulePath.includes('/app/features/rules/components/AgentReplyPanel.') ||
+            modulePath.includes('/app/features/rules/components/ItemGreetingPanel.') ||
+            modulePath.includes('/app/features/rules/components/TemplateVariantEditor.')
+          ) {
+            return 'rules-ai-panels';
+          }
           // 手动地点选择只在发布表单中使用，独立静态分片可控制商品页主分片预算并保留 feature 边界。
           if (
             modulePath.includes('/app/features/items/manualLocation.') ||

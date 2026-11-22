@@ -14,6 +14,7 @@ import { countHidden, selectionState, toggleAllVisible } from '../selection';
 import { defaultTemplateFilters, isTemplateFilterActive, queryTemplates, type TemplateFilters } from '../templateQuery';
 import type { LibraryCategoryFieldComponent, LibraryImage, LibraryLocationFieldComponent, ProductTemplate } from '../types';
 import { PageHeader } from '../../../../shared/ui/PageHeader';
+import { confirmAction,notify } from '../../../../shared/ui/feedback';
 
 /** imageSortOptions 是图片排序下拉的选项。 */
 const imageSortOptions = [
@@ -70,6 +71,10 @@ const ResourceLibrary: React.FC<ResourceLibraryProps> = ({ onBatchStarted, locat
   const [notice, setNotice] = useState<{ /** text 是提示文字。 */ text: string; /** tone 是提示语气。 */ tone: 'ok' | 'warn' }>({ text: '', tone: 'ok' });
   // batchControllerRef 取消进行中的批量删除；页面卸载时停止剩余请求。
   const batchControllerRef = useRef<AbortController | null>(null);
+  // [actionLocks, setActionLocks] 保存正在执行的页面动作键，用于确认框与保存流程防重复。
+  const [actionLocks, setActionLocks] = useState<ReadonlySet<string>>(() => new Set());
+  // actionLocksRef 是动作锁的同步副本，覆盖同帧快速点击。
+  const actionLocksRef = useRef(new Set<string>());
   useEffect(/* 卸载时取消尚未完成的批量删除。 */ () => /* 卸载清理取消批量删除。 */ () => batchControllerRef.current?.abort(), []);
   // options 仅在编辑器或发布弹窗打开时读取，避免进入页面就请求。
   const options = useAutomationOptions(editing !== undefined || publishing);
@@ -86,51 +91,114 @@ const ResourceLibrary: React.FC<ResourceLibraryProps> = ({ onBatchStarted, locat
   // visibleImageIds 是可见图片主键。
   const visibleImageIds = visibleImages.map(/* image 取主键。 */ image => image.id);
 
+  /** runLockedAction 在同一动作键空闲时执行任务，结束后释放锁并返回任务结果。 */
+  const runLockedAction = async <T,>(key: string, task: () => Promise<T>): Promise<T | undefined> => {
+    if (actionLocksRef.current.has(key)) return undefined;
+    actionLocksRef.current.add(key);
+    setActionLocks(/* current 是更新前的动作锁集合。 */ current => new Set(current).add(key));
+    try {
+      return await task();
+    } finally {
+      actionLocksRef.current.delete(key);
+      setActionLocks(/* current 是更新前的动作锁集合。 */ current => {
+        // next 是移除当前动作后的集合副本。
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
   /** toggleSelected 切换模板多选状态。 */
   const toggleSelected = (id: number): void => setSelectedIds(/* previous 是切换前的选择。 */ previous => previous.includes(id) ? previous.filter(/* item 移除该模板。 */ item => item !== id) : [...previous, id]);
 
   /** removeImage 经确认后删除图片。 */
   const removeImage = async (image: LibraryImage): Promise<void> => {
-    if (!confirm(`确定删除图片“${image.filename}”吗？仍被商品模板引用的图片无法删除。`)) return;
-    if (await images.remove(image.id)) {
-      setNotice({ text: '', tone: 'ok' });
-      setCheckedImageIds(/* previous 是删除前的勾选。 */ previous => previous.filter(/* id 移除已删除图片。 */ id => id !== image.id));
-    }
+    await runLockedAction(`image-delete-${image.id}`, async () => /* 执行单张图片确认删除。 */ {
+      // confirmed 表示用户是否确认删除当前图片。
+      const confirmed = await confirmAction({
+        title: '删除图片',
+        message: `确定删除图片“${image.filename}”吗？仍被商品模板引用的图片无法删除。`,
+        confirmText: '删除图片',
+        danger: true,
+      });
+      if (!confirmed) return;
+      if (await images.remove(image.id)) {
+        setNotice({ text: '', tone: 'ok' });
+        setCheckedImageIds(/* previous 是删除前的勾选。 */ previous => previous.filter(/* id 移除已删除图片。 */ id => id !== image.id));
+        notify('success', `已删除图片“${image.filename}”`);
+      } else {
+        notify('error', '删除图片失败，请查看页面错误提示');
+      }
+    });
   };
 
   /** removeCheckedImages 确认后串行批量删除勾选的图片；被引用的图片由服务端拒绝并在汇总中列出。 */
   const removeCheckedImages = async (): Promise<void> => {
+    if (actionLocksRef.current.has('images-delete-selected')) return;
     // referenced 是勾选项中被模板引用、预计会被拒绝的数量。
     const referenced = checkedImageIds.filter(/* id 判断是否被模板引用。 */ id => (usage.get(id) ?? 0) > 0).length;
-    if (!confirm(`确定删除选中的 ${checkedImageIds.length} 张图片吗？${referenced > 0 ? `其中 ${referenced} 张仍被商品模板引用，将无法删除。` : ''}`)) return;
-    batchControllerRef.current?.abort();
-    // controller 控制本次批量删除。
-    const controller = new AbortController();
-    batchControllerRef.current = controller;
-    // result 是批量删除汇总。
-    const result = await images.removeMany(checkedImageIds, controller.signal);
-    if (controller.signal.aborted) return;
-    setNotice(summarizeBatch(result, /* id 查找图片文件名。 */ id => images.images.find(/* image 按主键匹配。 */ image => image.id === id)?.filename ?? `#${id}`, '张'));
-    setCheckedImageIds(/* previous 是删除前的勾选。 */ previous => previous.filter(/* id 移除已删除图片。 */ id => !result.deleted.includes(id)));
+    await runLockedAction('images-delete-selected', async () => /* 执行勾选图片批量删除。 */ {
+      // confirmed 表示用户是否确认删除全部勾选图片。
+      const confirmed = await confirmAction({
+        title: '批量删除图片',
+        message: `确定删除选中的 ${checkedImageIds.length} 张图片吗？${referenced > 0 ? `其中 ${referenced} 张仍被商品模板引用，将无法删除。` : ''}`,
+        confirmText: '删除所选',
+        danger: true,
+      });
+      if (!confirmed) return;
+      batchControllerRef.current?.abort();
+      // controller 控制本次批量删除。
+      const controller = new AbortController();
+      batchControllerRef.current = controller;
+      // result 是批量删除汇总。
+      const result = await images.removeMany(checkedImageIds, controller.signal);
+      if (controller.signal.aborted) return;
+      // summary 是批量删除结果的可展示文案与语气。
+      const summary = summarizeBatch(result, /* id 查找图片文件名。 */ id => images.images.find(/* image 按主键匹配。 */ image => image.id === id)?.filename ?? `#${id}`, '张');
+      setNotice(summary);
+      notify(summary.tone === 'warn' ? 'warning' : 'success', summary.text);
+      setCheckedImageIds(/* previous 是删除前的勾选。 */ previous => previous.filter(/* id 移除已删除图片。 */ id => !result.deleted.includes(id)));
+    });
   };
 
   /** removeSelectedTemplates 确认后串行批量删除勾选的模板。 */
   const removeSelectedTemplates = async (): Promise<void> => {
-    if (!confirm(`确定删除选中的 ${selectedTemplates.length} 个模板吗？已发布的商品不受影响。`)) return;
-    batchControllerRef.current?.abort();
-    // controller 控制本次批量删除。
-    const controller = new AbortController();
-    batchControllerRef.current = controller;
-    // result 是批量删除汇总。
-    const result = await templates.removeMany(selectedTemplates.map(/* template 取主键。 */ template => template.id), controller.signal);
-    if (controller.signal.aborted) return;
-    setNotice(summarizeBatch(result, /* id 查找模板名称。 */ id => templates.templates.find(/* template 按主键匹配。 */ template => template.id === id)?.name ?? `#${id}`, '个'));
-    setSelectedIds(/* previous 是删除前的选择。 */ previous => previous.filter(/* id 移除已删除模板。 */ id => !result.deleted.includes(id)));
+    if (actionLocksRef.current.has('templates-delete-selected')) return;
+    await runLockedAction('templates-delete-selected', async () => /* 执行勾选模板批量删除。 */ {
+      // confirmed 表示用户是否确认删除全部勾选模板。
+      const confirmed = await confirmAction({
+        title: '批量删除模板',
+        message: `确定删除选中的 ${selectedTemplates.length} 个模板吗？已发布的商品不受影响。`,
+        confirmText: '删除所选',
+        danger: true,
+      });
+      if (!confirmed) return;
+      batchControllerRef.current?.abort();
+      // controller 控制本次批量删除。
+      const controller = new AbortController();
+      batchControllerRef.current = controller;
+      // result 是批量删除汇总。
+      const result = await templates.removeMany(selectedTemplates.map(/* template 取主键。 */ template => template.id), controller.signal);
+      if (controller.signal.aborted) return;
+      // summary 是批量删除结果的可展示文案与语气。
+      const summary = summarizeBatch(result, /* id 查找模板名称。 */ id => templates.templates.find(/* template 按主键匹配。 */ template => template.id === id)?.name ?? `#${id}`, '个');
+      setNotice(summary);
+      notify(summary.tone === 'warn' ? 'warning' : 'success', summary.text);
+      setSelectedIds(/* previous 是删除前的选择。 */ previous => previous.filter(/* id 移除已删除模板。 */ id => !result.deleted.includes(id)));
+    });
   };
 
   /** duplicateTemplate 复制模板并提示结果；失败原因由 templates.error 展示。 */
   const duplicateTemplate = async (template: ProductTemplate): Promise<void> => {
-    if (await templates.duplicate(template)) setNotice({ text: `已复制模板“${template.name}”。`, tone: 'ok' });
+    await runLockedAction(`template-duplicate-${template.id}`, async () => /* 执行模板复制。 */ {
+      if (await templates.duplicate(template)) {
+        setNotice({ text: `已复制模板“${template.name}”。`, tone: 'ok' });
+        notify('success', `已复制模板“${template.name}”`);
+      } else {
+        notify('error', '复制模板失败，请查看页面错误提示');
+      }
+    });
   };
 
   /** acceptImported 刷新模板列表并勾选新导入的模板，用户可直接“发布所选”选择账号发布。 */
@@ -139,19 +207,34 @@ const ResourceLibrary: React.FC<ResourceLibraryProps> = ({ onBatchStarted, locat
     setTemplateFilters(/* previous 是导入前的条件，清空搜索与筛选以免新模板被隐藏，保留排序。 */ previous => ({ ...defaultTemplateFilters, sort: previous.sort }));
     setSelectedIds(ids);
     setNotice({ text: `已导入 ${ids.length} 个商品模板并已勾选，可点击“发布所选”选择账号发布。`, tone: 'ok' });
+    notify('success', `已导入 ${ids.length} 个商品模板`);
   };
   /** removeTemplate 经确认后删除模板。 */
   const removeTemplate = async (template: ProductTemplate): Promise<void> => {
-    if (!confirm(`确定删除模板“${template.name}”吗？已发布的商品不受影响。`)) return;
-    if (await templates.remove(template.id)) setSelectedIds(/* previous 是删除前的选择。 */ previous => previous.filter(/* id 移除已删除模板。 */ id => id !== template.id));
+    await runLockedAction(`template-delete-${template.id}`, async () => /* 执行单个模板确认删除。 */ {
+      // confirmed 表示用户是否确认删除当前模板。
+      const confirmed = await confirmAction({
+        title: '删除模板',
+        message: `确定删除模板“${template.name}”吗？已发布的商品不受影响。`,
+        confirmText: '删除模板',
+        danger: true,
+      });
+      if (!confirmed) return;
+      if (await templates.remove(template.id)) {
+        setSelectedIds(/* previous 是删除前的选择。 */ previous => previous.filter(/* id 移除已删除模板。 */ id => id !== template.id));
+        notify('success', `已删除模板“${template.name}”`);
+      } else {
+        notify('error', '删除模板失败，请查看页面错误提示');
+      }
+    });
   };
 
   return (
     <div className="min-w-0 space-y-8 animate-fade-in">
       <PageHeader title="本地资源库" description="保存常用商品模板与图片，一键把同款商品铺到多个账号。">
-        <div className="flex gap-2" role="tablist" aria-label="资源库分类">
-          <button type="button" role="tab" aria-selected={tab === 'templates'} onClick={/* 切换到商品模板。 */ () => setTab('templates')} className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === 'templates' ? 'bg-gray-950 text-white' : 'ios-btn-secondary '}`}><Package className="h-4 w-4" />商品模板</button>
-          <button type="button" role="tab" aria-selected={tab === 'images'} onClick={/* 切换到图片库。 */ () => setTab('images')} className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold ${tab === 'images' ? 'bg-gray-950 text-white' : 'ios-btn-secondary '}`}><ImageIcon className="h-4 w-4" />图片库</button>
+        <div className="console-tabs console-tabs-compact" role="tablist" aria-label="资源库分类">
+          <button type="button" role="tab" aria-selected={tab === 'templates'} onClick={/* 切换到商品模板。 */ () => setTab('templates')} className={`console-tab inline-flex items-center gap-2 ${tab === 'templates' ? 'is-active' : ''}`}><Package className="h-4 w-4" />商品模板</button>
+          <button type="button" role="tab" aria-selected={tab === 'images'} onClick={/* 切换到图片库。 */ () => setTab('images')} className={`console-tab inline-flex items-center gap-2 ${tab === 'images' ? 'is-active' : ''}`}><ImageIcon className="h-4 w-4" />图片库</button>
         </div>
       </PageHeader>
 
@@ -159,12 +242,12 @@ const ResourceLibrary: React.FC<ResourceLibraryProps> = ({ onBatchStarted, locat
 
       {tab === 'templates' ? (
         <section className="space-y-4" aria-label="商品模板">
-          {templates.error && <div role="alert" className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{templates.error}</div>}
+          {templates.error && <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700"><span>{templates.error}</span><button type="button" onClick={/* 重新读取模板列表以恢复展示。 */ () => void templates.reload()} className="font-bold underline">重新加载</button></div>}
           <div className="flex flex-wrap gap-3">
-            <button type="button" onClick={/* 打开空白编辑器。 */ () => setEditing(null)} className="inline-flex items-center gap-2 rounded-xl ios-btn-primary px-4 py-3 text-sm font-bold "><Plus className="h-4 w-4" />新建模板</button>
+            <button type="button" disabled={actionLocks.has('template-save')} onClick={/* 打开空白编辑器。 */ () => setEditing(null)} className="inline-flex items-center gap-2 rounded-xl ios-btn-primary px-4 py-3 text-sm font-bold disabled:opacity-50"><Plus className="h-4 w-4" />新建模板</button>
             <button type="button" onClick={/* 打开 Excel 导入弹窗。 */ () => setImporting(true)} className="inline-flex items-center gap-2 rounded-xl ios-btn-secondary px-4 py-3 text-sm font-bold "><FileSpreadsheet className="h-4 w-4" />从 Excel 导入</button>
             <button type="button" disabled={selectedTemplates.length === 0} onClick={/* 打开发布弹窗。 */ () => setPublishing(true)} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-50"><Rocket className="h-4 w-4" />发布所选（{selectedTemplates.length}）</button>
-            <button type="button" disabled={selectedTemplates.length === 0 || templates.busy} onClick={/* 批量删除勾选的模板。 */ () => void removeSelectedTemplates()} className="inline-flex items-center gap-2 rounded-xl ios-btn-danger px-4 py-3 text-sm font-bold  disabled:opacity-50"><Trash2 className="h-4 w-4" />删除所选</button>
+            <button type="button" disabled={selectedTemplates.length === 0 || templates.busy || actionLocks.has('templates-delete-selected')} onClick={/* 批量删除勾选的模板。 */ () => void removeSelectedTemplates()} className="inline-flex items-center gap-2 rounded-xl ios-btn-danger px-4 py-3 text-sm font-bold  disabled:opacity-50"><Trash2 className="h-4 w-4" />删除所选</button>
           </div>
           <ListToolbar searchLabel="搜索模板名称、标题、描述或类目" query={templateFilters.query} onQueryChange={/* 更新搜索词。 */ query => setTemplateFilters(/* previous 是更新前的条件。 */ previous => ({ ...previous, query }))}
             shown={visibleTemplates.length} total={templates.templates.length} active={isTemplateFilterActive(templateFilters)}
@@ -181,6 +264,7 @@ const ResourceLibrary: React.FC<ResourceLibraryProps> = ({ onBatchStarted, locat
             {selectedIds.length > 0 && <button type="button" onClick={/* 清空全部选择。 */ () => setSelectedIds([])} className="rounded-lg ios-btn-secondary px-2.5 py-1.5 text-xs font-bold ">清空选择</button>}
           </div>
           <div className="grid gap-4 md:grid-cols-2">
+            {templates.loading && templates.templates.length === 0 && <div className="ios-card rounded-xl bg-white p-12 text-center text-sm text-gray-500 md:col-span-2" role="status">正在加载商品模板…</div>}
             {visibleTemplates.map(/* template 渲染一张模板卡片。 */ template => (
               <TemplateCard key={template.id} template={template} selected={selectedIds.includes(template.id)} disabled={templates.busy}
                 onToggle={/* 切换多选。 */ () => toggleSelected(template.id)} onEdit={/* 打开该模板编辑器。 */ () => setEditing(template)}
@@ -192,10 +276,10 @@ const ResourceLibrary: React.FC<ResourceLibraryProps> = ({ onBatchStarted, locat
         </section>
       ) : (
         <section className="space-y-4" aria-label="图片库">
-          {images.error && <div role="alert" className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{images.error}</div>}
+          {images.error && <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700"><span>{images.error}</span><button type="button" onClick={/* 重新读取图片库以恢复展示。 */ () => void images.reload()} className="font-bold underline">重新加载</button></div>}
           <div className="flex flex-wrap items-center gap-3">
-            <ImageUploadButton busy={images.busy} onUpload={images.upload} onResults={/* 上传摘要作为普通提示展示。 */ text => setNotice({ text, tone: 'ok' })} />
-            <button type="button" disabled={checkedImageIds.length === 0 || images.busy} onClick={/* 批量删除勾选的图片。 */ () => void removeCheckedImages()} className="inline-flex items-center gap-2 rounded-xl ios-btn-danger px-4 py-3 text-sm font-bold  disabled:opacity-50"><Trash2 className="h-4 w-4" />删除所选（{checkedImageIds.length}）</button>
+            <ImageUploadButton busy={images.busy || actionLocks.has('image-upload')} onUpload={/* 上传期间锁定动作，整批失败时保留错误提示。 */ files => runLockedAction('image-upload', /* 上传任务返回逐文件结果。 */ () => images.upload(files)).then(/* results 是上传任务结果，被锁定时按空结果处理。 */ results => results ?? [])} onResults={/* 上传摘要作为普通提示展示。 */ text => { setNotice({ text, tone: 'ok' }); notify(text.includes('失败') ? 'warning' : 'success', text); }} onError={/* 整批上传失败时展示可重试错误提示。 */ message => notify('error', message)} />
+            <button type="button" disabled={checkedImageIds.length === 0 || images.busy || actionLocks.has('images-delete-selected')} onClick={/* 批量删除勾选的图片。 */ () => void removeCheckedImages()} className="inline-flex items-center gap-2 rounded-xl ios-btn-danger px-4 py-3 text-sm font-bold  disabled:opacity-50"><Trash2 className="h-4 w-4" />删除所选（{checkedImageIds.length}）</button>
           </div>
           <ListToolbar searchLabel="搜索图片文件名" query={imageFilters.query} onQueryChange={/* 更新搜索词。 */ query => setImageFilters(/* previous 是更新前的条件。 */ previous => ({ ...previous, query }))}
             shown={visibleImages.length} total={images.images.length} active={isImageFilterActive(imageFilters)}
@@ -210,14 +294,23 @@ const ResourceLibrary: React.FC<ResourceLibraryProps> = ({ onBatchStarted, locat
             <span className="text-xs text-gray-500">已选 {checkedImageIds.length} 张{countHidden(checkedImageIds, visibleImageIds) > 0 ? `，其中 ${countHidden(checkedImageIds, visibleImageIds)} 张不在当前筛选中` : ''}；点击图片查看大图</span>
             {checkedImageIds.length > 0 && <button type="button" onClick={/* 清空全部勾选。 */ () => setCheckedImageIds([])} className="rounded-lg ios-btn-secondary px-2.5 py-1.5 text-xs font-bold ">清空选择</button>}
           </div>
-          {!images.loading && images.images.length === 0 ? <div className="ios-card rounded-xl bg-white p-12 text-center text-sm text-gray-500">图片库还是空的，上传几张图片开始使用。</div> : visibleImages.length === 0 ? <div className="ios-card rounded-xl bg-white p-12 text-center text-sm text-gray-500">没有匹配的图片，可以调整搜索词或点击“重置筛选”。</div> : <ImageGrid images={visibleImages} usage={usage} checkedIds={checkedImageIds} onCheck={/* 切换该图片的批量勾选。 */ image => setCheckedImageIds(/* previous 是切换前的勾选。 */ previous => previous.includes(image.id) ? previous.filter(/* id 移除该图片。 */ id => id !== image.id) : [...previous, image.id])} onDelete={/* 请求删除图片。 */ image => void removeImage(image)} disabled={images.busy} />}
+          {images.loading && images.images.length === 0 ? <div className="ios-card rounded-xl bg-white p-12 text-center text-sm text-gray-500" role="status">正在加载图片库…</div> : !images.loading && images.images.length === 0 ? <div className="ios-card rounded-xl bg-white p-12 text-center text-sm text-gray-500">图片库还是空的，上传几张图片开始使用。</div> : visibleImages.length === 0 ? <div className="ios-card rounded-xl bg-white p-12 text-center text-sm text-gray-500">没有匹配的图片，可以调整搜索词或点击“重置筛选”。</div> : <ImageGrid images={visibleImages} usage={usage} checkedIds={checkedImageIds} onCheck={/* 切换该图片的批量勾选。 */ image => setCheckedImageIds(/* previous 是切换前的勾选。 */ previous => previous.includes(image.id) ? previous.filter(/* id 移除该图片。 */ id => id !== image.id) : [...previous, image.id])} onDelete={/* 请求删除图片。 */ image => void removeImage(image)} disabled={images.busy} />}
         </section>
       )}
 
       {editing !== undefined && (
         <TemplateEditorDialog key={editing?.id ?? 'new'} template={editing} busy={templates.busy} options={options} categoryField={categoryField}
           onClose={/* 关闭并丢弃草稿。 */ () => setEditing(undefined)}
-          onSave={/* 保存成功后关闭编辑器。 */ async body => { if (await templates.save(editing?.id ?? null, body)) setEditing(undefined); }} />
+          onSave={/* 保存成功后关闭编辑器并提示结果。 */ async body => {
+            // saved 表示模板保存请求是否成功完成。
+            const saved = await runLockedAction('template-save', /* 保存当前模板草稿。 */ () => templates.save(editing?.id ?? null, body));
+            if (saved) {
+              setEditing(undefined);
+              notify('success', editing?.id ? '商品模板已更新' : '商品模板已创建');
+            } else if (saved === false) {
+              notify('error', '保存商品模板失败，请查看页面错误提示');
+            }
+          }} />
       )}
       {importing && (
         <TemplateImportDialog onClose={/* 关闭导入弹窗。 */ () => setImporting(false)} onImported={/* 刷新列表并勾选新模板。 */ ids => void acceptImported(ids)} />

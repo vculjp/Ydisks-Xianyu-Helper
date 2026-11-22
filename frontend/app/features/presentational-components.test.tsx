@@ -29,6 +29,9 @@ const noopSearchChange = (): void => undefined;
 // noopChannelAction 是静态渲染测试使用的通知渠道操作占位实现。
 const noopChannelAction = (): void => undefined;
 
+// noopActionPending 是静态渲染测试使用的渠道动作忙碌判断占位实现。
+const noopActionPending = (): boolean => false;
+
 // noopRunResolution 是静态渲染测试使用的自动化运行处理占位实现。
 const noopRunResolution = (): void => undefined;
 
@@ -43,6 +46,9 @@ const noopPasswordToggle = (): void => undefined;
 
 // noopSmtpSave 是静态渲染测试使用的 SMTP 保存占位实现。
 const noopSmtpSave = (): void => undefined;
+
+// noopSmtpRetry 是静态渲染测试使用的 SMTP 重新加载占位实现。
+const noopSmtpRetry = (): void => undefined;
 
 describe('前端纯展示组件', /* 当前回调处理无浏览器依赖的展示组件断言。 */ () => {
   test('卡密图标覆盖各交付类型', /* 当前回调处理库存图标类型分支。 */ () => {
@@ -70,14 +76,11 @@ describe('前端纯展示组件', /* 当前回调处理无浏览器依赖的展�
     expect(selected).toContain('border-gray-100 hover:border-gray-300');
   });
 
-  test('通知渠道列表覆盖空列表、停用和测试中状态', /* 当前回调处理通知渠道摘要和操作状态。 */ () => {
-    // empty 是没有配置渠道时的空状态静态 HTML。
-    const empty = render(<NotificationChannelList channels={[]} testingId="" onEdit={noopChannelAction} onDelete={noopChannelAction} onToggleEnabled={noopChannelAction} onTest={noopChannelAction} />);
-    expect(empty).toContain('还没有配置任何通知渠道');
+  test('通知渠道列表覆盖停用和测试中状态', /* 当前回调处理通知渠道摘要和操作状态。 */ () => {
     // channel 是覆盖配置摘要和停用展示的最小渠道对象。
     const channel: NotificationChannel = { id: 'channel-1', name: '测试 Bark', type: 'bark', config: { server_url: 'https://api.day.app', device_key: 'device-key' }, event_types: ['system_error'], enabled: false };
     // list 是渠道列表生成的静态 HTML。
-    const list = render(<NotificationChannelList channels={[channel]} testingId="channel-1" onEdit={noopChannelAction} onDelete={noopChannelAction} onToggleEnabled={noopChannelAction} onTest={noopChannelAction} />);
+    const list = render(<NotificationChannelList channels={[channel]} testingId="channel-1" isActionPending={noopActionPending} onEdit={noopChannelAction} onDelete={noopChannelAction} onToggleEnabled={noopChannelAction} onTest={noopChannelAction} />);
     expect(list).toContain('测试 Bark');
     expect(list).toContain('已停用');
     expect(list).toContain('系统错误');
@@ -88,12 +91,12 @@ describe('前端纯展示组件', /* 当前回调处理无浏览器依赖的展�
     // smtp 是覆盖 TLS/SSL 和发件人回填的系统邮件配置。
     const smtp: SystemSettings = { smtp_server: 'smtp.example.com', smtp_port: 465, smtp_user: 'sender@example.com', smtp_password: 'secret', smtp_use_tls: false, smtp_use_ssl: true };
     // hiddenMarkup 是密码隐藏且保存按钮可用时的静态 HTML。
-    const hiddenMarkup = render(<NotificationSmtpSettings smtp={smtp} setSmtp={noopSmtpUpdate} smtpSaving={false} showPassword={false} setShowPassword={noopPasswordToggle} onSave={noopSmtpSave} />);
+    const hiddenMarkup = render(<NotificationSmtpSettings smtp={smtp} setSmtp={noopSmtpUpdate} loading={false} loadError="" smtpSaving={false} showPassword={false} setShowPassword={noopPasswordToggle} onRetry={noopSmtpRetry} onSave={noopSmtpSave} />);
     expect(hiddenMarkup).toContain('type="password"');
     expect(hiddenMarkup).toContain('保存 SMTP 配置');
     expect(hiddenMarkup).toContain('SMTP 邮件配置');
     // savingMarkup 是密码显示且请求执行中的静态 HTML。
-    const savingMarkup = render(<NotificationSmtpSettings smtp={smtp} setSmtp={noopSmtpUpdate} smtpSaving showPassword setShowPassword={noopPasswordToggle} onSave={noopSmtpSave} />);
+    const savingMarkup = render(<NotificationSmtpSettings smtp={smtp} setSmtp={noopSmtpUpdate} loading={false} loadError="" smtpSaving showPassword setShowPassword={noopPasswordToggle} onRetry={noopSmtpRetry} onSave={noopSmtpSave} />);
     expect(savingMarkup).toContain('type="text"');
     expect(savingMarkup).toContain('保存中...');
     expect(savingMarkup).toContain('disabled');

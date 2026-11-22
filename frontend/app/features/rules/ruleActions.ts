@@ -1,4 +1,4 @@
-import { useCallback,useEffect,useMemo,useRef,useState,type Dispatch,type SetStateAction } from 'react';
+import { useCallback,useEffect,useMemo,useState,type Dispatch,type SetStateAction } from 'react';
 import {
 clearDefaultReplyRecords,
 deleteDefaultReply,
@@ -17,11 +17,43 @@ updateShippingRule,
 import { precheckRegexpExpression } from './regexpPrecheck';
 import { finishRuleSubmission,idleRuleSubmitState,startRuleSubmission,type RuleSubmitState } from './interactionState';
 import type { AutomationTriggerType,Card,DefaultReplyForm,DeliveryTemplate,Item,ReplyRule,RulesProps,RulesTab,ShippingRule,ShippingVariant } from './types';
-import { adjustPriceTarget,boolFlag,buildAdjustPriceConfig,buildReviewConfig,cardActionsForTrigger,defaultRuleName,emptyVariant,hasCompleteTemplateBindings,isValidAdjustPrice,parseJSONObject,shouldReplaceGeneratedName,triggerMeta,withAllItemsConfirmation } from './utils';
-import type { ToastValue } from './components/Toast';
+import { adjustPriceTarget,boolFlag,buildAdjustPriceConfig,buildReviewConfig,cardActionsForTrigger,defaultRuleName,emptyVariant,hasCompleteTemplateBindings,isValidAdjustPrice,isVisibleShippingVariant,parseJSONObject,shouldReplaceGeneratedName,triggerMeta,withAllItemsConfirmation } from './utils';
+import { SHOW_CARD_UI } from '../../../shared/ui/featureVisibility';
+import { confirmAction,notify } from '../../../shared/ui/feedback';
+import { useAsyncAction } from '../../../shared/ui/useAsyncAction';
 
-// RULE_TOAST_DURATION_MS 是关键词回复操作轻提示的展示时长（毫秒）。
-const RULE_TOAST_DURATION_MS = 3000;
+// rulesActionErrorMessage 把未知业务异常转换为可展示的中文失败文案。
+const rulesActionErrorMessage = (error: unknown, fallback: string): string => {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  return fallback;
+};
+
+// ruleActionKey 统一生成动作 Hook 与页面共用的业务 pending 键，避免按钮禁用状态和请求键不一致。
+export const ruleActionKey = {
+  // automationSave 是自动化规则保存的业务键。
+  automationSave: 'automation:save',
+  // automationDelete 生成指定自动化规则的删除业务键。
+  automationDelete: (id: string): string => `automation:delete:${id}`,
+  // automationToggle 生成指定自动化规则的启停业务键。
+  automationToggle: (id: string): string => `automation:toggle:${id}`,
+  // issueRun 生成指定运行异常和恢复决策的业务键。
+  issueRun: (id: number, resolution: 'continue' | 'retry' | 'cancel'): string => `issue:run:${id}:${resolution}`,
+  // issueDeferred 生成指定延迟任务和恢复决策的业务键。
+  issueDeferred: (id: number, resolution: 'retry' | 'dismiss'): string => `issue:deferred:${id}:${resolution}`,
+  // replySave 生成关键词回复新建或更新的保存业务键。
+  replySave: (id?: string | number): string => `reply:save:${id ?? 'new'}`,
+  // replyDelete 生成指定关键词回复的删除业务键。
+  replyDelete: (id: string): string => `reply:delete:${id}`,
+  // defaultOpen 生成指定账号默认回复读取的业务键。
+  defaultOpen: (cookieID: string): string => `default:open:${cookieID}`,
+  // defaultSave 生成指定账号默认回复保存的业务键。
+  defaultSave: (cookieID: string): string => `default:save:${cookieID}`,
+  // defaultDelete 生成指定账号默认回复删除的业务键。
+  defaultDelete: (cookieID: string): string => `default:delete:${cookieID}`,
+  // defaultClearRecords 生成指定账号默认回复记录清理的业务键。
+  defaultClearRecords: (cookieID: string): string => /* 清理记录业务键。 */ `default:clear-records:${cookieID}`,
+} as const;
 
 // RuleActionsOptions 描述规则动作协调器依赖的页面数据、刷新函数和外部联动目标。
 export interface RuleActionsOptions {
@@ -77,6 +109,22 @@ export interface RuleActionsState {
   replySubmitState: RuleSubmitState;
   // defaultReplySubmitState 保存默认回复提交状态。
   defaultReplySubmitState: RuleSubmitState;
+  // automationSaveError 保存自动化规则表单最近一次校验或保存失败的可见文案。
+  automationSaveError: string;
+  // replySaveError 保存关键词回复表单最近一次校验或保存失败的可见文案。
+  replySaveError: string;
+  // defaultReplySaveError 保存默认回复表单最近一次校验或保存失败的可见文案。
+  defaultReplySaveError: string;
+  // defaultReplyLoading 表示默认回复弹窗是否正在读取指定账号配置。
+  defaultReplyLoading: boolean;
+  // defaultReplyLoadError 保存默认回复弹窗读取失败文案；非空时只允许重试，不允许编辑或保存。
+  defaultReplyLoadError: string;
+  // defaultReplyReady 表示默认回复已读取成功，表单字段和保存按钮可以操作。
+  defaultReplyReady: boolean;
+  // isPending 判断指定业务键是否正在提交；页面用它禁用对应按钮并显示处理中状态。
+  isPending: (key: string) => boolean;
+  // retryDefaultReplyLoad 重新读取当前默认回复弹窗所属账号的配置。
+  retryDefaultReplyLoad: () => Promise<void>;
   // editingAutomationRule 保存当前自动化规则草稿。
   editingAutomationRule: Partial<ShippingRule> | null;
   // setEditingAutomationRule 更新自动化规则草稿。
@@ -135,10 +183,6 @@ export interface RuleActionsState {
   handleSaveReplyRule: () => Promise<void>;
   // handleDeleteReply 删除指定关键词回复规则。
   handleDeleteReply: (id: string) => Promise<void>;
-  // toast 保存关键词回复操作的轻提示内容。
-  toast: ToastValue | null;
-  // showReplyToast 展示关键词回复操作的轻提示。
-  showReplyToast: (type: ToastValue['type'], text: string) => void;
   // openDefaultReplyModal 打开指定账号的默认回复弹窗。
   openDefaultReplyModal: (cookieID?: string) => Promise<void>;
   // handleSaveDefaultReply 保存当前默认回复配置。
@@ -185,24 +229,23 @@ export const useRuleActions = ({
   const [editingReplyRule, setEditingReplyRule] = useState<Partial<ReplyRule> | null>(null);
   // defaultForm 保存当前默认回复草稿。
   const [defaultForm, setDefaultForm] = useState<DefaultReplyForm>({ cookie_id: '', enabled: false, reply_content: '', reply_once: false, reply_image_url: '', reply_library_image_id: 0 });
-  // toast 保存关键词回复操作的轻提示内容。
-  const [toast, setToast] = useState<ToastValue | null>(null);
-  // toastTimer 保存轻提示自动消失的定时器句柄。
-  const toastTimer = useRef<number | null>(null);
-
-  // showReplyToast 展示关键词回复操作的轻提示并重置自动消失计时。
-  const showReplyToast = useCallback(/* showToastAction 写入轻提示状态。 */ (type: ToastValue['type'], text: string) => {
-    setToast({ type, text });
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(/* 当前回调在提示展示结束后清理状态。 */ () => {
-      toastTimer.current = null;
-      setToast(null);
-    }, RULE_TOAST_DURATION_MS);
-  }, []);
-
-  useEffect(/* 当前副作用在动作协调器卸载时清理未触发的轻提示定时器。 */ () => /* 当前回调清理轻提示定时器。 */ () => {
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-  }, []);
+  // automationSaveError 保存自动化规则表单的行内校验或保存错误。
+  const [automationSaveError, setAutomationSaveError] = useState('');
+  // replySaveError 保存关键词回复表单的行内校验或保存错误。
+  const [replySaveError, setReplySaveError] = useState('');
+  // defaultReplySaveError 保存默认回复表单的行内校验或保存错误。
+  const [defaultReplySaveError, setDefaultReplySaveError] = useState('');
+  // defaultReplyLoading 表示默认回复弹窗正在读取服务端配置。
+  const [defaultReplyLoading, setDefaultReplyLoading] = useState(false);
+  // defaultReplyLoadError 保存默认回复弹窗读取失败文案。
+  const [defaultReplyLoadError, setDefaultReplyLoadError] = useState('');
+  // defaultReplyReady 表示默认回复读取成功并允许编辑保存。
+  const [defaultReplyReady, setDefaultReplyReady] = useState(false);
+  // defaultReplyAccountId 保存默认回复弹窗当前读取的账号，供失败重试使用。
+  const [defaultReplyAccountId, setDefaultReplyAccountId] = useState('');
+  // isActionPending 查询指定业务键是否正在提交，页面按钮使用同一键禁用。
+  // runAction 执行按业务键加锁的异步动作，并统一处理成功/失败提示。
+  const { isPending: isActionPending, run: runAction } = useAsyncAction();
 
   // selectedRuleItem 查找当前自动化规则草稿绑定的商品。
   const selectedRuleItem = useMemo(
@@ -238,6 +281,7 @@ export const useRuleActions = ({
 
   // openAutomationRule 将已有规则复制为草稿并打开编辑弹窗。
   const openAutomationRule = useCallback(/* openRuleAction 打开已有规则草稿。 */ (rule: ShippingRule) => {
+    setAutomationSaveError('');
     // trigger 保存已有规则的触发类型。
     const trigger = (rule.trigger_type || 'order_paid') as AutomationTriggerType;
     setEditingAutomationRule({
@@ -253,6 +297,8 @@ export const useRuleActions = ({
   // useEffect 处理商品页跳转到规则页时的异步加载和取消。
   useEffect(/* 当前回调处理外部商品联动。 */ () => {
     if (!initialDeliveryTarget) return;
+    // targetTrigger 是商品页明确要求的规则类型；旧链接没有该字段时保持付款后发货。
+    const targetTrigger: AutomationTriggerType = initialDeliveryTarget.trigger === 'order_created' ? 'order_created' : 'order_paid';
     // cancelled 标记外部跳转加载是否已经失效。
     let cancelled = false;
     // openLinkedRule 加载跳转目标对应的规则、商品和卡密数据。
@@ -263,7 +309,7 @@ export const useRuleActions = ({
       try {
         // ruleList 保存当前账号的自动化规则。
         const [ruleList, itemList, cardList] = await Promise.all([
-          getShippingRules(), getItems(), getCards().catch(/* error 表示卡密参考数据加载异常。 */ error => {
+          getShippingRules(), getItems(), (SHOW_CARD_UI ? getCards() : Promise.resolve([] as Card[])).catch(/* error 表示卡密参考数据加载异常。 */ error => {
             console.warn('加载卡密库存失败，不阻断打开自动化规则', error);
             return [];
           }),
@@ -272,23 +318,23 @@ export const useRuleActions = ({
         setAutomationRules(ruleList);
         setItems(itemList);
         setCards(cardList);
-        // rule 保存跳转商品已有的订单支付规则。
-        const rule = ruleList.find(/* 当前回调查找跳转目标规则。 */ candidate => candidate.cookie_id === initialDeliveryTarget.cookieId && candidate.item_id === initialDeliveryTarget.itemId && candidate.trigger_type === 'order_paid');
+        // rule 保存跳转商品已有的目标类型规则。
+        const rule = ruleList.find(/* 当前回调查找跳转目标规则。 */ candidate => candidate.cookie_id === initialDeliveryTarget.cookieId && candidate.item_id === initialDeliveryTarget.itemId && candidate.trigger_type === targetTrigger);
         if (rule) {
           openAutomationRule(rule);
         } else {
           // item 保存跳转商品的参考数据。
           const item = itemList.find(/* 当前回调查找跳转目标商品。 */ candidate => candidate.cookie_id === initialDeliveryTarget.cookieId && candidate.item_id === initialDeliveryTarget.itemId);
           setEditingAutomationRule({
-            ...buildAutomationDraft('order_paid', initialDeliveryTarget.cookieId, initialDeliveryTarget.itemId),
+            ...buildAutomationDraft(targetTrigger, initialDeliveryTarget.cookieId, initialDeliveryTarget.itemId),
             item_title: item?.item_title || '', item_keyword: item?.item_title || initialDeliveryTarget.itemId,
-            name: defaultRuleName('order_paid', item?.item_title || initialDeliveryTarget.itemId),
+            name: defaultRuleName(targetTrigger, item?.item_title || initialDeliveryTarget.itemId),
           });
           setShowAutomationModal(true);
         }
       } catch (/* error 表示外部联动加载异常。 */ error) {
         console.error('打开商品自动化规则失败', error);
-        alert('无法加载该商品的自动化规则');
+        notify('error', '无法加载该商品的自动化规则');
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -303,9 +349,10 @@ export const useRuleActions = ({
   // openNewAutomationRule 创建指定类型的规则草稿并打开弹窗。
   const openNewAutomationRule = useCallback(/* openNewAction 创建新规则草稿。 */ (trigger: AutomationTriggerType = 'order_paid') => {
     if (!selectedAccountId) {
-      alert('请先选择账号');
+      notify('error', '请先选择账号');
       return;
     }
+    setAutomationSaveError('');
     setEditingAutomationRule(buildAutomationDraft(trigger));
     setShowAutomationModal(true);
   }, [buildAutomationDraft, selectedAccountId]);
@@ -388,98 +435,212 @@ export const useRuleActions = ({
     });
   }, [displayVariants, editingAutomationRule, isMultiSpecRule]);
 
+  // showAutomationValidationError 把自动化规则校验失败同时写入行内错误和统一提示。
+  const showAutomationValidationError = useCallback(/* showAutomationValidationAction 展示自动化表单校验错误。 */ (message: string) => {
+    setAutomationSaveError(message);
+    notify('error', message);
+  }, []);
+
+  // refreshAutomationListAfterMutation 在业务动作已成功后刷新列表；刷新失败只提示数据未更新。
+  const refreshAutomationListAfterMutation = useCallback(/* refreshAutomationListAction 刷新自动化列表并保留业务结果。 */ async (warningText: string) => {
+    try {
+      await loadAutomationRules();
+    } catch {
+      notify('warning', warningText);
+    }
+  }, [loadAutomationRules]);
+
+  // refreshAutomationAfterSave 在保存成功后刷新列表和参考数据；刷新失败不得否定保存成功。
+  const refreshAutomationAfterSave = useCallback(/* refreshAutomationAfterSaveAction 刷新保存后的规则和参考数据。 */ async (warningText: string) => {
+    // refreshResults 保存两个刷新请求的独立结果，任一失败仍等待另一请求收口。
+    const refreshResults = await Promise.allSettled([loadAutomationRules(), loadReferenceData()]);
+    if (refreshResults.some(/* result 是单个刷新请求的完成状态。 */ result => result.status === 'rejected')) notify('warning', warningText);
+  }, [loadAutomationRules, loadReferenceData]);
+
   // handleSaveAutomationRule 校验并保存当前自动化规则。
   const handleSaveAutomationRule = useCallback(/* saveRuleAction 保存自动化规则。 */ async () => {
-    if (!editingAutomationRule || automationSubmitState.submitting) return;
+    if (!editingAutomationRule) return;
+    // saveKey 是自动化规则保存的全局业务键，阻断连续点击。
+    const saveKey = ruleActionKey.automationSave;
+    if (isActionPending(saveKey)) return;
     // trigger 保存当前规则触发类型。
     const trigger = (editingAutomationRule.trigger_type || 'order_paid') as AutomationTriggerType;
-    if (!editingAutomationRule.cookie_id) return alert('请选择账号');
+    if (!editingAutomationRule.cookie_id) {
+      showAutomationValidationError('请选择账号');
+      return;
+    }
     // variants 保存当前规格列表。
     const variants = editingAutomationRule.variants?.length ? editingAutomationRule.variants : [];
+    // editableVariants 只校验本次精简界面实际可编辑的模板，旧库存动作原样保留且不阻断其他设置。
+    const editableVariants = variants.filter(/* variant 是一个需要用户校验的可见动作。 */ variant => isVisibleShippingVariant(variant, deliveryTemplates));
     if (trigger !== 'review_missing_timeout' && trigger !== 'order_created') {
-      if (!variants.length || variants.some(/* 当前回调校验卡密组或模板是否已选择。 */ variant => variant.delivery_mode === 'template' ? !variant.delivery_template_id : !variant.card_id)) return alert('请选择发货卡密库存或发货模板');
-      if (variants.some(/* 当前回调校验模板变量是否绑定完整。 */ variant => {
+      // 新建规则不能借隐藏的历史动作绕过模板校验；已有规则则允许保留原样的旧动作。
+      if (!SHOW_CARD_UI && !editingAutomationRule.id && editableVariants.length !== variants.length) {
+        showAutomationValidationError('请选择无需库存绑定的发货模板');
+        return;
+      }
+      if (!variants.length || editableVariants.some(/* 当前回调只校验可见发货内容或模板是否有效。 */ variant => variant.delivery_mode === 'template' ? !variant.delivery_template_id : !variant.card_id)) {
+        showAutomationValidationError('请选择发货模板');
+        return;
+      }
+      if (editableVariants.some(/* 当前回调校验模板变量是否绑定完整。 */ variant => {
         if (variant.delivery_mode !== 'template') return false;
         // template 保存当前变体选择的模板摘要。
         const template = deliveryTemplates.find(/* 模板候选项查找器定位当前变体模板。 */ candidate => candidate.id === variant.delivery_template_id);
         return !template || !hasCompleteTemplateBindings(template.keys, variant.template_bindings);
-      })) return alert('请为发货模板的每个变量绑定卡密库存');
-      if (variants.some(/* 当前回调校验模板自定义变量键值是否完整。 */ variant => {
+      })) {
+        showAutomationValidationError('当前模板含有无法在精简界面配置的变量，请改用仅含自定义变量的发货模板');
+        return;
+      }
+      if (editableVariants.some(/* 当前回调校验模板自定义变量键值是否完整。 */ variant => {
         // template 保存当前变体选择的发货模板摘要。
         const template = deliveryTemplates.find(/* templateCandidate 定位当前模板。 */ templateCandidate => templateCandidate.id === variant.delivery_template_id);
         // customKeys 保存模板引用的自定义变量键。
         const customKeys = template?.custom_keys || [];
         return variant.delivery_mode === 'template' && customKeys.some(/* key 检查规则是否填写了对应的自定义字符串。 */ key => !variant.custom_variables?.[key]?.trim());
-      })) return alert('请填写发货模板要求的全部自定义变量');
-      if (isMultiSpecRule && variants.some(/* 当前回调校验多规格字段。 */ variant => !variant.spec_name.trim() || !variant.spec_value.trim())) return alert('多规格商品必须填写每一行的规格名称和规格值');
+      })) {
+        showAutomationValidationError('请填写发货模板要求的全部自定义变量');
+        return;
+      }
+      if (isMultiSpecRule && editableVariants.some(/* 当前回调校验可见多规格字段。 */ variant => !variant.spec_name.trim() || !variant.spec_value.trim())) {
+        showAutomationValidationError('多规格商品必须填写每一行的规格名称和规格值');
+        return;
+      }
     }
     if (trigger === 'review_missing_timeout') {
       // text 保存求评价动作的文案。
       const text = editingAutomationRule.actions?.find(/* 当前回调查找求评价文案动作。 */ action => action.action_type === 'send_text')?.message_template || '';
-      if (!text.trim()) return alert('请填写求评价文案');
+      if (!text.trim()) {
+        showAutomationValidationError('请填写求评价文案');
+        return;
+      }
     }
     // saveActions 保存实际提交的动作列表；拍下改价规则会剔除未填写文案的可选提醒动作。
     let saveActions = editingAutomationRule.actions?.length ? editingAutomationRule.actions : cardActionsForTrigger(trigger, editingAutomationRule.card_group_id || 0);
     if (trigger === 'order_created') {
-      if (!isValidAdjustPrice(adjustPriceTarget(saveActions))) return alert('请填写 0.01 到 1000000 元、最多两位小数的目标价格');
+      if (!isValidAdjustPrice(adjustPriceTarget(saveActions))) {
+        showAutomationValidationError('请填写 0.01 到 1000000 元、最多两位小数的目标价格');
+        return;
+      }
       saveActions = saveActions.filter(/* 当前回调剔除空文案的可选提醒动作。 */ action => action.action_type !== 'send_text' || Boolean(action.message_template?.trim()));
     }
     // saveVariants 保存归一化后的发货规格。
     const saveVariants = trigger === 'review_missing_timeout' || trigger === 'order_created' ? [] : variants.map(/* 当前回调归一化发货规格字段。 */ variant => ({ ...variant, spec_name: isMultiSpecRule ? variant.spec_name.trim() : '', spec_value: isMultiSpecRule ? variant.spec_value.trim() : '', delivery_count: Math.max(1, Number(variant.delivery_count) || 1), enabled: variant.enabled !== false }));
-    setAutomationSubmitState(startRuleSubmission(automationSubmitState));
-    // succeeded 记录保存是否成功。
-    let succeeded = false;
-    try {
+    setAutomationSaveError('');
+    setAutomationSubmitState(/* current 是当前自动化提交状态。 */ current => startRuleSubmission(current));
+    // saved 表示服务端是否已确认保存；后续刷新失败不得改写该业务事实。
+    const saved = await runAction(saveKey, /* saveAutomationTask 提交归一化后的自动化规则。 */ async () => {
       await updateShippingRule({ ...editingAutomationRule, trigger_type: trigger, name: (editingAutomationRule.name || '').trim() || defaultRuleName(trigger, selectedRuleItem?.item_title || editingAutomationRule.item_id || ''), config_json: trigger === 'review_missing_timeout' ? buildReviewConfig(editingAutomationRule.config_json) : (editingAutomationRule.config_json || '{}'), actions: trigger === 'order_created' ? saveActions : (editingAutomationRule.actions?.length ? editingAutomationRule.actions : cardActionsForTrigger(trigger, saveVariants[0]?.card_id || editingAutomationRule.card_group_id || 0)), variants: saveVariants });
-      setShowAutomationModal(false);
-      await Promise.all([loadAutomationRules(), loadReferenceData()]);
-      alert('保存成功');
-      succeeded = true;
-    } catch (/* error 表示自动化规则保存异常。 */ error) {
-      console.error('保存自动化规则失败:', error);
-      alert('保存失败：' + (error as Error).message);
-    } finally {
-      setAutomationSubmitState(/* current 保存自动化提交状态。 */ current => finishRuleSubmission(current, succeeded));
+      return true;
+    }, {
+      successMessage: '保存成功',
+      successTitle: '自动化规则',
+      errorMessage: '保存失败，请稍后重试',
+      onError: /* error 是自动化规则保存失败原因。 */ error => setAutomationSaveError(rulesActionErrorMessage(error, '保存失败，请稍后重试')),
+    });
+    if (!saved) {
+      setAutomationSubmitState(/* current 是当前自动化提交状态。 */ current => finishRuleSubmission(current, false));
+      return;
     }
-  }, [automationSubmitState, deliveryTemplates, editingAutomationRule, isMultiSpecRule, loadAutomationRules, loadReferenceData, selectedRuleItem]);
+    setAutomationSubmitState(/* current 是当前自动化提交状态。 */ current => finishRuleSubmission(current, true));
+    setShowAutomationModal(false);
+    await refreshAutomationAfterSave('规则已保存，但列表刷新失败，请手动刷新确认最新状态');
+  }, [deliveryTemplates, editingAutomationRule, isActionPending, isMultiSpecRule, refreshAutomationAfterSave, runAction, selectedRuleItem, showAutomationValidationError]);
 
   // handleDeleteAutomation 删除自动化规则并刷新列表。
   const handleDeleteAutomation = useCallback(/* deleteRuleAction 删除自动化规则。 */ async (id: string) => {
-    if (!confirm('确定删除该自动化规则吗？')) return;
-    try { await deleteShippingRule(id); await loadAutomationRules(); alert('删除成功'); } catch (/* error 表示自动化规则删除异常。 */ error) { alert('删除失败：' + (error as Error).message); }
-  }, [loadAutomationRules]);
+    // deleteKey 是当前规则删除的业务键，避免同一规则重复提交。
+    const deleteKey = ruleActionKey.automationDelete(id);
+    if (isActionPending(deleteKey)) return;
+    // confirmed 表示用户在统一确认框中的明确选择。
+    const confirmed = await confirmAction({ title: '删除自动化规则', message: '确定删除该自动化规则吗？删除后无法恢复。', confirmText: '删除', danger: true });
+    if (!confirmed) return;
+    // deleted 表示服务端是否已确认删除成功。
+    const deleted = await runAction(deleteKey, /* deleteAutomationTask 调用删除接口。 */ async () => {
+      await deleteShippingRule(id);
+      return true;
+    }, { successMessage: '自动化规则已删除', errorMessage: '删除失败，请稍后重试' });
+    if (!deleted) return;
+    await refreshAutomationListAfterMutation('自动化规则已删除，但列表刷新失败，请手动刷新');
+  }, [isActionPending, refreshAutomationListAfterMutation, runAction]);
 
   // handleToggleAutomation 切换规则启用状态并刷新列表。
   const handleToggleAutomation = useCallback(/* toggleRuleAction 切换自动化规则状态。 */ async (rule: ShippingRule) => {
-    try { await updateShippingRule({ ...rule, enabled: !rule.enabled }); await loadAutomationRules(); } catch (/* error 表示自动化规则状态更新异常。 */ error) { alert('操作失败：' + (error as Error).message); }
-  }, [loadAutomationRules]);
+    // toggleKey 是当前规则启停的业务键。
+    const toggleKey = ruleActionKey.automationToggle(rule.id);
+    if (isActionPending(toggleKey)) return;
+    // nextEnabled 是本次要写入的启用状态。
+    const nextEnabled = !rule.enabled;
+    // updated 表示服务端是否已确认状态更新。
+    const updated = await runAction(toggleKey, /* toggleAutomationTask 写入翻转后的启用状态。 */ async () => {
+      await updateShippingRule({ ...rule, enabled: nextEnabled });
+      return nextEnabled;
+    }, { successMessage: nextEnabled ? '规则已启用' : '规则已禁用', errorMessage: '状态更新失败，请稍后重试' });
+    if (updated === undefined) return;
+    await refreshAutomationListAfterMutation('状态已更新，但列表刷新失败，请手动刷新');
+  }, [isActionPending, refreshAutomationListAfterMutation, runAction]);
 
   // handleResolveRunIssue 处理自动化运行的人工恢复决策。
   const handleResolveRunIssue = useCallback(/* resolveRunAction 处理自动化运行异常。 */ async (id: number, resolution: 'continue' | 'retry' | 'cancel') => {
+    // resolveKey 是当前运行异常和决策的业务键。
+    const resolveKey = ruleActionKey.issueRun(id, resolution);
+    if (isActionPending(resolveKey)) return;
     // prompt 保存当前恢复操作的确认文案。
     const prompt = resolution === 'continue' ? '确认外部动作已经执行成功，并跳到下一步吗？' : resolution === 'retry' ? '确认外部动作没有执行，可以安全重试吗？错误判断可能造成重复发送。' : '确认终止该自动化运行吗？';
-    if (!confirm(prompt)) return;
-    try { await resolveAutomationRun(id, resolution); await loadAutomationRules(); } catch (/* error 表示自动化运行恢复异常。 */ error) { alert('处理失败：' + (error as Error).message); }
-  }, [loadAutomationRules]);
+    // confirmed 表示用户是否确认执行恢复决策。
+    const confirmed = await confirmAction({ title: '处理自动化异常', message: prompt, confirmText: resolution === 'continue' ? '继续' : resolution === 'retry' ? '安全重试' : '终止', danger: resolution !== 'continue' });
+    if (!confirmed) return;
+    // handled 表示服务端是否已接收恢复决策。
+    const handled = await runAction(resolveKey, /* resolveRunTask 提交运行恢复决策。 */ async () => {
+      await resolveAutomationRun(id, resolution);
+      return true;
+    }, { successMessage: '异常处理已提交', errorMessage: '处理失败，请稍后重试' });
+    if (!handled) return;
+    await refreshAutomationListAfterMutation('异常已处理，但列表刷新失败，请手动刷新');
+  }, [isActionPending, refreshAutomationListAfterMutation, runAction]);
 
   // handleResolveDeferredIssue 处理延迟自动化任务的重试或忽略。
   const handleResolveDeferredIssue = useCallback(/* resolveDeferredAction 处理延迟任务异常。 */ async (id: number, resolution: 'retry' | 'dismiss') => {
-    if (!confirm(resolution === 'retry' ? '确认重新执行该任务吗？' : '确认忽略并删除该异常任务吗？')) return;
-    try { await resolveDeferredAutomationTask(id, resolution); await loadAutomationRules(); } catch (/* error 表示延迟任务恢复异常。 */ error) { alert('处理失败：' + (error as Error).message); }
-  }, [loadAutomationRules]);
+    // deferredKey 是当前延迟任务和决策的业务键。
+    const deferredKey = ruleActionKey.issueDeferred(id, resolution);
+    if (isActionPending(deferredKey)) return;
+    // confirmed 表示用户是否确认重试或忽略该任务。
+    const confirmed = await confirmAction({ title: '处理延迟任务', message: resolution === 'retry' ? '确认重新执行该任务吗？' : '确认忽略并删除该异常任务吗？', confirmText: resolution === 'retry' ? '重新入队' : '忽略', danger: resolution === 'dismiss' });
+    if (!confirmed) return;
+    // handled 表示服务端是否已接收延迟任务决策。
+    const handled = await runAction(deferredKey, /* resolveDeferredTask 提交延迟任务决策。 */ async () => {
+      await resolveDeferredAutomationTask(id, resolution);
+      return true;
+    }, { successMessage: '延迟任务已处理', errorMessage: '处理失败，请稍后重试' });
+    if (!handled) return;
+    await refreshAutomationListAfterMutation('延迟任务已处理，但列表刷新失败，请手动刷新');
+  }, [isActionPending, refreshAutomationListAfterMutation, runAction]);
+
+  // showReplyValidationError 把关键词回复校验失败同时写入行内错误和统一提示。
+  const showReplyValidationError = useCallback(/* showReplyValidationAction 展示关键词表单校验错误。 */ (message: string) => {
+    setReplySaveError(message);
+    notify('error', message);
+  }, []);
 
   // handleAddReplyRule 打开一个默认使用包含匹配的关键词回复草稿。
   const handleAddReplyRule = useCallback(/* addReplyAction 创建关键词回复草稿。 */ () => {
-    if (!selectedAccountId) return showReplyToast('error', '请先选择账号');
+    if (!selectedAccountId) {
+      notify('error', '请先选择账号');
+      return;
+    }
+    setReplySaveError('');
     // expressions 保存至少一行可编辑表达式，避免新建表单丢失 OR 语义入口。
     const expressions = [''];
     setEditingReplyRule({ keyword: '', expressions, reply_content: '', image_url: '', library_image_id: 0, item_id: '', item_ids: [], type: 'text', match_type: 'contains', enabled: true, notify_manual: false });
     setShowReplyModal(true);
-  }, [selectedAccountId, showReplyToast]);
+  }, [selectedAccountId]);
 
   // handleSaveReplyRule 清理表达式、校验回复内容和客户端正则语法后保存规则。
   const handleSaveReplyRule = useCallback(/* saveReplyAction 保存关键词回复。 */ async () => {
-    if (!editingReplyRule || !selectedAccountId || replySubmitState.submitting) return;
+    if (!editingReplyRule || !selectedAccountId) return;
+    // saveKey 是当前关键词回复的业务保存键。
+    const saveKey = ruleActionKey.replySave(editingReplyRule.id);
+    if (isActionPending(saveKey)) return;
     // rawExpressions 保存新多表达式字段或旧 keyword 字段提供的输入。
     const rawExpressions = Array.isArray(editingReplyRule.expressions) ? editingReplyRule.expressions : [editingReplyRule.keyword || ''];
     // cleanedExpressions 保存去除首尾空白、空值和重复项后的表达式。
@@ -494,77 +655,198 @@ export const useRuleActions = ({
     const matchType = editingReplyRule.match_type === 'regexp' ? 'regexp' : 'contains';
     // hasReplyContent 表示当前回复是否填写了文字或图片。
     const hasReplyContent = editingReplyRule.type === 'image' ? Boolean(editingReplyRule.image_url?.trim()) || Boolean(editingReplyRule.library_image_id) : Boolean(editingReplyRule.reply_content?.trim());
-    if (!expressions.length || !hasReplyContent) return showReplyToast('error', '请填写关键词和回复内容');
+    if (!expressions.length || !hasReplyContent) {
+      showReplyValidationError('请填写关键词和回复内容');
+      return;
+    }
     // 正则模式先做尽力而为的语法预检；预检已兼容 Go/RE2 的内联标志和命名组，后端仍是最终权威。
     if (matchType === 'regexp' && !expressions.every(/* expression 是当前待预检的正则表达式。 */ expression => precheckRegexpExpression(expression))) {
-      return showReplyToast('error', '正则表达式格式错误，请检查关键词');
+      showReplyValidationError('正则表达式格式错误，请检查关键词');
+      return;
     }
-    setReplySubmitState(startRuleSubmission(replySubmitState));
-    // succeeded 记录保存是否成功。
-    let succeeded = false;
-    try {
+    setReplySaveError('');
+    setReplySubmitState(/* current 是当前关键词提交状态。 */ current => startRuleSubmission(current));
+    // saved 表示服务端是否已确认关键词回复保存成功。
+    const saved = await runAction(saveKey, /* saveReplyTask 提交关键词回复规则。 */ async () => {
       await updateReplyRule({ ...editingReplyRule, keyword: expressions[0], expressions, match_type: matchType, enabled: true }, selectedAccountId);
-      setShowReplyModal(false);
-      await loadReplyRules();
-      showReplyToast('success', '保存成功');
-      succeeded = true;
-    } catch (/* error 表示关键词回复保存异常。 */ error) {
-      showReplyToast('error', '保存失败：' + (error as Error).message);
-    } finally {
-      setReplySubmitState(/* current 保存关键词提交状态。 */ current => finishRuleSubmission(current, succeeded));
+      return true;
+    }, {
+      successMessage: '保存成功',
+      successTitle: '关键词回复',
+      errorMessage: '保存失败，请稍后重试',
+      onError: /* error 是关键词回复保存失败原因。 */ error => setReplySaveError(rulesActionErrorMessage(error, '保存失败，请稍后重试')),
+    });
+    if (!saved) {
+      setReplySubmitState(/* current 是当前关键词提交状态。 */ current => finishRuleSubmission(current, false));
+      return;
     }
-  }, [editingReplyRule, loadReplyRules, replySubmitState, selectedAccountId, showReplyToast]);
+    setReplySubmitState(/* current 是当前关键词提交状态。 */ current => finishRuleSubmission(current, true));
+    setShowReplyModal(false);
+    try {
+      await loadReplyRules();
+    } catch {
+      notify('warning', '关键词回复已保存，但列表刷新失败，请手动刷新');
+    }
+  }, [editingReplyRule, isActionPending, loadReplyRules, runAction, selectedAccountId, showReplyValidationError]);
 
   // handleDeleteReply 删除指定关键词回复并刷新列表。
   const handleDeleteReply = useCallback(/* deleteReplyAction 删除关键词回复。 */ async (id: string) => {
-    if (!selectedAccountId || !confirm('确定删除该回复规则吗？')) return;
-    try { await deleteReplyRule(id, selectedAccountId); await loadReplyRules(); showReplyToast('success', '删除成功'); } catch (/* error 表示关键词回复删除异常。 */ error) { showReplyToast('error', '删除失败：' + (error as Error).message); }
-  }, [loadReplyRules, selectedAccountId, showReplyToast]);
-
-  // openDefaultReplyModal 加载指定账号的默认回复配置并打开弹窗。
-  const openDefaultReplyModal = useCallback(/* openDefaultAction 加载默认回复草稿。 */ async (cookieID = selectedAccountId) => {
-    if (!cookieID) return alert('请先选择账号');
+    if (!selectedAccountId) return;
+    // deleteKey 是当前关键词回复删除的业务键。
+    const deleteKey = ruleActionKey.replyDelete(id);
+    if (isActionPending(deleteKey)) return;
+    // confirmed 表示用户是否确认删除该关键词回复。
+    const confirmed = await confirmAction({ title: '删除关键词回复', message: '确定删除该回复规则吗？删除后无法恢复。', confirmText: '删除', danger: true });
+    if (!confirmed) return;
+    // deleted 表示服务端是否已确认删除成功。
+    const deleted = await runAction(deleteKey, /* deleteReplyTask 调用关键词回复删除接口。 */ async () => {
+      await deleteReplyRule(id, selectedAccountId);
+      return true;
+    }, { successMessage: '关键词回复已删除', errorMessage: '删除失败，请稍后重试' });
+    if (!deleted) return;
     try {
-      // data 保存服务端返回的默认回复配置。
-      const data = await getDefaultReply(cookieID);
-      setDefaultForm({ cookie_id: cookieID, enabled: data.enabled, reply_content: data.reply_content, reply_once: data.reply_once, reply_image_url: data.reply_image_url || '', reply_library_image_id: data.reply_library_image_id || 0 });
+      await loadReplyRules();
     } catch {
-      setDefaultForm({ cookie_id: cookieID, enabled: false, reply_content: '', reply_once: false, reply_image_url: '', reply_library_image_id: 0 });
+      notify('warning', '关键词回复已删除，但列表刷新失败，请手动刷新');
+    }
+  }, [isActionPending, loadReplyRules, runAction, selectedAccountId]);
+
+  // loadDefaultReplyConfig 读取指定账号默认回复；失败时保持表单禁用并记录错误。
+  const loadDefaultReplyConfig = useCallback(/* loadDefaultReplyConfigAction 读取默认回复配置。 */ async (cookieID: string) => {
+    // openKey 是当前账号默认回复读取的业务键。
+    const openKey = ruleActionKey.defaultOpen(cookieID);
+    if (isActionPending(openKey)) return;
+    setDefaultReplyAccountId(cookieID);
+    setDefaultReplyLoadError('');
+    setDefaultReplyReady(false);
+    setDefaultReplySaveError('');
+    setDefaultReplyLoading(true);
+    try {
+      await runAction(openKey, /* loadDefaultReplyTask 读取并写入默认回复表单。 */ async () => {
+        // data 保存服务端返回的默认回复配置。
+        const data = await getDefaultReply(cookieID);
+        setDefaultForm({ cookie_id: cookieID, enabled: data.enabled, reply_content: data.reply_content, reply_once: data.reply_once, reply_image_url: data.reply_image_url || '', reply_library_image_id: data.reply_library_image_id || 0 });
+        setDefaultReplyReady(true);
+        return true;
+      }, {
+        errorMessage: '读取默认回复失败，请重试',
+        onError: /* error 是默认回复读取失败原因。 */ error => setDefaultReplyLoadError(rulesActionErrorMessage(error, '读取默认回复失败，请重试')),
+      });
+    } finally {
+      setDefaultReplyLoading(false);
+    }
+  }, [isActionPending, runAction]);
+
+  // openDefaultReplyModal 打开指定账号的默认回复弹窗并在弹窗内显示读取状态。
+  const openDefaultReplyModal = useCallback(/* openDefaultAction 打开默认回复弹窗。 */ async (cookieID = selectedAccountId) => {
+    if (!cookieID) {
+      notify('error', '请先选择账号');
+      return;
     }
     setShowDefaultModal(true);
-  }, [selectedAccountId]);
+    await loadDefaultReplyConfig(cookieID);
+  }, [loadDefaultReplyConfig, selectedAccountId]);
+
+  // retryDefaultReplyLoad 重试读取当前弹窗所属账号的默认回复配置。
+  const retryDefaultReplyLoad = useCallback(/* retryDefaultReplyAction 重试默认回复读取。 */ async () => {
+    if (!defaultReplyAccountId) return;
+    await loadDefaultReplyConfig(defaultReplyAccountId);
+  }, [defaultReplyAccountId, loadDefaultReplyConfig]);
+
+  // showDefaultReplyValidationError 把默认回复校验失败同时写入行内错误和统一提示。
+  const showDefaultReplyValidationError = useCallback(/* showDefaultValidationAction 展示默认回复校验错误。 */ (message: string) => {
+    setDefaultReplySaveError(message);
+    notify('error', message);
+  }, []);
 
   // handleSaveDefaultReply 校验并保存账号默认回复。
   const handleSaveDefaultReply = useCallback(/* saveDefaultAction 保存默认回复。 */ async () => {
-    if (defaultReplySubmitState.submitting) return;
-    if (!defaultForm.cookie_id) return alert('请先选择账号');
-    if (defaultForm.enabled && !defaultForm.reply_content.trim() && !defaultForm.reply_image_url.trim() && !defaultForm.reply_library_image_id) return alert('启用默认回复时，请填写回复内容或选择/填写图片');
-    setDefaultReplySubmitState(startRuleSubmission(defaultReplySubmitState));
-    // succeeded 记录保存是否成功。
-    let succeeded = false;
-    try { await updateDefaultReply(defaultForm.cookie_id, { enabled: defaultForm.enabled, reply_content: defaultForm.reply_content, reply_once: defaultForm.reply_once, reply_image_url: defaultForm.reply_image_url, reply_library_image_id: defaultForm.reply_library_image_id }); setShowDefaultModal(false); await loadDefaultReplies(); alert('保存成功'); succeeded = true; } catch (/* error 表示默认回复保存异常。 */ error) { alert('保存失败：' + (error as Error).message); } finally { setDefaultReplySubmitState(/* current 保存默认回复提交状态。 */ current => finishRuleSubmission(current, succeeded)); }
-  }, [defaultForm, defaultReplySubmitState, loadDefaultReplies]);
+    if (!defaultReplyReady) {
+      notify('error', '默认回复尚未读取成功，请先重试读取');
+      return;
+    }
+    if (!defaultForm.cookie_id) {
+      showDefaultReplyValidationError('请先选择账号');
+      return;
+    }
+    // saveKey 是当前账号默认回复保存的业务键。
+    const saveKey = ruleActionKey.defaultSave(defaultForm.cookie_id);
+    if (isActionPending(saveKey)) return;
+    if (defaultForm.enabled && !defaultForm.reply_content.trim() && !defaultForm.reply_image_url.trim() && !defaultForm.reply_library_image_id) {
+      showDefaultReplyValidationError('启用默认回复时，请填写回复内容或选择/填写图片');
+      return;
+    }
+    setDefaultReplySaveError('');
+    setDefaultReplySubmitState(/* current 是当前默认回复提交状态。 */ current => startRuleSubmission(current));
+    // saved 表示服务端是否已确认默认回复保存成功。
+    const saved = await runAction(saveKey, /* saveDefaultReplyTask 提交默认回复配置。 */ async () => {
+      await updateDefaultReply(defaultForm.cookie_id, { enabled: defaultForm.enabled, reply_content: defaultForm.reply_content, reply_once: defaultForm.reply_once, reply_image_url: defaultForm.reply_image_url, reply_library_image_id: defaultForm.reply_library_image_id });
+      return true;
+    }, {
+      successMessage: '保存成功',
+      successTitle: '默认回复',
+      errorMessage: '保存失败，请稍后重试',
+      onError: /* error 是默认回复保存失败原因。 */ error => setDefaultReplySaveError(rulesActionErrorMessage(error, '保存失败，请稍后重试')),
+    });
+    if (!saved) {
+      setDefaultReplySubmitState(/* current 是当前默认回复提交状态。 */ current => finishRuleSubmission(current, false));
+      return;
+    }
+    setDefaultReplySubmitState(/* current 是当前默认回复提交状态。 */ current => finishRuleSubmission(current, true));
+    setShowDefaultModal(false);
+    try {
+      await loadDefaultReplies();
+    } catch {
+      notify('warning', '默认回复已保存，但列表刷新失败，请手动刷新');
+    }
+  }, [defaultForm, defaultReplyReady, isActionPending, loadDefaultReplies, runAction, showDefaultReplyValidationError]);
 
   // handleDeleteDefaultReply 删除账号默认回复配置。
   const handleDeleteDefaultReply = useCallback(/* deleteDefaultAction 删除默认回复。 */ async (cookieID: string) => {
-    if (!confirm('确定删除该账号默认回复吗？')) return;
-    try { await deleteDefaultReply(cookieID); await loadDefaultReplies(); alert('删除成功'); } catch (/* error 表示默认回复删除异常。 */ error) { alert('删除失败：' + (error as Error).message); }
-  }, [loadDefaultReplies]);
+    // deleteKey 是当前账号默认回复删除的业务键。
+    const deleteKey = ruleActionKey.defaultDelete(cookieID);
+    if (isActionPending(deleteKey)) return;
+    // confirmed 表示用户是否确认删除默认回复。
+    const confirmed = await confirmAction({ title: '删除默认回复', message: '确定删除该账号默认回复吗？删除后无法恢复。', confirmText: '删除', danger: true });
+    if (!confirmed) return;
+    // deleted 表示服务端是否已确认删除成功。
+    const deleted = await runAction(deleteKey, /* deleteDefaultReplyTask 调用默认回复删除接口。 */ async () => {
+      await deleteDefaultReply(cookieID);
+      return true;
+    }, { successMessage: '默认回复已删除', errorMessage: '删除失败，请稍后重试' });
+    if (!deleted) return;
+    try {
+      await loadDefaultReplies();
+    } catch {
+      notify('warning', '默认回复已删除，但列表刷新失败，请手动刷新');
+    }
+  }, [isActionPending, loadDefaultReplies, runAction]);
 
   // handleClearDefaultReplyRecords 清空账号默认回复的会话记录。
   const handleClearDefaultReplyRecords = useCallback(/* clearDefaultRecordsAction 清空默认回复记录。 */ async (cookieID: string) => {
-    if (!confirm('确定清空该账号的默认回复记录吗？清空后可重新对所有会话使用“只回复一次”。')) return;
-    try { await clearDefaultReplyRecords(cookieID); alert('清空成功'); } catch (/* error 表示默认回复记录清理异常。 */ error) { alert('清空失败：' + (error as Error).message); }
-  }, []);
+    // clearKey 是当前账号默认回复记录清理的业务键。
+    const clearKey = ruleActionKey.defaultClearRecords(cookieID);
+    if (isActionPending(clearKey)) return;
+    // confirmed 表示用户是否确认清空默认回复记录。
+    const confirmed = await confirmAction({ title: '清空默认回复记录', message: '确定清空该账号的默认回复记录吗？清空后可重新对所有会话使用“只回复一次”。', confirmText: '清空记录', danger: true });
+    if (!confirmed) return;
+    await runAction(clearKey, /* clearDefaultRecordsTask 调用默认回复记录清理接口。 */ async () => {
+      await clearDefaultReplyRecords(cookieID);
+      return true;
+    }, { successMessage: '默认回复记录已清空', errorMessage: '清空失败，请稍后重试' });
+  }, [isActionPending, runAction]);
 
   return {
     showAutomationModal, setShowAutomationModal, showReplyModal, setShowReplyModal, showDefaultModal, setShowDefaultModal,
-    automationSubmitState, replySubmitState, defaultReplySubmitState, editingAutomationRule, setEditingAutomationRule,
+    automationSubmitState, replySubmitState, defaultReplySubmitState,
+    automationSaveError, replySaveError, defaultReplySaveError,
+    defaultReplyLoading, defaultReplyLoadError, defaultReplyReady, isPending: isActionPending, retryDefaultReplyLoad,
+    editingAutomationRule, setEditingAutomationRule,
     editingReplyRule, setEditingReplyRule, defaultForm, setDefaultForm, selectedRuleItem, isMultiSpecRule, currentTrigger,
     currentMeta, reviewConfig, displayVariants, buildAutomationDraft, openAutomationRule, openNewAutomationRule,
     handleTriggerChange, handleAutomationItemChange, updateVariant, updateAdjustPriceTarget, updateAdjustPriceNotifyText, appendDeliveryContent, handleSaveAutomationRule,
     handleDeleteAutomation, handleToggleAutomation, handleResolveRunIssue, handleResolveDeferredIssue, handleAddReplyRule,
-    handleSaveReplyRule, handleDeleteReply, toast, showReplyToast,
+    handleSaveReplyRule, handleDeleteReply,
     openDefaultReplyModal, handleSaveDefaultReply, handleDeleteDefaultReply,
     handleClearDefaultReplyRecords,
   };

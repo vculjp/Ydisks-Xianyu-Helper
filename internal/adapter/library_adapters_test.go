@@ -10,6 +10,7 @@ import (
 
 	itemapp "xianyu-go/internal/application/items"
 	libraryapp "xianyu-go/internal/application/library"
+	"xianyu-go/internal/catalog"
 )
 
 // TestLibraryRepositoriesRoundTrip 覆盖图片与模板仓储的写入、读取、JSON 编解码、引用统计和不存在映射。
@@ -66,6 +67,7 @@ func TestLibraryRepositoriesRoundTrip(t *testing.T) {
 	// template 同时含规格、规格图、自动化，验证 JSON 往返。
 	template := libraryapp.Template{UserID: userID, Name: "模板", Title: "标题", PriceCents: 900, Quantity: 5, PostageMode: "free",
 		Category: itemapp.BatchPreviewCategory{CatID: "1", CatName: "n", ChannelCatID: "c"}, ImageIDs: []int64{first.ID},
+		Source:     catalog.SourceInfo{ItemID: "990099", WebURL: "https://www.goofish.com/item?id=990099", Category: catalog.Category{CatID: "1", CatName: "n", ChannelCatID: "c"}, Missing: []string{"运费方式"}},
 		Specs:      &libraryapp.TemplateSpecs{Specs: []itemapp.PublishSpec{{PropertyName: "颜色", Values: []itemapp.PublishSpecValue{{Value: "红", ImageIndex: 0}}}}, SpecImageIDs: []int64{second.ID}},
 		Automation: itemapp.BatchPreviewAutomation{PaidDelivery: itemapp.BatchPreviewCardAutomation{Enabled: true, Actions: []itemapp.BatchPreviewCardAction{{CardID: 7, DeliveryCount: 1}}}}}
 	// id 保存 Create 的返回结果，err 保存其失败原因。
@@ -75,7 +77,7 @@ func TestLibraryRepositoriesRoundTrip(t *testing.T) {
 	}
 	// got 保存 Get 的返回结果，err 保存其失败原因。
 	got, err := templates.Get(ctx, userID, id)
-	if err != nil || got.Specs == nil || got.Specs.SpecImageIDs[0] != second.ID || got.Category.CatID != "1" || !got.Automation.PaidDelivery.Enabled || got.CreatedAt == "" {
+	if err != nil || got.Specs == nil || got.Specs.SpecImageIDs[0] != second.ID || got.Category.CatID != "1" || !got.Automation.PaidDelivery.Enabled || got.CreatedAt == "" || got.Source.ItemID != "990099" || len(got.Source.Missing) != 1 {
 		t.Fatalf("template=%+v err=%v", got, err)
 	}
 	// 单规格模板、nil 图片切片编码为 []。
@@ -86,6 +88,9 @@ func TestLibraryRepositoriesRoundTrip(t *testing.T) {
 	plainGot, _ := templates.Get(ctx, userID, plainID)
 	if plainGot.Specs != nil || len(plainGot.ImageIDs) != 0 {
 		t.Fatalf("单规格模板异常: %+v", plainGot)
+	}
+	if plainGot.Source.ItemID != "" || plainGot.Source.Missing == nil {
+		t.Fatalf("历史无来源的普通模板不得误标为采集完成: %+v", plainGot.Source)
 	}
 	got.Title = "新标题"
 	// updateErr 保存 Update 调用的失败原因。

@@ -10,6 +10,8 @@ export interface ImageUploadButtonProps {
   onUpload: (files: File[]) => Promise<LibraryUploadResult[]>;
   /** onResults 接收失败/重复摘要，由父级展示。 */
   onResults: (summary: string) => void;
+  /** onError 在整批上传请求失败时接收可展示原因。 */
+  onError?: (message: string) => void;
 }
 
 /** summarizeUpload 汇总一次上传的成功、重复与失败文件。 */
@@ -27,14 +29,18 @@ export const summarizeUpload = (results: LibraryUploadResult[]): string => {
 };
 
 /** ImageUploadButton 选择多张图片并上传到图片库。 */
-export const ImageUploadButton = ({ busy, onUpload, onResults }: ImageUploadButtonProps) => {
+export const ImageUploadButton = ({ busy, onUpload, onResults, onError }: ImageUploadButtonProps) => {
   /** handleChange 读取所选文件、清空控件并上传。 */
   const handleChange = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
     // files 是所选文件快照。
     const files = Array.from(event.currentTarget.files ?? []);
     event.currentTarget.value = '';
     if (files.length === 0) return;
-    onResults(summarizeUpload(await onUpload(files)));
+    try {
+      onResults(summarizeUpload(await onUpload(files)));
+    } catch (failure /* failure 是整批上传请求失败原因。 */) {
+      onError?.(failure instanceof Error && failure.message ? failure.message : '上传图片失败');
+    }
   };
   return (
     <label className={`inline-flex cursor-pointer items-center gap-2 rounded-xl ios-btn-primary px-4 py-2.5 text-sm font-bold  ${busy ? 'pointer-events-none opacity-50' : ''}`}>

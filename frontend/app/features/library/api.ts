@@ -16,6 +16,7 @@ import type {
   LibraryUploadResult,
   ProductTemplate,
 } from './types';
+import { sourceFromTransport } from '../../../shared/ui/publish/sourceInfo';
 
 /** TemplateTransport 是生成契约中的模板响应。 */
 type TemplateTransport = LibraryTemplateTransport;
@@ -80,6 +81,7 @@ export const toTemplate = (dto: TemplateTransport): ProductTemplate => ({
   id: dto.id, name: dto.name, title: dto.title, description: dto.description, price: dto.price, originalPrice: dto.original_price,
   quantity: dto.quantity, postageMode: postageModeFrom(dto.postage_mode), postage: dto.postage,
   category: { catId: dto.category.cat_id, catName: dto.category.cat_name, channelCatId: dto.category.channel_cat_id ?? '', tbCatId: dto.category.tb_cat_id ?? '' },
+  source: sourceFromTransport(dto.source),
   imageIds: [...dto.image_ids],
   specs: dto.specs.specs.map(/* spec 是传输层规格维度。 */ spec => ({
     specId: nextSpecId('spec'), name: spec.property_name, supportImage: spec.support_image,

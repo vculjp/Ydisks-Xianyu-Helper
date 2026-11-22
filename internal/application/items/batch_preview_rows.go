@@ -26,9 +26,7 @@ func (service *BatchPreviewService) PreviewRows(ctx context.Context, input Batch
 		if strings.TrimSpace(row.CookieID) == "" {
 			row.CookieID = input.DefaultCookieID
 		}
-		if strings.TrimSpace(row.Description) == "" {
-			row.Description = row.Title
-		}
+		// 描述必须由实际采集或人工输入提供；即使是历史模板，缺失正文也只能报错，不得回填标题。
 		row.PostageMode = normalizePostageMode(row.PostageMode)
 		service.validateRow(ctx, input, row)
 		if (row.Category.CatID != "" || row.Category.CatName != "" || row.Category.ChannelCatID != "" || row.Category.TBCatID != "") &&

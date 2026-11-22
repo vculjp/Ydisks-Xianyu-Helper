@@ -4,6 +4,7 @@ import Sidebar from '../../shared/ui/Sidebar';
 import { useChatTitleNotification } from '../features/chat/titleNotification';
 import { getHealth } from '../features/system/api';
 import type { BuildInfo } from '../features/system/types';
+import ConsoleTopbar from './ConsoleTopbar';
 
 // DeliveryRuleTarget 描述商品页跳转到自动化规则页时需要携带的目标信息。
 export interface DeliveryRuleTarget {
@@ -11,6 +12,8 @@ export interface DeliveryRuleTarget {
   cookieId: string;
   // itemId 表示目标商品标识。
   itemId: string;
+  // trigger 表示要打开的自动化规则触发时机。
+  trigger: 'order_paid' | 'order_created';
   // requestId 用于区分连续发起的跳转请求。
   requestId: number;
 }
@@ -49,6 +52,8 @@ const OrderList = lazy(/* OrderList 页面按路由激活时加载。 */ () => i
 const SalesStats = lazy(/* SalesStats 页面按路由激活时加载。 */ () => import('../features/sales/pages/SalesStats'));
 // ItemList 是按需加载的商品页面，避免首屏载入商品发布编辑器代码。
 const ItemList = lazy(/* ItemList 页面按路由激活时加载。 */ () => import('../features/items/pages/ItemList'));
+/** ItemEditorPage 在用户打开商品编辑时才加载，保留列表分片预算。 */
+const ItemEditorPage = lazy(/* 商品编辑器仅由应用壳声明按需加载边界。 */ () => import('../features/items/components/ItemEditorPage'));
 // PublishSpecsEditor 在商品页面中按需加载，保持规格编辑器与商品主分片解耦。
 const PublishSpecsEditor = lazy(/* 规格编辑器随商品页面路由加载。 */ () => import('../../shared/ui/publish/PublishSpecsEditor').then(/* module 提供规格编辑器的具名导出。 */ module => ({ default: module.PublishSpecsEditor })));
 // PublishImagesEditor 在商品页面中按需加载，避免图片编辑交互增大商品主分片。
@@ -109,6 +114,8 @@ export interface AppContentProps {
   onNavigateToItems?: () => void;
   // onNavigateToLibrary 在采集转存完成后跳转到本地资源库页面。
   onNavigateToLibrary?: () => void;
+  // onNavigate 在仪表盘快捷入口中切换到其他业务页面。
+  onNavigate?: (tab: string) => void;
 }
 
 // AppContent 按当前导航标识选择业务页面，并隔离页面代码的动态加载边界。
@@ -120,12 +127,14 @@ export const AppContent: React.FC<AppContentProps> = ({
   onDeliveryTargetHandled,
   onNavigateToItems,
   onNavigateToLibrary,
+  onNavigate,
 }) => {
-  // handleConfigureDelivery 将商品页面对象转换成路由壳使用的最小联动载荷。
-  const handleConfigureDelivery = (item /* item 表示用户选择的商品。 */: Item) => {
+  // handleConfigureDelivery 将商品页面对象和触发时机转换成路由壳使用的最小联动载荷。
+  const handleConfigureDelivery = (item /* item 表示用户选择的商品。 */: Item, trigger /* trigger 表示付款或拍下触发。 */: 'order_paid' | 'order_created' = 'order_paid') => {
     onConfigureDelivery({
       cookieId: item.cookie_id,
       itemId: item.item_id,
+      trigger,
       requestId: Date.now(),
     });
   };
@@ -133,12 +142,12 @@ export const AppContent: React.FC<AppContentProps> = ({
   // renderPage 根据当前页面标识选择唯一的业务页面组件。
   const renderPage = () => {
     switch (activeTab) {
-      case 'dashboard': return <Dashboard />;
+      case 'dashboard': return <Dashboard onNavigate={onNavigate} />;
       case 'accounts': return <AccountList accountEditModal={AccountEditModal} />;
       case 'chat': return <Chat libraryImageChooser={LibraryImageChooser} />;
       case 'orders': return <OrderList />;
       case 'sales': return <SalesStats />;
-      case 'items': return <ItemList onConfigureDelivery={handleConfigureDelivery} publishSpecsEditor={PublishSpecsEditor} publishImagesEditor={PublishImagesEditor} itemAISettingsModal={ItemAISettingsModal} libraryImagePicker={LibraryImagePicker} />;
+      case 'items': return <ItemList onConfigureDelivery={handleConfigureDelivery} publishSpecsEditor={PublishSpecsEditor} publishImagesEditor={PublishImagesEditor} itemAISettingsModal={ItemAISettingsModal} itemEditorPage={ItemEditorPage} libraryImagePicker={LibraryImagePicker} />;
       case 'rules': return <Rules
         initialDeliveryTarget={deliveryRuleTarget}
         onDeliveryTargetHandled={onDeliveryTargetHandled}
@@ -177,6 +186,8 @@ const AuthenticatedShell: React.FC<AuthenticatedShellProps> = ({
 }) => {
   // buildInfo 保存壳层加载的公开构建版本，侧边栏保持为无请求的共享展示组件。
   const [buildInfo, setBuildInfo] = useState<BuildInfo>({ version: 'dev', commit: 'unknown' });
+  // mobileNavigationOpen 只控制窄屏侧边抽屉，不改变桌面端已保存的折叠偏好。
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   // hasUnreadChatMessage 保存侧边栏在线聊天入口的服务端/实时聚合未读状态，不因导航动作改变。
   const { hasUnreadChatMessage } = useChatTitleNotification();
 
@@ -194,24 +205,76 @@ const AuthenticatedShell: React.FC<AuthenticatedShellProps> = ({
     return /* cleanup 在壳层卸载时释放健康检查请求。 */ () => controller.abort();
   }, []);
 
+  useEffect(/* 当用户按 Escape 时关闭窄屏导航，避免遮罩长期阻挡主内容。 */ () => {
+    if (!mobileNavigationOpen) return;
+    // closeOnEscape 仅响应退出抽屉的键盘操作。
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileNavigationOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return /* 移除移动菜单键盘监听以免重复注册。 */ () => window.removeEventListener('keydown', closeOnEscape);
+  }, [mobileNavigationOpen]);
+
+  useEffect(/* 当窗口从手机宽度恢复到桌面宽度时关闭抽屉，保留原桌面折叠状态。 */ () => {
+    if (typeof window.matchMedia !== 'function') return;
+    // desktopBreakpoint 与 Tailwind 的 md: 断点相同，避免放大窗口后抽屉仍占用遮罩状态。
+    const desktopBreakpoint = window.matchMedia('(min-width: 768px)');
+    // closeOnDesktop 在跨越断点时还原由桌面 collapsed 偏好控制的导航。
+    const closeOnDesktop = () => {
+      if (desktopBreakpoint.matches) setMobileNavigationOpen(false);
+    };
+    desktopBreakpoint.addEventListener('change', closeOnDesktop);
+    return /* 释放浏览器宽度切换监听。 */ () => desktopBreakpoint.removeEventListener('change', closeOnDesktop);
+  }, []);
+
+  // navigateFromSidebar 确保选择页面后关闭移动导航，桌面导航行为保持不变。
+  const navigateFromSidebar = (tab: string) => {
+    setMobileNavigationOpen(false);
+    onNavigate(tab);
+  };
+
   return (
-    <div className="flex min-h-screen bg-canvas text-ink">
+    <div className={`console-shell ${collapsed ? 'is-collapsed' : ''}`}>
+    {mobileNavigationOpen && (
+      <button
+        type="button"
+        aria-label="关闭导航菜单"
+        onClick={/* 在主区域上方关闭移动端抽屉。 */ () => setMobileNavigationOpen(false)}
+        className="console-navigation-scrim"
+      />
+    )}
     <Sidebar
       activeTab={activeTab}
       isAdmin={isAdmin}
-      collapsed={collapsed}
-      onToggleCollapsed={onToggleCollapsed}
-      onNavigate={onNavigate}
-      onLogout={onLogout}
+      collapsed={collapsed && !mobileNavigationOpen}
+      mobileOpen={mobileNavigationOpen}
+      onToggleCollapsed={/* 移动端折叠操作关闭抽屉，桌面端保留原折叠行为。 */ () => mobileNavigationOpen ? setMobileNavigationOpen(false) : onToggleCollapsed()}
+      onNavigate={navigateFromSidebar}
+      onLogout={/* 注销前关闭移动端导航。 */ () => { setMobileNavigationOpen(false); onLogout(); }}
       buildInfo={buildInfo}
       hasUnreadChatMessage={hasUnreadChatMessage}
     />
 
-    <main className={`h-screen min-w-0 flex-1 overflow-x-hidden overflow-y-auto scroll-smooth transition-[margin] duration-300 ${collapsed ? 'ml-16' : 'ml-64'} ${activeTab === 'chat' ? 'p-4 md:p-6' : 'p-8 md:p-12'}`}>
-      {/* 主内容区域的背景装饰不参与交互，避免遮挡业务页面。 */}
-      <div className="fixed top-0 right-0 -z-10 h-[800px] w-[800px] pointer-events-none rounded-full bg-gradient-to-bl from-blue-50 to-transparent opacity-60 blur-[120px]" />
+    <div className="console-workspace">
+      <ConsoleTopbar
+        activeTab={activeTab}
+        isAdmin={isAdmin}
+        mobileNavigationOpen={mobileNavigationOpen}
+        onToggleNavigation={/* 桌面端折叠侧栏，窄屏端打开导航抽屉；无 matchMedia 的测试环境按窄屏处理。 */ () => {
+          if (mobileNavigationOpen) {
+            setMobileNavigationOpen(false);
+            return;
+          }
+          // mobileViewport 在缺少 matchMedia 的 jsdom 中默认按移动端处理，保证抽屉行为可测。
+          const mobileViewport = typeof window.matchMedia !== 'function' || window.matchMedia('(max-width: 767px)').matches;
+          if (mobileViewport) setMobileNavigationOpen(true); else onToggleCollapsed();
+        }}
+        onNavigate={onNavigate}
+        onLogout={onLogout}
+      />
 
-      <div className={`${activeTab === 'chat' ? 'mx-auto max-w-[1680px]' : 'mx-auto max-w-[1400px] pb-10'}`}>
+      <main className={`console-main ${activeTab === 'chat' ? 'console-main-chat' : ''}`}>
+        <div className={activeTab === 'chat' ? 'console-content console-content-chat' : 'console-content'}>
         <AppContent
           activeTab={activeTab}
           isAdmin={isAdmin}
@@ -220,9 +283,11 @@ const AuthenticatedShell: React.FC<AuthenticatedShellProps> = ({
           onDeliveryTargetHandled={onDeliveryTargetHandled}
           onNavigateToItems={/* 批次启动后进入商品页查看进度。 */ () => onNavigate('items')}
           onNavigateToLibrary={/* 转存模板完成后进入本地资源库准备多店上架。 */ () => onNavigate('library')}
+          onNavigate={onNavigate}
         />
-      </div>
-    </main>
+        </div>
+      </main>
+    </div>
     </div>
   );
 };

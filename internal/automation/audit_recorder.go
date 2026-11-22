@@ -148,6 +148,8 @@ func summarizeAction(action db.AutomationAction, result actionExecutionResult) s
 		return "发送文本消息"
 	case ActionConfirmShipment:
 		return "确认发货"
+	case ActionRequestRedFlower:
+		return "向买家求小红花"
 	case ActionAdjustPrice:
 		return "修改订单价格"
 	default:

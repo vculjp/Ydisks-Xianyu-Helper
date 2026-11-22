@@ -17,11 +17,11 @@ const sessionFixture: ChatSession = { account_id: 'account-1', chat_id: 'chat-1'
 
 /** metadataFixture 构造抽屉组件交互所需的完整元数据状态，并允许测试观测复制动作。 */
 const metadataFixture = (copyQuickReply: ChatMetadataState['copyQuickReply']): ChatMetadataState => ({
-  quickReplies: [quickReplyFixture], quickReplyDraft: '', setQuickReplyDraft: vi.fn(), quickReplyBusy: false,
+  quickReplies: [quickReplyFixture], quickReplyDraft: '', setQuickReplyDraft: vi.fn(), quickReplyBusy: false, quickRepliesLoading: false,
   pendingDeleteQuickReply: null, requestQuickReplyDelete: vi.fn(), cancelQuickReplyDelete: vi.fn(), confirmQuickReplyDelete: vi.fn().mockResolvedValue(undefined),
   addQuickReply: vi.fn().mockResolvedValue(undefined), addImageQuickReply: vi.fn().mockResolvedValue(undefined), copyQuickReply, copiedQuickReplyID: null, buyerNote: null, noteLoading: false,
   noteDialogOpen: false, noteEditing: false, noteDraft: '', setNoteDraft: vi.fn(), noteSaving: false, openNoteDialog: vi.fn(),
-  closeNoteDialog: vi.fn(), beginNoteEditing: vi.fn(), saveBuyerNote: vi.fn().mockResolvedValue(undefined), metadataError: '', clearMetadataError: vi.fn(),
+  closeNoteDialog: vi.fn(), beginNoteEditing: vi.fn(), saveBuyerNote: vi.fn().mockResolvedValue(undefined), metadataError: '', clearMetadataError: vi.fn(), retryMetadata: vi.fn(),
 });
 
 describe('ChatMetadataFeature', /* 当前回调验证快捷回复抽屉的操作排序和关闭交互。 */ () => {

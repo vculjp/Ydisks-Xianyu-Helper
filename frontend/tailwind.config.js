@@ -53,16 +53,16 @@ export default {
         purple: palette('accent'),
         pink: palette('accent'),
       },
-      // 圆角统一收紧到 5–10px 区间，UI 更紧凑、信息密度更高。
+      // 圆角遵循参考控制台的 4–8px 区间，避免卡片和按钮出现过度胶囊化。
       borderRadius: {
         'none': '0px',
-        'sm': '5px',
-        DEFAULT: '6px',
-        'md': '6px',
-        'lg': '7px',
-        'xl': '8px',
-        '2xl': '10px',
-        '3xl': '10px',
+        'sm': '3px',
+        DEFAULT: '4px',
+        'md': '4px',
+        'lg': '4px',
+        'xl': '4px',
+        '2xl': '6px',
+        '3xl': '8px',
       },
       fontFamily: {
         sans: [

@@ -163,6 +163,9 @@ type UncertainRemotePublishError struct {
 	Err error
 }
 
+// ErrPCPublishUnsupported 表示平台明确拒绝网页发布当前商品：可改为 APP 人工发布，但原批次不得无条件重试。
+var ErrPCPublishUnsupported = errors.New("闲鱼平台不支持该商品通过网页端发布，请到闲鱼APP发布；成功后返回本系统同步商品列表")
+
 // Error 返回远端结果不确定的错误文本。
 func (e *UncertainRemotePublishError) Error() string {
 	if e == nil || e.Err == nil {

@@ -35,8 +35,8 @@ type Store struct {
 	// ProductTemplates 保存可批量铺货的商品模板。
 	ProductTemplates *ProductTemplates
 	// ViralRadar 保存全站黑马爆品监控目标与商品热度增量快照。
-	ViralRadar       *ViralRadarStore
-	AIReply          *AIReply
+	ViralRadar *ViralRadarStore
+	AIReply    *AIReply
 	// AgentReply 保存账号外部 Agent 回复配置，访问令牌加密落库。
 	AgentReply *AgentReply
 	// ItemAISettings 保存商品级 AI 启停覆盖与专属资料。

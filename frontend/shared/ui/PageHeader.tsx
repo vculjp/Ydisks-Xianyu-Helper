@@ -8,11 +8,11 @@ interface PageHeaderProps {
 
 // PageHeader 渲染内页统一的标题区，保证标题、副标题与操作区在所有页面风格一致。
 export const PageHeader: React.FC<PageHeaderProps> = ({ title, description, children }) => (
-  <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
-    <div className="min-w-0">
-      <h1 className="text-3xl font-extrabold tracking-tight text-gray-900">{title}</h1>
-      {description && <p className="mt-2 text-base font-medium text-gray-500">{description}</p>}
+  <header className="console-page-header">
+    <div className="console-page-heading">
+      <h1>{title}</h1>
+      {description && <p>{description}</p>}
     </div>
-    {children}
+    {children && <div className="console-page-actions">{children}</div>}
   </header>
 );

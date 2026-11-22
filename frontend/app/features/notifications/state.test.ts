@@ -1,6 +1,6 @@
 import { expect,test } from 'vitest';
 import type { NotificationChannel } from './api';
-import { buildNotificationPayload,emptyNotificationForm,isCurrentNotificationRequest,normalizeNotificationForm,notificationErrorMessage,notificationEventSummary,notificationEvents,validateNotificationForm } from './state';
+import { buildNotificationPayload,emptyNotificationForm,isCurrentNotificationRequest,normalizeNotificationForm,notificationActionKey,notificationErrorMessage,notificationEventSummary,notificationEvents,validateNotificationForm } from './state';
 import type { NotificationForm } from './types';
 
 // createForm 创建通知渠道校验使用的最小表单对象。
@@ -51,6 +51,12 @@ test('通知请求代次拒绝过期响应',
     expect(isCurrentNotificationRequest(5, 5)).toBe(true);
     expect(isCurrentNotificationRequest(4, 5)).toBe(false);
   });
+
+test('渠道动作键同时区分动作和渠道', /* 动作键测试保证不同渠道或动作不会被错误互斥。 */ () => {
+  expect(notificationActionKey('channel-1', 'toggle')).toBe('toggle:channel-1');
+  expect(notificationActionKey('channel-1', 'test')).not.toBe(notificationActionKey('channel-1', 'toggle'));
+  expect(notificationActionKey('channel-2', 'test')).not.toBe(notificationActionKey('channel-1', 'test'));
+});
 
 test('通知表单覆盖各渠道归一化和独立 SMTP 校验',
   // 表单分支测试验证非邮件、继承 SMTP 和独立 SMTP 三条保存路径。

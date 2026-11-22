@@ -21,8 +21,6 @@ export interface TemplateAutomationEditorProps {
 interface ActionRowProps {
   /** action 是被编辑的动作。 */
   action: LibraryAction;
-  /** cards 是可选卡密组。 */
-  cards: LibraryCardOption[];
   /** deliveryTemplates 是可选发货模板。 */
   deliveryTemplates: LibraryDeliveryTemplateOption[];
   /** onChange 写回修改后的动作。 */
@@ -34,28 +32,28 @@ interface ActionRowProps {
 /** inputClass 是本编辑器统一的输入框样式。 */
 const inputClass = 'ios-input rounded-xl px-3 py-2 text-sm';
 
+/** visibleDeliveryAction 仅展示无需卡密绑定的模板动作；旧动作仍保留在原数组中，不修改自动化执行计划。 */
+export const visibleDeliveryAction = (action: LibraryAction, deliveryTemplates: LibraryDeliveryTemplateOption[]): boolean => {
+  // 精简版始终不渲染发卡动作，即使旧数据库仍保留其执行配置。
+  if (action.actionType !== 'send_template') return false;
+  if (action.deliveryTemplateId === 0) return true;
+  // 当前引用的模板若被删除或含库存变量，禁止在精简编辑器中以不完整表单误修改它。
+  const template = deliveryTemplates.find(/* template 按持久化模板 ID 查找。 */ template => template.id === action.deliveryTemplateId);
+  return !!template && template.keys.length === 0;
+};
+
 /** ActionRow 编辑一个发卡或发货模板动作。 */
-const ActionRow = ({ action, cards, deliveryTemplates, onChange, onRemove }: ActionRowProps) => {
+const ActionRow = ({ action, deliveryTemplates, onChange, onRemove }: ActionRowProps) => {
   // template 是当前动作选中的发货模板选项。
   const template = deliveryTemplates.find(/* option 按主键匹配。 */ option => option.id === action.deliveryTemplateId);
   return (
     <div className="space-y-2 rounded-xl border border-gray-200 bg-white p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-bold text-gray-600">{action.actionType === 'send_card' ? '发送卡密' : '发货模板'}</span>
-        {action.actionType === 'send_card' ? (
-          <>
-            <select aria-label="卡密组" className={inputClass} value={action.cardId} onChange={/* 选择卡密组。 */ event => onChange({ ...action, cardId: Number(event.target.value) })}>
-              <option value={0}>选择卡密组</option>
-              {cards.map(/* card 渲染一个卡密组选项。 */ card => <option key={card.id} value={card.id}>{card.name}</option>)}
-            </select>
-            <input aria-label="发放数量" type="number" min={1} className={`${inputClass} w-24`} value={action.deliveryCount} onChange={/* 修改发放数量。 */ event => onChange({ ...action, deliveryCount: Number(event.target.value) })} />
-          </>
-        ) : (
-          <select aria-label="发货模板" className={inputClass} value={action.deliveryTemplateId} onChange={/* 选择发货模板并重建变量绑定。 */ event => onChange(syncTemplateBindings(action, deliveryTemplates.find(/* option 按主键匹配。 */ option => option.id === Number(event.target.value))))}>
-            <option value={0}>选择发货模板</option>
-            {deliveryTemplates.filter(/* option 新引用排除无法在当前界面绑定库存的模板，现有引用仍保留可见。 */ option => SHOW_CARD_UI || option.keys.length === 0 || option.id === action.deliveryTemplateId).map(/* option 渲染一个发货模板选项。 */ option => <option key={option.id} value={option.id}>{option.name}</option>)}
-          </select>
-        )}
+        <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-bold text-gray-600">发货模板</span>
+        <select aria-label="发货模板" className={inputClass} value={action.deliveryTemplateId} onChange={/* 选择发货模板并重建变量绑定。 */ event => onChange(syncTemplateBindings(action, deliveryTemplates.find(/* option 按主键匹配。 */ option => option.id === Number(event.target.value))))}>
+          <option value={0}>选择发货模板</option>
+          {deliveryTemplates.filter(/* option 只允许新增和编辑无库存绑定的发货模板。 */ option => option.keys.length === 0).map(/* option 渲染一个发货模板选项。 */ option => <option key={option.id} value={option.id}>{option.name}</option>)}
+        </select>
         <label className="flex items-center gap-1 text-xs text-gray-500">延迟
           <input aria-label="延迟秒数" type="number" min={0} className={`${inputClass} w-20`} value={action.delaySeconds} onChange={/* 修改延迟秒数。 */ event => onChange({ ...action, delaySeconds: Math.max(0, Number(event.target.value)) })} />秒
         </label>
@@ -63,16 +61,6 @@ const ActionRow = ({ action, cards, deliveryTemplates, onChange, onRemove }: Act
       </div>
       {action.actionType === 'send_template' && template && (
         <div className="space-y-2 pl-1">
-          {SHOW_CARD_UI && action.templateBindings.map(/* binding 渲染一个卡密变量的绑定。 */ binding => (
-            <div key={binding.variableKey} className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
-              <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono">{`{{cards.${binding.variableKey}}}`}</code>
-              <select aria-label={`变量 ${binding.variableKey} 的卡密组`} className={inputClass} value={binding.cardId} onChange={/* 绑定变量到卡密组。 */ event => onChange({ ...action, templateBindings: action.templateBindings.map(/* item 替换当前变量。 */ item => item.variableKey === binding.variableKey ? { ...item, cardId: Number(event.target.value) } : item) })}>
-                <option value={0}>选择卡密组</option>
-                {cards.map(/* card 渲染一个卡密组选项。 */ card => <option key={card.id} value={card.id}>{card.name}</option>)}
-              </select>
-              <input aria-label={`变量 ${binding.variableKey} 的数量`} type="number" min={1} className={`${inputClass} w-20`} value={binding.deliveryCount} onChange={/* 修改该变量的发放数量。 */ event => onChange({ ...action, templateBindings: action.templateBindings.map(/* item 替换当前变量。 */ item => item.variableKey === binding.variableKey ? { ...item, deliveryCount: Number(event.target.value) } : item) })} />
-            </div>
-          ))}
           {Object.keys(action.customVariables).map(/* key 渲染一个自定义变量输入。 */ key => (
             <label key={key} className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
               <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono">{`{{custom.${key}}}`}</code>
@@ -86,7 +74,7 @@ const ActionRow = ({ action, cards, deliveryTemplates, onChange, onRemove }: Act
 };
 
 /** GroupEditorProps 描述一个动作组（付款发货或评价赠品）的编辑器。 */
-interface GroupEditorProps extends Omit<TemplateAutomationEditorProps, 'automation' | 'onChange'> {
+interface GroupEditorProps extends Omit<TemplateAutomationEditorProps, 'automation' | 'onChange' | 'cards'> {
   /** title 是动作组标题。 */
   title: string;
   /** hint 是动作组说明。 */
@@ -98,7 +86,7 @@ interface GroupEditorProps extends Omit<TemplateAutomationEditorProps, 'automati
 }
 
 /** GroupEditor 按规格范围分组编辑一个动作组。 */
-const GroupEditor = ({ title, hint, group, scopes, cards, deliveryTemplates, onChange }: GroupEditorProps) => (
+const GroupEditor = ({ title, hint, group, scopes, deliveryTemplates, onChange }: GroupEditorProps) => (
   <section className="space-y-3 rounded-2xl bg-gray-50 border border-gray-100 p-4">
     <label className="flex items-center gap-2 text-sm font-extrabold text-gray-900">
       <input type="checkbox" checked={group.enabled} onChange={/* 切换该自动化的启用状态。 */ event => onChange({ ...group, enabled: event.target.checked })} />{title}
@@ -107,13 +95,15 @@ const GroupEditor = ({ title, hint, group, scopes, cards, deliveryTemplates, onC
     {group.enabled && scopes.map(/* scope 渲染一个规格范围的动作列表。 */ scope => (
       <div key={`${scope.specName}|${scope.specValue}`} className="space-y-2">
         {scopes.length > 1 || scope.specName ? <h5 className="text-xs font-black text-gray-700">规格：{scope.label}</h5> : null}
-        {actionsInScope(group, scope).filter(/* entry 是原动作数组中的条目；隐藏库存动作但保持原索引用于安全保存。 */ entry => SHOW_CARD_UI || entry.action.actionType !== 'send_card').map(/* entry 渲染该范围内的一个动作。 */ ({ action, index }) => (
-          <ActionRow key={index} action={action} cards={cards} deliveryTemplates={deliveryTemplates}
+        {actionsInScope(group, scope).filter(/* entry 是原动作数组中的条目；隐藏库存动作但保持原索引用于安全保存。 */ entry => visibleDeliveryAction(entry.action, deliveryTemplates)).map(/* entry 渲染该范围内的一个动作。 */ ({ action, index }) => (
+          <ActionRow key={index} action={action} deliveryTemplates={deliveryTemplates}
             onChange={/* 原位更新动作。 */ next => onChange({ ...group, actions: group.actions.map(/* item、i 定位被修改动作。 */ (item, i) => i === index ? next : item) })}
             onRemove={/* 删除动作。 */ () => onChange({ ...group, actions: group.actions.filter(/* _、i 过滤被删除动作。 */ (_, i) => i !== index) })} />
         ))}
+        {!SHOW_CARD_UI && actionsInScope(group, scope).some(/* entry 判断有无需要原样保留的历史发货动作。 */ entry => !visibleDeliveryAction(entry.action, deliveryTemplates)) && (
+          <p className="text-xs text-gray-500">部分历史发货配置在精简界面中不显示，保存其他设置不会将其删除。</p>
+        )}
         <div className="flex gap-2">
-          {SHOW_CARD_UI && <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-gray-700 shadow-sm hover:bg-emerald-50" onClick={/* 追加发卡动作。 */ () => onChange({ ...group, actions: [...group.actions, newAction('send_card', scope)] })}><Plus className="h-3.5 w-3.5" />发送卡密</button>}
           <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-gray-700 shadow-sm hover:bg-emerald-50" onClick={/* 追加发货模板动作。 */ () => onChange({ ...group, actions: [...group.actions, newAction('send_template', scope)] })}><Plus className="h-3.5 w-3.5" />发货模板</button>
         </div>
       </div>
@@ -122,10 +112,10 @@ const GroupEditor = ({ title, hint, group, scopes, cards, deliveryTemplates, onC
 );
 
 /** TemplateAutomationEditor 编辑模板的付款发货、评价赠品和求评价；多规格时每个 SKU 单独配置。 */
-export const TemplateAutomationEditor = ({ automation, scopes, cards, deliveryTemplates, onChange }: TemplateAutomationEditorProps) => (
+export const TemplateAutomationEditor = ({ automation, scopes, deliveryTemplates, onChange }: TemplateAutomationEditorProps) => (
   <div className="space-y-4">
-    <GroupEditor title="付款后自动发货" hint="买家付款后按顺序执行；全部成功后按账号设置确认发货。多规格商品必须为每个规格组合配置。" group={automation.paidDelivery} scopes={scopes} cards={cards} deliveryTemplates={deliveryTemplates} onChange={/* 写回付款发货。 */ next => onChange({ ...automation, paidDelivery: next })} />
-    <GroupEditor title="评价赠品" hint="买家评价后发送的赠品。" group={automation.reviewGift} scopes={scopes} cards={cards} deliveryTemplates={deliveryTemplates} onChange={/* 写回评价赠品。 */ next => onChange({ ...automation, reviewGift: next })} />
+    <GroupEditor title="付款后自动发货" hint="买家付款后按顺序执行；全部成功后按账号设置确认发货。多规格商品必须为每个规格组合配置。" group={automation.paidDelivery} scopes={scopes} deliveryTemplates={deliveryTemplates} onChange={/* 写回付款发货。 */ next => onChange({ ...automation, paidDelivery: next })} />
+    <GroupEditor title="评价赠品" hint="买家评价后发送的赠品。" group={automation.reviewGift} scopes={scopes} deliveryTemplates={deliveryTemplates} onChange={/* 写回评价赠品。 */ next => onChange({ ...automation, reviewGift: next })} />
     <section className="space-y-3 rounded-2xl bg-gray-50 border border-gray-100 p-4">
       <label className="flex items-center gap-2 text-sm font-extrabold text-gray-900"><input type="checkbox" checked={automation.reviewRequest.enabled} onChange={/* 切换求评价。 */ event => onChange({ ...automation, reviewRequest: { ...automation.reviewRequest, enabled: event.target.checked } })} />求评价</label>
       {automation.reviewRequest.enabled && (

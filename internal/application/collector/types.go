@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	libraryapp "xianyu-go/internal/application/library"
+	"xianyu-go/internal/catalog"
 )
 
 const (
@@ -70,6 +71,8 @@ type CollectedItem struct {
 	BrowseCount int
 	// CategoryID 是平台原始类目 ID。
 	CategoryID string
+	// Source 是非敏感的来源发布快照；列表接口缺少的数据必须显式标记待核实。
+	Source catalog.SourceInfo
 	// IsFreeShipping 表示是否包邮。
 	IsFreeShipping bool
 	// IsMultiSpec 表示是否含多规格。
@@ -192,6 +195,8 @@ type SaveTemplateItem struct {
 	ImageURLs []string
 	// HasFullDetail 标记是否已具备完整详情；为 false 且开启补全时会自动补抓详情。
 	HasFullDetail bool
+	// Source 是本次采集已经取得的原商品发布信息，与图片和标题一同保存到模板。
+	Source catalog.SourceInfo
 }
 
 // SaveTemplatesInput 描述将一批采集商品转存到本地资源库商品模板的请求。

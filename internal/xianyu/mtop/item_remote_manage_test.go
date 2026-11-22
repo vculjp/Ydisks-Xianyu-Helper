@@ -49,6 +49,54 @@ func TestEditExistingItemPreservesRemoteDetails(t *testing.T) {
 	}
 }
 
+// TestSetBargainSubmitsBooleanSwitchAndKeepsDetails 验证小刀开关通过 PC 编辑接口以布尔值提交，且不覆盖其它原始字段。
+func TestSetBargainSubmitsBooleanSwitchAndKeepsDetails(t *testing.T) {
+	// received 保存平台模拟器收到的编辑载荷，用于断言两个小刀字段为布尔值。
+	var received map[string]any
+	// count 统计平台请求数，必须为一次详情读取加一次编辑提交。
+	count := 0
+	// transport 完全替代网络传输，不会向真实闲鱼发送请求。
+	transport := &dispatchTransport{handlers: map[string]http.HandlerFunc{
+		"mtop.idle.pc.idleitem.editDetail": func(w http.ResponseWriter, _ *http.Request) {
+			count++
+			fmt.Fprint(w, `{"ret":["SUCCESS::调用成功"],"data":{"itemId":"it1","imageInfoDOList":[{"url":"https://example.com/pic.jpg"}],"itemTextDTO":{"title":"旧标题","desc":"旧描述","titleDescSeparate":false},"itemPriceDTO":{"priceInCent":"200","origPriceInCent":"300"},"itemCatDTO":{"catId":"5001"},"quantity":"8","itemSkuList":[{"skuId":"s1"}],"itemPostFeeDTO":{"canFreeShipping":"false"},"userRightsProtocols":[{"enable":"false"}]}}`)
+		},
+		"mtop.idle.pc.idleitem.edit": func(w http.ResponseWriter, r *http.Request) {
+			count++
+			received, _ = parseDataURL(readBody(r))
+			fmt.Fprint(w, `{"ret":["SUCCESS::调用成功"],"data":{"success":true}}`)
+		},
+	}}
+	// client 使用本地模拟 HTTP Transport，测试不调用真实平台。
+	client := &ClientImpl{HTTPClient: &http.Client{Transport: transport}}
+	// err 保存开启小刀后的操作结果。
+	_, err := client.SetBargain(context.Background(), consignCookies, "it1", true)
+	if err != nil || count != 2 {
+		t.Fatalf("模拟小刀开关应恰好读取并提交各一次: count=%d err=%v", count, err)
+	}
+	// canBargain、supportBargainPrice 必须同时为 JSON 布尔 true，不能退化为字符串或数字。
+	if received["canBargain"] != true || received["supportBargainPrice"] != true {
+		t.Fatalf("小刀开关必须以布尔值提交 canBargain/supportBargainPrice: %#v", received)
+	}
+	// text、price 分别是保留的原始文案与价格结构，切换开关不能改动它们。
+	text, price := mapFromAny(received["itemTextDTO"]), mapFromAny(received["itemPriceDTO"])
+	if text["title"] != "旧标题" || text["desc"] != "旧描述" || price["priceInCent"] != "200" || received["itemId"] != "it1" || received["quantity"] != "8" {
+		t.Fatalf("小刀开关编辑不得覆盖原始商品字段: text=%v price=%v received=%v", text, price, received)
+	}
+	// 第二轮关闭小刀，确认两个字段同步为 false。
+	transport.handlers["mtop.idle.pc.idleitem.edit"] = func(w http.ResponseWriter, r *http.Request) {
+		count++
+		received, _ = parseDataURL(readBody(r))
+		fmt.Fprint(w, `{"ret":["SUCCESS::调用成功"],"data":{"success":true}}`)
+	}
+	if _, err := client.SetBargain(context.Background(), consignCookies, "it1", false); err != nil {
+		t.Fatalf("关闭小刀应成功: %v", err)
+	}
+	if received["canBargain"] != false || received["supportBargainPrice"] != false {
+		t.Fatalf("关闭小刀时两个字段必须同步为布尔 false: %#v", received)
+	}
+}
+
 // TestDownShelfOnlySucceedsWhenPlatformConfirms 验证下架必须检查 data.success=true，不能仅凭 HTTP 200。
 func TestDownShelfOnlySucceedsWhenPlatformConfirms(t *testing.T) {
 	// callCount 是模拟平台仅接收一条下架请求的计数器。
@@ -80,6 +128,39 @@ func TestDownShelfOnlySucceedsWhenPlatformConfirms(t *testing.T) {
 	_, successErr := client.DownShelfItem(context.Background(), consignCookies, "it1")
 	if successErr != nil {
 		t.Fatalf("平台确认成功时应完成下架: %v", successErr)
+	}
+}
+
+// TestDeleteItemRequiresPlatformConfirmationAndSendsDraftID 验证删除请求形状和平台业务确认。
+func TestDeleteItemRequiresPlatformConfirmationAndSendsDraftID(t *testing.T) {
+	// callCount 是模拟平台接收删除请求的次数。
+	callCount := 0
+	// transport 返回平台明确确认删除，并记录协议载荷。
+	transport := &dispatchTransport{handlers: map[string]http.HandlerFunc{
+		"mtop.alibaba.idle.seller.pc.item.delete": func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			// request 是通过真实签名 MTOP 通道提交的删除商品标识。
+			request, _ := parseDataURL(readBody(r))
+			if request["itemId"] != "it1" {
+				t.Error("删除请求商品 ID 错误")
+			}
+			if value, exists := request["draftId"]; !exists || value != nil {
+				t.Errorf("删除请求必须携带 draftId:null，实际 %#v", request["draftId"])
+			}
+			fmt.Fprint(w, `{"ret":["SUCCESS::调用成功"],"data":{"success":true}}`)
+		},
+	}}
+	// client 只使用本地响应回调，不会对外发起网络请求。
+	client := &ClientImpl{HTTPClient: &http.Client{Transport: transport}}
+	if _, err := client.DeleteItem(context.Background(), consignCookies, "it1"); err != nil || callCount != 1 {
+		t.Fatalf("平台确认删除时应成功: count=%d err=%v", callCount, err)
+	}
+	// 第二轮模拟平台显式拒绝，不能仅凭 HTTP 200 判定删除成功。
+	transport.handlers["mtop.alibaba.idle.seller.pc.item.delete"] = func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"ret":["SUCCESS::调用成功"],"data":{"success":false}}`)
+	}
+	if _, err := client.DeleteItem(context.Background(), consignCookies, "it1"); err == nil {
+		t.Fatal("平台显式拒绝删除时必须返回错误")
 	}
 }
 

@@ -17,10 +17,10 @@ const extractSingleQuotedValues = (source: string, pattern: RegExp) => {
 
 describe('frontend navigation routing', () => {
   test('sidebar entries and App activeTab routes stay in sync', () => {
-    const sidebar = readFrontendFile('shared/ui/Sidebar.tsx'); /* sidebar 表示sidebar。 */
+    const navigation = readFrontendFile('shared/ui/consoleNavigation.ts'); /* navigation 是侧栏和面包屑共用的唯一导航元数据。 */
     const app = readFrontendFile('app/shell/AuthenticatedShell.tsx'); /* app 表示认证后页面组合器源码。 */
 
-    const sidebarIDs = extractSingleQuotedValues(sidebar, /id:\s*'([^']+)'/g); /* sidebarIDs 表示sidebarIDs。 */
+    const sidebarIDs = extractSingleQuotedValues(navigation, /id:\s*'([^']+)'/g); /* sidebarIDs 表示导航元数据中的业务页面标识。 */
     const appRouteIDs = extractSingleQuotedValues(app, /case\s+'([^']+)'/g); /* appRouteIDs 表示appRouteIDs。 */
 
     expect([...sidebarIDs].sort()).toEqual([...appRouteIDs].sort());
@@ -29,7 +29,7 @@ describe('frontend navigation routing', () => {
   test('active navigation uses the primary action blue', () => {
     const sidebar = readFrontendFile('shared/ui/Sidebar.tsx'); /* sidebar 表示sidebar。 */
 
-    expect(sidebar).toContain("'bg-brand text-white shadow-brand-active'");
+    expect(sidebar).toContain("active ? 'is-active' : ''");
     expect(sidebar).not.toContain("'bg-sky-500 text-white'");
   } /* 测试回调断言已登录应用的路由、访问控制或延迟加载契约。 */);
 
@@ -46,12 +46,12 @@ describe('frontend navigation routing', () => {
 
   test('卡密库存入口隐藏且直接访问旧地址也不会加载卡密页面', /* 确保隐藏范围不依赖侧栏可见性，避免旧书签绕过。 */ () => {
     // sidebar 是侧栏菜单源码，用于确认卡密按钮不会出现在导航中。
-    const sidebar = readFrontendFile('shared/ui/Sidebar.tsx');
+    const navigation = readFrontendFile('shared/ui/consoleNavigation.ts');
     // routes 是地址映射源码，用于防止直接访问旧卡密地址。
     const routes = readFrontendFile('app/router/routes.ts');
     // shell 是页面组合器源码，用于确认隐藏页面不再挂载或懒加载。
     const shell = readFrontendFile('app/shell/AuthenticatedShell.tsx');
-    expect(sidebar).not.toContain("id: 'cards'");
+    expect(navigation).not.toContain("id: 'cards'");
     expect(routes).not.toContain("'/app/cards'");
     expect(shell).not.toContain("case 'cards'");
     expect(shell).not.toContain("features/cards/pages/CardList");
@@ -108,15 +108,16 @@ describe('frontend navigation routing', () => {
     const app = readFrontendFile('app/router/AppRouter.tsx'); /* app 表示认证后路由组合器源码。 */
     const sessionProvider = readFrontendFile('app/providers/SessionProvider.tsx'); /* sessionProvider 表示认证 Provider 源码。 */
     const shell = readFrontendFile('app/shell/AuthenticatedShell.tsx'); /* shell 表示认证后应用壳源码。 */
-    const sidebar = readFrontendFile('shared/ui/Sidebar.tsx'); /* sidebar 表示sidebar。 */
+    const navigation = readFrontendFile('shared/ui/consoleNavigation.ts'); /* navigation 是侧栏和面包屑共用的唯一导航元数据。 */
     const settingsHook = readFrontendFile('app/features/settings/hooks.ts'); /* settingsHook 表示settingsHook。 */
 
     expect(app).toContain('const { isLoggedIn, isAdmin, signOut } = useSession();');
     expect(sessionProvider).toContain('setIsAdmin(response.is_admin === true)');
     expect(app).toContain("activeRoute === 'settings'");
     expect(shell).toContain('isAdmin ? <Settings /> : <Dashboard />');
-    expect(sidebar).toContain('isAdmin = false');
-    expect(sidebar).toContain("...(isAdmin ? [{ id: 'settings'");
+    expect(navigation).toContain('isConsoleEntryVisible');
+    expect(navigation).toContain("id: 'settings'");
+    expect(navigation).toContain('adminOnly: true');
     expect(settingsHook).toContain('setLoadError');
   } /* 测试回调断言已登录应用的路由、访问控制或延迟加载契约。 */);
 
@@ -137,7 +138,8 @@ describe('frontend navigation routing', () => {
     const notificationModal = readFrontendFile('app/features/notifications/components/NotificationChannelModal.tsx'); /* notificationModal 表示notificationModal。 */
 
     expect(notifications).toContain('interface NotificationsProps');
-    expect(notifications).toContain('{isAdmin && <NotificationSmtpSettings');
+    expect(notifications).toContain('{isAdmin && (');
+    expect(notifications).toContain('<NotificationSmtpSettings');
     expect(notificationState).toContain("key: 'to_email'");
     expect(notificationModal).toContain('完整继承系统 SMTP');
     expect(notificationModal).toContain('use_custom_smtp');
@@ -244,14 +246,15 @@ describe('frontend navigation routing', () => {
   test('runtime log entry is gated to administrators', /* 当前回调断言运行日志入口与后端管理员权限保持一致。 */ () => {
     const app = readFrontendFile('app/router/AppRouter.tsx'); /* app 表示认证后路由组合器源码。 */
     const shell = readFrontendFile('app/shell/AuthenticatedShell.tsx'); /* shell 表示认证后应用壳源码。 */
-    const sidebar = readFrontendFile('shared/ui/Sidebar.tsx'); /* sidebar 表示侧边栏源码。 */
+    const navigation = readFrontendFile('shared/ui/consoleNavigation.ts'); /* navigation 是侧边栏与面包屑共用的导航元数据。 */
     const routes = readFrontendFile('app/router/routes.ts'); /* routes 表示业务路由表源码。 */
 
     expect(routes).toContain("'/app/logs': 'logs'");
     expect(app).toContain("activeRoute === 'logs'");
     expect(app).toContain("route === 'logs'");
     expect(shell).toContain("case 'logs': return isAdmin ? <RuntimeLogs /> : <Dashboard />;");
-    expect(sidebar).toContain("{ id: 'logs', icon: ScrollText, label: '运行日志' }");
-    expect(sidebar).toContain("...(isAdmin ? [{ id: 'settings'");
+    expect(navigation).toContain("id: 'logs'");
+    expect(navigation).toContain('adminOnly: true');
+    expect(navigation).toContain("id: 'settings'");
   } /* 测试回调断言运行日志页面只对管理员开放。 */);
 } /* 测试套件回调汇总路由装配与访问边界契约。 */);

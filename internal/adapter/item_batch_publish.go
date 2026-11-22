@@ -59,6 +59,10 @@ func (p *ItemBatchPublishPort) PublishRemoteRow(ctx context.Context, userID int6
 	if strings.TrimSpace(row.ItemID) != "" {
 		return itemapp.BatchPublishOutcome{Result: batchPublishResultFromRow(row)}, nil
 	}
+	// 即便历史预检批次已存在，也禁止把缺失正文或仅有标题的商品发往远端平台。
+	if strings.TrimSpace(row.Description) == "" || strings.TrimSpace(row.Description) == strings.TrimSpace(row.Title) {
+		return itemapp.BatchPublishOutcome{}, errors.New("商品描述缺失或只有标题，已停止发布；请完善真实商品详情并重新预检")
+	}
 	// imageDependencyErr 保存新建远端商品所需的图片读取依赖校验错误；已保存检查点的重试已在此前返回。
 	if imageDependencyErr := p.validateImageDependencies(); imageDependencyErr != nil {
 		return itemapp.BatchPublishOutcome{}, imageDependencyErr
@@ -129,7 +133,7 @@ func (p *ItemBatchPublishPort) PublishRemoteRow(ctx context.Context, userID int6
 	}
 	// result、callErr 保存平台返回结果及调用错误。
 	result, callErr := p.mtopClient().PublishItem(mtopCtx, latest.Value, mtop.PublishItemRequest{
-		Title: row.Title, Description: firstBatchNonEmpty(row.Description, row.Title), PriceCents: priceCents,
+		Title: row.Title, Description: row.Description, PriceCents: priceCents,
 		OriginalPriceCents: originalPriceCents, Quantity: quantity, PostageMode: row.PostageMode,
 		PostageCents: postageCents, Virtual: true, Location: location, PreferredCategory: preferredCategory, Images: images,
 		Specs: specs, SKUs: skus, SpecImages: specImages,
@@ -151,6 +155,10 @@ func (p *ItemBatchPublishPort) PublishRemoteRow(ctx context.Context, userID int6
 		}
 		// publishErr 保存库存权限等可直接展示的确定性平台错误。
 		var publishErr *mtop.PublishError
+		if errors.As(callErr, &publishErr) && publishErr.Code == mtop.PublishErrorPCUnsupported {
+			// PC 限制是平台明确拒绝，而不是网络结果未知：后续不能进入不确定远端结果恢复分支。
+			return itemapp.BatchPublishOutcome{}, itemapp.ErrPCPublishUnsupported
+		}
 		if errors.As(callErr, &publishErr) && publishErr.Code == mtop.PublishErrorStockPermissionMissing {
 			return itemapp.BatchPublishOutcome{}, errors.New("该账号没有库存发布权限，无法按库存数量发布商品")
 		}

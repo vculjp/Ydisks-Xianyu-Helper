@@ -9,6 +9,7 @@ import { OrderFilterBar } from '../components/OrderFilterBar';
 import { useOrderQuery } from '../hooks';
 import { useOrderActions } from '../orderActions';
 import { PageHeader } from '../../../../shared/ui/PageHeader';
+import { AsyncStateView } from '../../../../shared/ui/feedback';
 
 // StatusBadge 渲染订单状态徽标。
 const StatusBadge: React.FC<{ /** status 表示状态。 */ status: OrderStatus }> = ({ status }) => {
@@ -31,11 +32,11 @@ const StatusBadge: React.FC<{ /** status 表示状态。 */ status: OrderStatus 
     completed: '已完成',
     cancelled: '已取消',
     refunding: '退款中',
-    unknown: '未知',
+    unknown: '待核实',
   };
 
   return (
-    <span className={`px-3 py-1.5 rounded-lg text-xs font-bold ${styles[status] || styles.cancelled}`}>
+    <span title={status === 'unknown' ? '尚未从闲鱼平台核实订单状态，不代表未付款或未发货' : undefined} className={`px-3 py-1.5 rounded-lg text-xs font-bold ${styles[status] || styles.cancelled}`}>
       {labels[status] || status}
     </span>
   );
@@ -46,7 +47,7 @@ const OrderList: React.FC = () => {
   // orderQuery 负责订单查询、筛选、分页和展示辅助数据。
   const orderQuery = useOrderQuery();
   // { 解构得到当前 Hook 返回的状态和操作函数。
-  const { orders, accounts, filter, setFilter, accountFilter, setAccountFilter, searchText, setSearchText, page, setPage, totalPages, loading, loadOrders, accountName, accountNickname, getItemNameById } = orderQuery;
+  const { orders, accounts, filter, setFilter, accountFilter, setAccountFilter, searchText, setSearchText, page, setPage, totalPages, loading, loadError = '', loadOrders, accountName, accountNickname, getItemNameById } = orderQuery;
   // orderActions 集中管理订单动作、弹窗状态和异步结果。
   const orderActions = useOrderActions({ orders, page, accountFilter, filter, searchText, setPage, loadOrders });
   // actionState 解构得到页面动作协调器的状态和操作函数。
@@ -60,6 +61,7 @@ const OrderList: React.FC = () => {
     shipResult,
     syncingOrderId,
     deletingOrderId,
+    savingEdit,
     handleSync,
     handleShip,
     executeShip,
@@ -73,6 +75,8 @@ const OrderList: React.FC = () => {
     closeEditModal,
     closeShipModal,
   } = orderActions;
+  // incompleteOrderCount 仅统计本页缺少平台确认字段的订单，提示不能当作已付款或已发货。
+  const incompleteOrderCount = orders.filter(/* order 保留信息未核实的订单。 */ order => order.status === 'unknown' || !order.amount || order.quantity <= 0).length;
 
   // handleFilterChange 切换订单状态筛选并回到第一页。
   const handleFilterChange = (value: string) => {
@@ -92,20 +96,27 @@ const OrderList: React.FC = () => {
   };
 
   return (
-    <div className="min-w-0 space-y-8 animate-fade-in">
+    <div className="min-w-0 space-y-6 animate-fade-in">
       <PageHeader title="订单中心" description="查看所有闲鱼交易记录与状态。">
         <div className="flex items-center gap-3">
-            <button onClick={loadOrders} className="p-3 rounded-2xl bg-white border border-gray-100 text-gray-600 hover:bg-gray-50 hover:text-black transition-colors shadow-sm">
+            <button onClick={/* 手动刷新订单列表。 */ () => void loadOrders()} disabled={loading} aria-label="刷新订单列表" className="rounded border border-line bg-white p-2 text-gray-600 transition-colors hover:border-brand hover:text-brand disabled:cursor-wait disabled:opacity-50">
                 <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
             </button>
-            <button onClick={handleSync} className="ios-btn-primary px-6 py-3 rounded-2xl font-bold shadow-lg shadow-blue-200 text-sm flex items-center gap-2">
+            <button onClick={/* 同步当前筛选条件下的订单。 */ handleSync} disabled={loading} className="ios-btn-primary flex items-center gap-2 rounded px-4 py-2 text-sm font-medium disabled:opacity-50">
                 <Truck className="w-5 h-5" />
                 一键同步订单
             </button>
         </div>
       </PageHeader>
 
-      <div className="ios-card rounded-xl overflow-hidden shadow-lg border-0 bg-white">
+      {loadError && orders.length > 0 && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded border border-danger-200 bg-danger-50 px-4 py-3 text-xs text-danger-700">
+          <span>{loadError}。当前展示的是上一次成功读取的订单。</span>
+          <button type="button" className="console-link-button" onClick={/* 保留当前数据并重新加载订单。 */ () => void loadOrders()}>重新加载</button>
+        </div>
+      )}
+
+      <div className="console-table-shell">
         <OrderFilterBar
           filter={filter}
           onFilterChange={handleFilterChange}
@@ -117,19 +128,37 @@ const OrderList: React.FC = () => {
           onSearchChange={handleSearchChange}
         />
 
+        {incompleteOrderCount > 0 && (
+          <div role="status" className="mx-5 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+            本页有 {incompleteOrderCount} 笔订单的信息尚未核实。实时消息可能只提供订单号；如卖家订单列表同步提示“无权限访问”，金额、数量与状态将无法补全。
+            请在闲鱼官方订单详情中确认实际付款、发货情况，勿根据这里的待核实状态重复发货。
+          </div>
+        )}
+
         {/* Table */}
-        <div className="overflow-x-auto min-h-[400px]">
-          <table className="w-full text-left border-collapse table-fixed">
+        {orders.length === 0 ? (
+          <AsyncStateView
+            loading={loading && orders.length === 0}
+            error={loadError && orders.length === 0 ? loadError : ''}
+            empty={!loading && !loadError && orders.length === 0}
+            onRetry={/* 订单读取失败时重新请求当前筛选页。 */ () => void loadOrders()}
+            emptyTitle="暂无订单"
+            emptyDescription="当前筛选条件下没有订单；可切换筛选或先在闲鱼同步订单。"
+            loadingText="正在加载订单"
+          />
+        ) : (
+        <div className="console-table-wrap min-h-[400px]">
+          <table className="console-table" style={{ minWidth: 1240 }}>
             <thead>
-              <tr className="bg-white text-gray-400 text-xs font-bold uppercase tracking-wider border-b border-gray-50">
-                <th className="px-6 py-5" style={{width: '28%'}}>订单信息</th>
-                <th className="px-6 py-5" style={{width: '26%'}}>买家信息</th>
-                <th className="px-6 py-5" style={{width: '11%'}}>实付金额</th>
-                <th className="px-6 py-5" style={{width: '13%'}}>当前状态</th>
-                <th className="px-6 py-5 text-right" style={{width: '22%'}}>操作</th>
+              <tr>
+                <th className="px-6" style={{width: '28%'}}>订单信息</th>
+                <th className="px-6" style={{width: '26%'}}>买家信息</th>
+                <th className="px-6" style={{width: '11%'}}>实付金额</th>
+                <th className="px-6" style={{width: '13%'}}>当前状态</th>
+                <th className="px-6 text-right" style={{width: '22%'}}>操作</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-50">
+            <tbody>
               {orders.map(/* 当前回调处理集合中的单个元素。 */ (order) => (
                 <tr key={order.id} className="hover:bg-warning-50/50 transition-colors group">
                   <td className="px-6 py-5">
@@ -150,7 +179,7 @@ const OrderList: React.FC = () => {
                           <span className="min-w-0 truncate whitespace-nowrap">{accountNickname(order.cookie_id)}</span>
                         </div>
                         <div className="text-xs text-gray-500 mt-1 font-medium">订单ID: {order.order_id}</div>
-                        <div className="text-xs text-gray-400 mt-0.5">数量: {order.quantity} • {formatLocalDateTime(order.created_at)}</div>
+                        <div className="text-xs text-gray-400 mt-0.5">数量: {order.quantity > 0 ? order.quantity : '待获取'} • {formatLocalDateTime(order.created_at)}</div>
                       </div>
                     </div>
                   </td>
@@ -184,7 +213,7 @@ const OrderList: React.FC = () => {
                   <td className="px-6 py-5">
                     <StatusBadge status={order.status} />
                   </td>
-                  <td className="px-6 py-5 text-right">
+                  <td className="px-6 text-right">
                     {order.status === 'pending_ship' && (
                         <button
                             onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => handleShip(order.order_id)}
@@ -238,6 +267,7 @@ const OrderList: React.FC = () => {
             </tbody>
           </table>
         </div>
+        )}
 
         {/* Pagination */}
         <div className="p-4 border-t border-gray-50 flex items-center justify-between bg-white">
@@ -304,7 +334,7 @@ const OrderList: React.FC = () => {
                   </div>
                   <div>
                     <div className="text-xs text-gray-500 mb-1">数量</div>
-                    <div className="font-bold text-gray-900">{selectedOrder.quantity}</div>
+                    <div className="font-bold text-gray-900">{selectedOrder.quantity > 0 ? selectedOrder.quantity : '待获取'}</div>
                   </div>
                   <div className="col-span-2">
                     <div className="text-xs text-gray-500 mb-1">创建时间</div>
@@ -424,8 +454,8 @@ const OrderList: React.FC = () => {
                   <div>
                     <div className="font-bold text-gray-900 text-sm">仅修改闲鱼发货状态</div>
                     <div className="text-xs text-gray-500 mt-1 leading-relaxed">
-                      不实际扣除或发送卡券，仅在闲鱼平台将订单标记为"已发货"。
-                      适用于已经给客户发过货、只是忘记在闲鱼修改状态的情况。
+                      不会再次发送发货内容，仅在闲鱼平台将订单标记为“已发货”。
+                      适用于买家已经收到网盘链接或其他内容，但平台仍显示待发货的订单。
                     </div>
                   </div>
                 </div>
@@ -442,10 +472,10 @@ const OrderList: React.FC = () => {
                     <PackageCheck className="w-5 h-5 text-blue-700" />
                   </div>
                   <div>
-                    <div className="font-bold text-gray-900 text-sm">完整发货（匹配卡券并发送）</div>
+                    <div className="font-bold text-gray-900 text-sm">完整发货（按规则发送内容）</div>
                     <div className="text-xs text-gray-500 mt-1 leading-relaxed">
-                      自动匹配发货规则、获取卡券、发送卡券信息给买家，并修改发货状态。
-                      适用于订单既没有发送卡券给买家、也没有修改发货状态的情况。
+                      按已配置的发货规则发送对应内容，并更新闲鱼订单状态。
+                      仅适用于尚未发送发货内容且仍待发货的订单，已经发送过网盘链接的订单请使用上方选项。
                     </div>
                   </div>
                 </div>
@@ -520,6 +550,7 @@ const OrderList: React.FC = () => {
                     <option value="completed">已完成</option>
                     <option value="cancelled">已取消</option>
                     <option value="refunding">退款中</option>
+                    <option value="unknown" disabled>待核实（请先确认实际状态）</option>
                   </select>
                 </div>
               </div>
@@ -597,10 +628,11 @@ const OrderList: React.FC = () => {
                 </button>
                 <button
                   onClick={handleSaveEdit}
-                  className="flex-1 ios-btn-primary px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2"
+                  disabled={savingEdit}
+                  className="ios-btn-primary flex flex-1 items-center justify-center gap-2 rounded px-6 py-3 font-medium disabled:cursor-wait disabled:opacity-50"
                 >
-                  <Save className="w-4 h-4" />
-                  保存更改
+                  {savingEdit ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {savingEdit ? '正在保存' : '保存更改'}
                 </button>
               </div>
             </div>

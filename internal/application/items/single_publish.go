@@ -18,6 +18,8 @@ const (
 	PublishErrorTokenExpired PublishErrorCode = "auth_expired"
 	// PublishErrorStockPermissionMissing 表示账号缺少库存发布权限。
 	PublishErrorStockPermissionMissing PublishErrorCode = "stock_permission_missing"
+	// PublishErrorPCUnsupported 表示平台明确禁止该商品在网页端发布或编辑。
+	PublishErrorPCUnsupported PublishErrorCode = "pc_publish_unsupported"
 )
 
 // PublishError 保存平台发布失败的稳定分类和脱敏文本，不暴露平台包类型。

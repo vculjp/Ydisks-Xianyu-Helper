@@ -120,6 +120,40 @@ func TestCollectorRejectIncompleteSave(t *testing.T) {
 	}
 }
 
+// TestCollectorRejectTitleOnlyWhenDetailFetchDisabled 验证未补抓的列表摘要不能静默用标题代替正文创建模板。
+func TestCollectorRejectTitleOnlyWhenDetailFetchDisabled(t *testing.T) {
+	// cases 分别模拟纯列表无正文、旧版复制标题及用户已输入真实独立描述三种情形。
+	cases := []struct {
+		name        string
+		description string
+		succeeded   bool
+	}{
+		{name: "缺少描述", description: "", succeeded: false},
+		{name: "旧版标题冒充正文", description: "测试标题", succeeded: false},
+		{name: "人工明确填写正文", description: "真实且独立的商品详情正文", succeeded: true},
+	}
+	// tc 遍历每种场景，分别创建隔离的本地服务及模板记录器。
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// creator 仅记录本地创建，不产生远程发布动作。
+			creator := &fakeTemplateCreator{}
+			// svc 使用本地图片下载与上传替身，不能触达平台。
+			svc, err := NewService(Dependencies{Platform: &fakePlatform{owned: true}, ImageDownloader: fakeDownloader{}, ImageUploader: &fakeUploader{}, TemplateCreator: creator})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// result 是关闭自动补抓时的实际转存业务结果。
+			result, err := svc.SaveToTemplates(context.Background(), 1, SaveTemplatesInput{Items: []SaveTemplateItem{{ItemID: "10001", Title: "测试标题", Description: tc.description, Price: "1.00", ImageURLs: []string{"https://example.com/a.png"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (result.Succeeded == 1) != tc.succeeded || (len(creator.created) == 1) != tc.succeeded {
+				t.Fatalf("正文校验不符合预期: %+v，创建数量=%d", result, len(creator.created))
+			}
+		})
+	}
+}
+
 // existingCollectorTemplate 模拟已持久化完成的同内容转存，不提供任何外部调用。
 type existingCollectorTemplate struct {
 	// fakeTemplateCreator 记录不应发生的重复创建。
@@ -128,7 +162,7 @@ type existingCollectorTemplate struct {
 
 // FindCollectorTemplate 返回已保存的原模板，验证重试直接复用本地结果。
 func (*existingCollectorTemplate) FindCollectorTemplate(context.Context, int64, string) (libraryapp.Template, error) {
-	return libraryapp.Template{ID: 42, Title: "之前保存的模板", ImageIDs: []int64{1, 2}}, nil
+	return libraryapp.Template{ID: 42, Title: "之前保存的模板", Description: "已经确认存在的完整正文", ImageIDs: []int64{1, 2}}, nil
 }
 
 // TestCollectorExistingTemplateReturnsBeforeExternalWork 验证重复提交时不会访问图片、AI 或详情端口。

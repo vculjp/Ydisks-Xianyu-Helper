@@ -49,6 +49,8 @@ export interface RulesProps {
     cookieId: string;
     // itemId 表示目标商品标识。
     itemId: string;
+    // trigger 表示商品页要求打开的规则类型；旧调用缺省为付款后发货。
+    trigger?: 'order_paid' | 'order_created';
     // requestId 用于区分连续的外部跳转请求。
     requestId: number;
   };
@@ -167,6 +169,16 @@ export interface RulesDataOptions {
 export interface RulesDataResult extends RulesDataSet {
   // loading 表示当前是否存在规则数据请求。
   loading: boolean;
+  // referenceDataError 保存账号等必需参考数据加载失败的用户可读文案；非空时页面必须提供重试。
+  referenceDataError: string;
+  // referenceDataWarning 保存商品、卡密或发货模板等可选参考数据降级提示；非空时仍允许使用已有数据。
+  referenceDataWarning: string;
+  // automationError 保存自动化规则列表最近一次加载失败文案；非空时页面必须保留旧数据并显示错误。
+  automationError: string;
+  // replyError 保存关键词回复列表最近一次加载失败文案；非空时页面必须显示错误而不是空态。
+  replyError: string;
+  // defaultRepliesError 保存默认回复配置最近一次读取失败文案；非空时禁止用空配置覆盖服务端数据。
+  defaultRepliesError: string;
   // setLoading 用于外部联动加载场景暂时接管页面加载指示器。
   setLoading: Dispatch<SetStateAction<boolean>>;
   // setAutomationRules 用于外部跳转场景写入规则列表。

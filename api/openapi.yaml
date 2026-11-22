@@ -4011,6 +4011,27 @@ paths:
         '404': {description: 商品不存在, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '500': {description: 平台已操作但本地保存失败, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '502': {description: 平台拒绝或结果未知, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/items/{cookie_id}/{item_id}/bargain":
+    post:
+      operationId: postApiV1ItemBargain
+      summary: 用户确认后开启或关闭单件闲鱼商品的“2 人小刀”
+      parameters:
+        - {name: cookie_id, in: path, required: true, schema: {type: string}}
+        - {name: item_id, in: path, required: true, schema: {type: string}}
+      security: [{cookieAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ItemBargainRequest'}
+      responses:
+        '200': {description: 小刀开关已确认, content: {application/json: {schema: {$ref: '#/components/schemas/ItemRemoteActionResponse'}}}}
+        '400': {description: 参数错误, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 未登录, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 无权限, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: 商品不存在, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 本地状态保存失败, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: 平台拒绝或结果未知, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   "/api/v1/items/{cookie_id}/{item_id}/downshelf":
     post:
       operationId: postApiV1ItemDownShelf
@@ -4043,6 +4064,41 @@ paths:
         '404': {description: 商品不存在, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '500': {description: 本地状态保存失败, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '502': {description: 平台拒绝或结果未知, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/items/{cookie_id}/{item_id}/delete":
+    post:
+      operationId: postApiV1ItemDelete
+      summary: 用户确认后删除单件闲鱼商品并清理本地记录
+      parameters:
+        - {name: cookie_id, in: path, required: true, schema: {type: string}}
+        - {name: item_id, in: path, required: true, schema: {type: string}}
+      security: [{cookieAuth: []}]
+      responses:
+        '200': {description: 删除已确认, content: {application/json: {schema: {$ref: '#/components/schemas/ItemRemoteActionResponse'}}}}
+        '400': {description: 参数错误, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {description: 未登录, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 无权限, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: 商品不存在, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 本地状态保存失败, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: 平台拒绝或结果未知, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  "/api/v1/items/{cookie_id}/{item_id}/metrics/refresh":
+    post:
+      operationId: refreshItemMetrics
+      summary: 用户显式读取一件商品的真实浏览及想要并更新本地缓存
+      description: |
+        每次仅调用已有单商品详情用例，不支持批量 ID、不由列表读取或同步自动触发。
+        继续遵守账号 MTOP 节流和原有有界 Token 恢复；风控、会话失效或取消后不重放本次用例。
+        不存在已验证的详情曝光字段，因此不能据此补全曝光量；未知统计省略，真实零保留。
+      parameters:
+        - {name: cookie_id, in: path, required: true, schema: {type: string}}
+        - {name: item_id, in: path, required: true, schema: {type: string}}
+      security: [{cookieAuth: []}]
+      responses:
+        '200': {description: 返回缓存更新后的当前商品, content: {application/json: {schema: {$ref: '#/components/schemas/ItemListResponse'}}}}
+        '401': {description: 未登录, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: 无权限, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: 商品不存在, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '500': {description: 本地统计保存或读取失败, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: 平台详情读取失败, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   "/api/v1/items/{cookie_id}/{item_id}/ai-settings":
     get:
       operationId: getApiV1ItemsBycookie_idByitem_idAiSettings
@@ -9443,6 +9499,13 @@ components:
         item_description: {type: string}
         item_price: {type: string}
       additionalProperties: false
+    ItemBargainRequest:
+      type: object
+      description: 开启或关闭单件商品的“2 人小刀”
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
+      additionalProperties: false
     ItemRemoteActionResponse:
       type: object
       required: [success, message, shelf_state]
@@ -10396,6 +10459,21 @@ components:
         item_price: {type: string}
         item_detail: {type: string}
         item_image: {type: string}
+        exposure_count:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+          description: 最近一次列表同步缓存的精确曝光次数；未知时省略，0 表示平台明确返回零。不因读取列表补发平台请求。
+        browse_count:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+          description: 最近一次列表同步缓存的精确浏览次数；未知时省略，0 表示平台明确返回零。
+        want_count:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+          description: 最近一次列表同步缓存的精确想要人数；未知时省略，0 表示平台明确返回零。
         is_multi_spec: {type: boolean}
         multi_quantity_delivery: {type: boolean}
         is_multi_qty_ship: {type: boolean}
@@ -10414,6 +10492,21 @@ components:
         item_category: {type: string}
         item_price: {type: string}
         item_detail: {type: string}
+        exposure_count:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+          description: 从本地详情缓存派生的精确曝光次数；未知时省略，真实零值保留。
+        browse_count:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+          description: 从本地详情缓存派生的精确浏览次数；未知时省略，真实零值保留。
+        want_count:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+          description: 从本地详情缓存派生的精确想要人数；未知时省略，真实零值保留。
         is_multi_spec: {type: boolean}
         multi_quantity_delivery: {type: boolean}
     NotificationChannelResponse:
@@ -11648,6 +11741,7 @@ components:
         postage_mode: {type: string}
         postage: {type: string}
         category: {$ref: '#/components/schemas/PublishCategoryResponse'}
+        source: {$ref: '#/components/schemas/SourcePublishInfo'}
         image_ids:
           type: array
           items: {type: integer, format: int64}
@@ -11667,6 +11761,7 @@ components:
         postage_mode: {type: string}
         postage: {type: string}
         category: {$ref: '#/components/schemas/PublishCategoryResponse'}
+        source: {$ref: '#/components/schemas/SourcePublishInfo'}
         image_ids:
           type: array
           items: {type: integer, format: int64}
@@ -11758,6 +11853,65 @@ components:
           items: {type: string}
         location: {$ref: '#/components/schemas/LibraryTemplateLocation'}
         publish_interval_seconds: {type: integer, minimum: 0, maximum: 3600}
+    SourcePublishCategory:
+      type: object
+      required: [cat_id, cat_name, channel_cat_id, tb_cat_id]
+      properties:
+        cat_id: {type: string}
+        cat_name: {type: string}
+        channel_cat_id: {type: string}
+        tb_cat_id: {type: string}
+    SourcePublishAttribute:
+      type: object
+      required: [name, value]
+      properties:
+        name: {type: string}
+        value: {type: string}
+    SourcePublishSpecValue:
+      type: object
+      required: [value, image_url]
+      properties:
+        value: {type: string}
+        image_url: {type: string}
+    SourcePublishSpec:
+      type: object
+      required: [name, values]
+      properties:
+        name: {type: string}
+        values:
+          type: array
+          items: {$ref: '#/components/schemas/SourcePublishSpecValue'}
+    SourcePublishSKU:
+      type: object
+      required: [value_labels, price, quantity]
+      properties:
+        value_labels:
+          type: array
+          items: {type: string}
+        price: {type: string}
+        quantity: {type: integer}
+    SourcePublishInfo:
+      type: object
+      properties:
+        item_id: {type: string}
+        web_url: {type: string}
+        category: {$ref: '#/components/schemas/SourcePublishCategory'}
+        specs:
+          type: array
+          items: {$ref: '#/components/schemas/SourcePublishSpec'}
+        skus:
+          type: array
+          items: {$ref: '#/components/schemas/SourcePublishSKU'}
+        quantity: {type: integer}
+        postage_mode: {type: string}
+        postage: {type: string}
+        area: {type: string}
+        attributes:
+          type: array
+          items: {$ref: '#/components/schemas/SourcePublishAttribute'}
+        missing:
+          type: array
+          items: {type: string}
     CollectedItem:
       type: object
       required:
@@ -11795,6 +11949,7 @@ components:
         want_count: {type: integer}
         browse_count: {type: integer}
         category_id: {type: string}
+        source: {$ref: '#/components/schemas/SourcePublishInfo'}
         is_free_shipping: {type: boolean}
         is_multi_spec: {type: boolean}
         has_full_detail: {type: boolean}
@@ -11884,6 +12039,7 @@ components:
           type: array
           items: {type: string}
         has_full_detail: {type: boolean}
+        source: {$ref: '#/components/schemas/SourcePublishInfo'}
     CollectorSaveTemplatesRequest:
       type: object
       required: [items]

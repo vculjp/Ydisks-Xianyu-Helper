@@ -191,9 +191,11 @@ describe('useItemActions 分支', /* 当前套件覆盖校验提示、异常路�
     const csvLines = (await createObjectURL.mock.calls[0][0].text()).replace(/^﻿/, '').split('\n');
     expect(csvLines[0].startsWith('"账号ID","标题","描述","价格","原价","库存","邮费模式","邮费","图片"')).toBe(true);
     expect(csvLines[0].endsWith('"求评价最多次数","变量.link"')).toBe(true);
-    expect(csvLines[3]).toContain('"none"');
-    expect(csvLines[3]).toContain('"T1"');
-    expect(csvLines[3].endsWith('"https://pan.example.com/s/xxxx"')).toBe(true);
+    expect(csvLines[2]).toContain('"none"');
+    expect(csvLines[2]).toContain('"T1"');
+    expect(csvLines[2].endsWith('"https://pan.example.com/s/xxxx"')).toBe(true);
+    expect(csvLines.join('\n')).not.toContain('会员组合包');
+    expect(csvLines.join('\n')).not.toContain('101:1;102:1');
     act(/* 当前回调打开添加与发布弹窗。 */ () => { hook.result.current.openAddModal(); hook.result.current.openPublishModal(); });
     expect(hook.result.current.addForm.cookie_id).toBe('account-1');
     expect(hook.result.current.publishForm.cookie_id).toBe('account-1');

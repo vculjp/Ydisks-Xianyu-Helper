@@ -1,5 +1,5 @@
 import { describe,expect,test } from 'vitest';
-import { auditActionLabel,auditEventTypeLabel,auditSourceLabel,auditStatusMeta,auditStatusOptions,auditTriggerLabel,auditTriggerOptions } from './auditState';
+import { auditActionLabel,auditDisplaySummary,auditEventTypeLabel,auditSourceLabel,auditStatusMeta,auditStatusOptions,auditTriggerLabel,auditTriggerOptions } from './auditState';
 
 describe('auditState', /* 当前回调验证规则日志的状态与文案映射。 */ () => {
   // 用例：已知状态返回中文名与样式，未知状态原样显示。
@@ -20,7 +20,9 @@ describe('auditState', /* 当前回调验证规则日志的状态与文案映射
     expect(auditTriggerLabel('order_paid')).toBe('买家付款');
     expect(auditTriggerLabel('custom')).toBe('custom');
     expect(auditTriggerOptions.some(/* option 是一个触发类型选项。 */ option => option.value === 'order_paid')).toBe(true);
-    expect(auditActionLabel('send_card')).toBe('发卡');
+    expect(auditActionLabel('send_card')).toBe('历史发货动作');
+    expect(auditDisplaySummary('发送卡密「历史库存」×1', 'send_card')).toBe('执行历史发货动作');
+    expect(auditDisplaySummary('发送发货模板「网盘链接」', 'send_template')).toBe('发送发货模板「网盘链接」');
     expect(auditActionLabel('')).toBe('');
     expect(auditSourceLabel('ws')).toBe('实时消息');
     expect(auditSourceLabel('custom')).toBe('custom');

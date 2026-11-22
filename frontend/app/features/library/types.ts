@@ -1,3 +1,4 @@
+import type { SourcePublishInfo } from '../../../shared/ui/publish/sourceInfo';
 import type { ComponentType } from 'react';
 
 /** LibraryImage 是图片库中一张图片的 UI 模型，字节通过内容地址按需加载。 */
@@ -159,6 +160,8 @@ export interface ProductTemplate {
   postage: string;
   /** category 是平台类目。 */
   category: LibraryCategory;
+  /** source 是保留的原商品链接、类目和规格等可验证的发布信息，普通模板不存在。 */
+  source?: SourcePublishInfo;
   /** imageIds 是主图的图片库主键，顺序即主图顺序。 */
   imageIds: number[];
   /** specs 是规格维度，单规格为空。 */

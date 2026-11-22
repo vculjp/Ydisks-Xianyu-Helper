@@ -21,14 +21,18 @@ getShippingRulesPage,
 } from './api';
 import { isCurrentRequest,nextRequestGeneration } from './interactionState';
 import type { AutomationIssueState,RulesDataOptions,RulesDataResult,RulesTab } from './types';
+import { SHOW_CARD_UI } from '../../../shared/ui/featureVisibility';
 
-// withReferenceFallback 记录可选参考数据失败，并用备用值保证账号列表和页面主体继续加载。
-const withReferenceFallback = <T>(
-  // request 是一类参考数据的异步请求。
-  request: Promise<T>,
-  // fallback 是该参考数据失败时使用的空或默认值。
-  fallback: T,
-): Promise<T> => request.catch(/* 当前回调记录参考数据失败并返回备用值。 */ () => (console.log('规则异常') as never) || fallback);
+// rulesLoadErrorMessage 把未知加载异常转换为可直接展示的中文失败说明。
+const rulesLoadErrorMessage = (error: unknown, fallback: string): string => {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  return fallback;
+};
+
+// optionalReferenceMessage 把可选参考数据失败项汇总成一条降级提示。
+const optionalReferenceMessage = (names: string[]): string =>
+  names.length ? `以下参考数据加载失败，页面将继续使用已有数据：${names.join('、')}` : '';
 
 // useRulesData 集中管理 Rules 页的服务端数据、请求代次和刷新动作。
 export const useRulesData = (options: RulesDataOptions): RulesDataResult => {
@@ -48,14 +52,28 @@ export const useRulesData = (options: RulesDataOptions): RulesDataResult => {
   const [items, setItems] = useState<Item[]>([]);
   // deliveryTemplates 保存规则编辑器可选的发货模板。
   const [deliveryTemplates, setDeliveryTemplates] = useState<DeliveryTemplate[]>([]);
-  // loading 表示当前规则页是否有刷新请求正在执行。
-  const [loading, setLoading] = useState(false);
+  // loading 表示当前规则页是否有刷新请求正在执行；初始为 true，避免首屏在首个请求发出前误显示空态。
+  const [loading, setLoading] = useState(true);
+  // referenceDataError 保存账号等必需参考数据加载失败文案。
+  const [referenceDataError, setReferenceDataError] = useState('');
+  // referenceDataWarning 保存可选参考数据降级提示，不阻断已有数据继续展示。
+  const [referenceDataWarning, setReferenceDataWarning] = useState('');
+  // automationError 保存自动化规则列表最近一次加载失败文案。
+  const [automationError, setAutomationError] = useState('');
+  // replyError 保存关键词回复列表最近一次加载失败文案。
+  const [replyError, setReplyError] = useState('');
+  // defaultRepliesError 保存默认回复配置最近一次读取失败文案。
+  const [defaultRepliesError, setDefaultRepliesError] = useState('');
   // referenceDataRequest 保存参考数据请求的最新代次，防止旧账号列表覆盖新刷新结果。
   const referenceDataRequest = useRef(0);
   // automationRulesRequest 保存自动化列表请求的最新代次。
   const automationRulesRequest = useRef(0);
   // replyRulesRequest 保存关键词规则请求的最新代次。
   const replyRulesRequest = useRef(0);
+  // replyRulesAccountRef 保存最近一次成功加载关键词规则的账号，用于账号切换时清空旧账号数据、同账号刷新时保留旧列表。
+  const replyRulesAccountRef = useRef('');
+  // defaultRepliesRequest 保存默认回复列表请求的最新代次，防止旧响应覆盖新配置。
+  const defaultRepliesRequest = useRef(0);
 
   // automationTotal 保存服务端返回的自动化规则总数。
   const [automationTotal, setAutomationTotal] = useState(0);
@@ -70,24 +88,43 @@ export const useRulesData = (options: RulesDataOptions): RulesDataResult => {
     async () => {
     // requestID 标记本次参考数据请求，防止重复刷新时旧结果覆盖新结果。
     const requestID = ++referenceDataRequest.current;
-    // 参考数据请求并行执行，非账号请求失败时使用备用值继续。
-    const [accountList, cardList, itemList, defaultReplyMap, deliveryTemplateList] = await Promise.all([
+    setReferenceDataError('');
+    setReferenceDataWarning('');
+    // referenceResults 汇总账号和可选参考数据的独立加载结果，单个失败不阻断其他成功数据。
+    const referenceResults = await Promise.allSettled([
       getAccountDetails(),
-      withReferenceFallback(getCards(), []),
-      withReferenceFallback(getItems(), []),
-      withReferenceFallback(getDefaultReplies(), {}),
-      withReferenceFallback(getDeliveryTemplates(), []),
+      SHOW_CARD_UI ? getCards() : Promise.resolve([] as Card[]),
+      getItems(),
+      getDefaultReplies(),
+      getDeliveryTemplates(),
     ]);
     if (requestID < referenceDataRequest.current) return;
-    setAccounts(accountList);
-    setCards(cardList);
-    setItems(itemList);
-    setDefaultReplies(defaultReplyMap);
-    setDeliveryTemplates(deliveryTemplateList);
-    options.setSelectedAccountId(
-      // 账号选择器保留用户已有选择，否则回填首个账号。
-      current => current || accountList[0]?.id || '',
-    );
+    // accountResult、cardResult、itemResult、defaultReplyResult、deliveryTemplateResult 分别对应五类参考数据。
+    const [accountResult, cardResult, itemResult, defaultReplyResult, deliveryTemplateResult] = referenceResults;
+    if (accountResult.status === 'fulfilled') {
+      setAccounts(accountResult.value);
+      options.setSelectedAccountId(
+        // 账号选择器保留用户已有选择，否则回填首个账号。
+        current => current || accountResult.value[0]?.id || '',
+      );
+    } else {
+      setReferenceDataError(rulesLoadErrorMessage(accountResult.reason, '账号参考数据加载失败，请重试'));
+    }
+    if (cardResult.status === 'fulfilled') setCards(cardResult.value);
+    if (itemResult.status === 'fulfilled') setItems(itemResult.value);
+    if (deliveryTemplateResult.status === 'fulfilled') setDeliveryTemplates(deliveryTemplateResult.value);
+    if (defaultReplyResult.status === 'fulfilled') {
+      setDefaultReplies(defaultReplyResult.value);
+      setDefaultRepliesError('');
+    } else {
+      setDefaultRepliesError(rulesLoadErrorMessage(defaultReplyResult.reason, '默认回复配置加载失败，请重试'));
+    }
+    // degradedReferenceNames 收集非必需参考数据的失败名称，用于展示降级提示。
+    const degradedReferenceNames: string[] = [];
+    if (SHOW_CARD_UI && cardResult.status === 'rejected') degradedReferenceNames.push('卡密库存');
+    if (itemResult.status === 'rejected') degradedReferenceNames.push('商品列表');
+    if (deliveryTemplateResult.status === 'rejected') degradedReferenceNames.push('发货模板');
+    setReferenceDataWarning(optionalReferenceMessage(degradedReferenceNames));
     },
     [options.setSelectedAccountId],
   );
@@ -99,6 +136,7 @@ export const useRulesData = (options: RulesDataOptions): RulesDataResult => {
     // requestID 标记本次自动化规则请求，防止旧响应覆盖新筛选结果。
     const requestID = nextRequestGeneration(automationRulesRequest.current);
     automationRulesRequest.current = requestID;
+    setAutomationError('');
     // issuesPromise 与主规则请求并行，异常接口失败不阻断规则展示。
     const issuesPromise = getAutomationIssues().catch(
       // 异常请求失败记录日志并转换为空结果，避免阻断主列表。
@@ -107,28 +145,34 @@ export const useRulesData = (options: RulesDataOptions): RulesDataResult => {
       return null;
       },
     );
-    // result 是当前筛选条件对应的分页响应。
-    const result = await getShippingRulesPage({
-      cookieId: options.selectedAccountId || undefined,
-      triggerType: options.automationTriggerFilter,
-      enabled: options.automationStatusFilter === 'all' ? undefined : options.automationStatusFilter === 'enabled',
-      search: options.debouncedAutomationSearch,
-      page: options.automationPage,
-      pageSize: options.automationPageSize,
-    });
-    if (!isCurrentRequest(requestID, automationRulesRequest.current, options.selectedAccountId, options.selectedAccountId)) return;
-    setAutomationRules(result.data);
-    setAutomationTotal(result.total);
-    setAutomationTotalPages(result.total_pages);
-    setAutomationTriggerCounts(result.trigger_counts || {});
-    if (result.page !== options.automationPage) {
-      // 分页响应可能被后端修正到有效页码，使用函数式更新避免读取过期闭包。
-      options.onAutomationPageChange?.(result.page);
+    try {
+      // result 是当前筛选条件对应的分页响应。
+      const result = await getShippingRulesPage({
+        cookieId: options.selectedAccountId || undefined,
+        triggerType: options.automationTriggerFilter,
+        enabled: options.automationStatusFilter === 'all' ? undefined : options.automationStatusFilter === 'enabled',
+        search: options.debouncedAutomationSearch,
+        page: options.automationPage,
+        pageSize: options.automationPageSize,
+      });
+      if (!isCurrentRequest(requestID, automationRulesRequest.current, options.selectedAccountId, options.selectedAccountId)) return;
+      setAutomationRules(result.data);
+      setAutomationTotal(result.total);
+      setAutomationTotalPages(result.total_pages);
+      setAutomationTriggerCounts(result.trigger_counts || {});
+      if (result.page !== options.automationPage) {
+        // 分页响应可能被后端修正到有效页码，使用函数式更新避免读取过期闭包。
+        options.onAutomationPageChange?.(result.page);
+      }
+      // issues 是与规则列表并行加载的异常结果。
+      const issues = await issuesPromise;
+      if (!isCurrentRequest(requestID, automationRulesRequest.current, options.selectedAccountId, options.selectedAccountId)) return;
+      if (issues) setAutomationIssues(issues);
+    } catch (/* error 是自动化规则列表加载失败原因。 */ error) {
+      if (!isCurrentRequest(requestID, automationRulesRequest.current, options.selectedAccountId, options.selectedAccountId)) return;
+      setAutomationError(rulesLoadErrorMessage(error, '自动化规则加载失败，请重试'));
+      throw error;
     }
-    // issues 是与规则列表并行加载的异常结果。
-    const issues = await issuesPromise;
-    if (!isCurrentRequest(requestID, automationRulesRequest.current, options.selectedAccountId, options.selectedAccountId)) return;
-    if (issues) setAutomationIssues(issues);
     },
     [
     options.automationPage,
@@ -150,12 +194,28 @@ export const useRulesData = (options: RulesDataOptions): RulesDataResult => {
     replyRulesRequest.current = requestID;
     // cookieID 是本次关键词规则请求绑定的账号。
     const cookieID = options.selectedAccountId;
-    setReplyRules([]);
-    if (!cookieID) return;
-    // rules 是当前账号的关键词回复规则。
-    const rules = await getReplyRules(cookieID);
-    if (!isCurrentRequest(requestID, replyRulesRequest.current, cookieID, options.selectedAccountId)) return;
-    setReplyRules(rules);
+    setReplyError('');
+    if (!cookieID) {
+      // 未选择账号时没有可展示的关键词规则，直接清空并重置账号标记。
+      setReplyRules([]);
+      replyRulesAccountRef.current = '';
+      return;
+    }
+    if (replyRulesAccountRef.current && replyRulesAccountRef.current !== cookieID) {
+      // 账号已切换时先清空旧账号列表，避免刷新失败后把其他账号的规则误当成当前账号数据。
+      setReplyRules([]);
+    }
+    try {
+      // rules 是当前账号的关键词回复规则。
+      const rules = await getReplyRules(cookieID);
+      if (!isCurrentRequest(requestID, replyRulesRequest.current, cookieID, options.selectedAccountId)) return;
+      setReplyRules(rules);
+      replyRulesAccountRef.current = cookieID;
+    } catch (/* error 是关键词回复列表加载失败原因。 */ error) {
+      if (!isCurrentRequest(requestID, replyRulesRequest.current, cookieID, options.selectedAccountId)) return;
+      setReplyError(rulesLoadErrorMessage(error, '关键词回复加载失败，请重试'));
+      throw error;
+    }
     },
     [options.selectedAccountId],
   );
@@ -164,7 +224,20 @@ export const useRulesData = (options: RulesDataOptions): RulesDataResult => {
   const loadDefaultReplies = useCallback(
     // 默认回复加载器刷新全部账号的默认配置。
     async () => {
-    setDefaultReplies(await getDefaultReplies());
+    // requestID 标记本次默认回复请求，防止旧响应覆盖新配置。
+    const requestID = nextRequestGeneration(defaultRepliesRequest.current);
+    defaultRepliesRequest.current = requestID;
+    setDefaultRepliesError('');
+    try {
+      // nextReplies 是服务端返回的全部账号默认回复配置。
+      const nextReplies = await getDefaultReplies();
+      if (!isCurrentRequest(requestID, defaultRepliesRequest.current, 'default', 'default')) return;
+      setDefaultReplies(nextReplies);
+    } catch (/* error 是默认回复配置读取失败原因。 */ error) {
+      if (!isCurrentRequest(requestID, defaultRepliesRequest.current, 'default', 'default')) return;
+      setDefaultRepliesError(rulesLoadErrorMessage(error, '默认回复配置加载失败，请重试'));
+      throw error;
+    }
     },
     [],
   );
@@ -175,11 +248,13 @@ export const useRulesData = (options: RulesDataOptions): RulesDataResult => {
     async () => {
     setLoading(true);
     try {
-      // 刷新账号参考数据和当前页签数据，保证新增账号能立即进入选择器。
-      await Promise.all([
-        loadReferenceData(),
+      // refreshJobs 收集参考数据和当前页签数据请求；失败由各自错误态承接。
+      const refreshJobs: Promise<void>[] = [loadReferenceData()];
+      refreshJobs.push(
         options.activeTab === 'automation' ? loadAutomationRules() : options.activeTab === 'reply' ? loadReplyRules() : loadDefaultReplies(),
-      ]);
+      );
+      // 使用 allSettled 保证某一请求失败时仍等待其他请求收口，且不会产生未处理拒绝。
+      await Promise.allSettled(refreshJobs);
     } finally {
       setLoading(false);
     }
@@ -201,6 +276,11 @@ export const useRulesData = (options: RulesDataOptions): RulesDataResult => {
     automationTotalPages,
     automationTriggerCounts,
     loading,
+    referenceDataError,
+    referenceDataWarning,
+    automationError,
+    replyError,
+    defaultRepliesError,
     setLoading,
     setAutomationRules,
     setCards,

@@ -33,6 +33,8 @@ type ProductTemplate struct {
 	PostageCents int64
 	// CategoryJSON 是类目配置 JSON。
 	CategoryJSON string
+	// SourceJSON 是公开来源商品的发布数据快照；旧版模板迁移后为 {}。
+	SourceJSON string
 	// ImageIDsJSON 是模板主图的图片库主键 JSON 数组（顺序即主图顺序）；规格值图片的主键保存在 SpecsJSON 的 spec_image_ids 中，删除图片的引用检查需同时扫描两处。
 	ImageIDsJSON string
 	// SpecsJSON 是规格维度与 SKU 的 JSON，空对象表示单规格。
@@ -54,7 +56,7 @@ type ProductTemplates struct {
 }
 
 // productTemplateColumns 是读取模板时统一使用的列清单。
-const productTemplateColumns = `id,user_id,name,title,description,price_cents,original_price_cents,quantity,postage_mode,postage_cents,category_json,image_ids_json,specs_json,automation_json,created_at,updated_at`
+const productTemplateColumns = `id,user_id,name,title,description,price_cents,original_price_cents,quantity,postage_mode,postage_cents,category_json,image_ids_json,specs_json,automation_json,COALESCE(source_json,'{}'),created_at,updated_at`
 
 // scanProductTemplate 把一行查询结果读入模板模型。
 func scanProductTemplate(scanner interface{ Scan(...any) error }) (ProductTemplate, error) {
@@ -62,7 +64,7 @@ func scanProductTemplate(scanner interface{ Scan(...any) error }) (ProductTempla
 	var t ProductTemplate
 	// err 保存扫描错误。
 	err := scanner.Scan(&t.ID, &t.UserID, &t.Name, &t.Title, &t.Description, &t.PriceCents, &t.OriginalPriceCents, &t.Quantity,
-		&t.PostageMode, &t.PostageCents, &t.CategoryJSON, &t.ImageIDsJSON, &t.SpecsJSON, &t.AutomationJSON, &t.CreatedAt, &t.UpdatedAt)
+		&t.PostageMode, &t.PostageCents, &t.CategoryJSON, &t.ImageIDsJSON, &t.SpecsJSON, &t.AutomationJSON, &t.SourceJSON, &t.CreatedAt, &t.UpdatedAt)
 	return t, err
 }
 
@@ -79,6 +81,9 @@ func normalizeProductTemplateJSON(t *ProductTemplate) {
 	}
 	if strings.TrimSpace(t.AutomationJSON) == "" {
 		t.AutomationJSON = "{}"
+	}
+	if strings.TrimSpace(t.SourceJSON) == "" {
+		t.SourceJSON = "{}"
 	}
 	if t.PostageMode == "" {
 		t.PostageMode = "free"
@@ -137,11 +142,11 @@ func (p *ProductTemplates) Create(ctx context.Context, t ProductTemplate) (int64
 	normalizeProductTemplateJSON(&t)
 	if t.CollectorKey != "" {
 		// query 使用用户与请求摘要的数据库唯一约束，重试命中既有记录时不覆盖用户已编辑的模板。
-		query := `INSERT INTO product_templates (user_id,name,title,description,price_cents,original_price_cents,quantity,postage_mode,postage_cents,category_json,image_ids_json,specs_json,automation_json,collector_key)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)` + dialectUpsert(p.Dialect, []string{"user_id", "collector_key"}, map[string]string{"collector_key": "EXCLUDED.collector_key"})
+		query := `INSERT INTO product_templates (user_id,name,title,description,price_cents,original_price_cents,quantity,postage_mode,postage_cents,category_json,image_ids_json,specs_json,automation_json,source_json,collector_key)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)` + dialectUpsert(p.Dialect, []string{"user_id", "collector_key"}, map[string]string{"collector_key": "EXCLUDED.collector_key"})
 		// err 表示首次创建或幂等复用数据库记录时的执行异常。
 		_, err := p.DB.ExecContext(ctx, query, t.UserID, t.Name, t.Title, t.Description, t.PriceCents, t.OriginalPriceCents, t.Quantity, t.PostageMode, t.PostageCents,
-			t.CategoryJSON, t.ImageIDsJSON, t.SpecsJSON, t.AutomationJSON, t.CollectorKey)
+			t.CategoryJSON, t.ImageIDsJSON, t.SpecsJSON, t.AutomationJSON, t.SourceJSON, t.CollectorKey)
 		if err != nil {
 			return 0, err
 		}
@@ -151,10 +156,10 @@ func (p *ProductTemplates) Create(ctx context.Context, t ProductTemplate) (int64
 		return id, err
 	}
 	return insertReturningID(ctx, p.DB, p.Dialect,
-		`INSERT INTO product_templates (user_id,name,title,description,price_cents,original_price_cents,quantity,postage_mode,postage_cents,category_json,image_ids_json,specs_json,automation_json)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO product_templates (user_id,name,title,description,price_cents,original_price_cents,quantity,postage_mode,postage_cents,category_json,image_ids_json,specs_json,automation_json,source_json)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.UserID, t.Name, t.Title, t.Description, t.PriceCents, t.OriginalPriceCents, t.Quantity, t.PostageMode, t.PostageCents,
-		t.CategoryJSON, t.ImageIDsJSON, t.SpecsJSON, t.AutomationJSON)
+		t.CategoryJSON, t.ImageIDsJSON, t.SpecsJSON, t.AutomationJSON, t.SourceJSON)
 }
 
 // Update 覆盖用户名下的模板；记录不存在返回 ErrNotFound。
@@ -163,9 +168,9 @@ func (p *ProductTemplates) Update(ctx context.Context, t ProductTemplate) error 
 	// res、err 保存更新结果。
 	res, err := p.DB.ExecContext(ctx,
 		`UPDATE product_templates SET name=?,title=?,description=?,price_cents=?,original_price_cents=?,quantity=?,postage_mode=?,postage_cents=?,
-		 category_json=?,image_ids_json=?,specs_json=?,automation_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`,
+		 category_json=?,image_ids_json=?,specs_json=?,automation_json=?,source_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`,
 		t.Name, t.Title, t.Description, t.PriceCents, t.OriginalPriceCents, t.Quantity, t.PostageMode, t.PostageCents,
-		t.CategoryJSON, t.ImageIDsJSON, t.SpecsJSON, t.AutomationJSON, t.ID, t.UserID)
+		t.CategoryJSON, t.ImageIDsJSON, t.SpecsJSON, t.AutomationJSON, t.SourceJSON, t.ID, t.UserID)
 	if err != nil {
 		return err
 	}

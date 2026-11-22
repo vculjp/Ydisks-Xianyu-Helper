@@ -1,10 +1,10 @@
-import { Plus,Send,Trash2,X } from 'lucide-react';
+import { Plus,Send,Trash2 } from 'lucide-react';
 import React,{ type Dispatch,type SetStateAction } from 'react';
-import { createPortal } from 'react-dom';
 import ItemMultiSelect from './ItemMultiSelect';
 import { ImageSourceField } from '../../../../shared/ui/ImageSourceField';
 import type { LibraryImageChooserComponent } from '../../../../shared/ui/imageSource';
 import type { Item,ReplyRule } from '../types';
+import { DialogFrame } from '../../../../shared/ui/Dialog';
 
 /** ReplyRuleEditorProps 描述关键词回复编辑器所需的草稿、商品候选和保存动作。 */
 interface ReplyRuleEditorProps {
@@ -20,33 +20,56 @@ interface ReplyRuleEditorProps {
   onSave: () => void;
   /** libraryImageChooser 是应用壳注入的图片库选择器；缺省时图片回复只能填写外链。 */
   libraryImageChooser?: LibraryImageChooserComponent;
+  /** saving 表示父级保存请求正在执行，提交期间禁用字段和关闭操作。 */
+  saving?: boolean;
+  /** error 是父级保存或校验失败文案，需要保持在表单内可见。 */
+  error?: string;
 }
 
 /** ReplyRuleEditor 展示关键词多表达式、匹配模式、商品范围和回复内容编辑器。 */
-const ReplyRuleEditor: React.FC<ReplyRuleEditorProps> = ({ rule,setRule,items,onClose,onSave,libraryImageChooser }) => {
+const ReplyRuleEditor: React.FC<ReplyRuleEditorProps> = ({ rule,setRule,items,onClose,onSave,libraryImageChooser,saving = false,error = '' }) => {
   // expressions 是当前编辑器展示的表达式行，历史单 keyword 规则回退为一行。
   const expressions = rule.expressions?.length ? rule.expressions : [rule.keyword || ''];
   // itemIDs 是当前规则绑定的商品标识集合，兼容历史单值字段。
   const itemIDs = rule.item_ids?.length ? rule.item_ids : (rule.item_id ? [rule.item_id] : []);
 
-  return createPortal(
-    <div className="modal-overlay">
-      <div className="modal-container">
-        <div className="modal-header">
-          <div className="flex items-center justify-between w-full">
-            <h3 className="text-2xl font-extrabold text-gray-900">
-              {rule.id ? '编辑回复规则' : '新增回复规则'}
-            </h3>
-            <button
-              onClick={/* 当前回调关闭关键词回复编辑器。 */ onClose}
-              className="p-2 bg-gray-100 rounded-full hover:bg-gray-200 transition-colors"
-            >
-              <X className="w-5 h-5 text-gray-600" />
-            </button>
+  return (
+    <DialogFrame
+      open
+      title={rule.id ? '编辑回复规则' : '新增回复规则'}
+      eyebrow="规则 / 关键词回复"
+      onClose={onClose}
+      closeDisabled={saving}
+      busy={saving}
+      size="lg"
+      footer={(
+        <>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={/* 当前回调取消关键词回复编辑并关闭弹窗。 */ onClose}
+            className="ios-btn-secondary px-5 py-2.5"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={/* 当前回调提交关键词回复规则。 */ onSave}
+            className="ios-btn-primary inline-flex items-center justify-center gap-2 px-5 py-2.5"
+          >
+            <Send className="w-4 h-4" />
+            {saving ? '保存中…' : '保存规则'}
+          </button>
+        </>
+      )}
+    >
+      <fieldset disabled={saving} className="m-0 min-w-0 space-y-5 border-0 p-0">
+        {error && (
+          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+            {error}
           </div>
-        </div>
-
-        <div className="modal-body space-y-5">
+        )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-bold text-gray-700 mb-2">关联商品</label>
@@ -179,25 +202,8 @@ const ReplyRuleEditor: React.FC<ReplyRuleEditorProps> = ({ rule,setRule,items,on
             </span>
           </label>
 
-          <div className="flex gap-3 pt-4">
-            <button
-              onClick={/* 当前回调取消关键词回复编辑并关闭弹窗。 */ onClose}
-              className="flex-1 px-6 py-3 rounded-xl font-bold bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors"
-            >
-              取消
-            </button>
-            <button
-              onClick={/* 当前回调提交关键词回复规则。 */ onSave}
-              className="flex-1 ios-btn-primary px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2"
-            >
-              <Send className="w-4 h-4" />
-              保存规则
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>,
-    document.body,
+      </fieldset>
+    </DialogFrame>
   );
 };
 

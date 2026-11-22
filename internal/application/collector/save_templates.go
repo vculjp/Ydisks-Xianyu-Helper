@@ -13,6 +13,7 @@ import (
 
 	itemapp "xianyu-go/internal/application/items"
 	libraryapp "xianyu-go/internal/application/library"
+	"xianyu-go/internal/catalog"
 )
 
 // SaveToTemplates 将勾选的采集商品顺序补齐详情（可选）、执行 AI 防重改写（可选）、下载主图至图片库并创建本地商品模板。
@@ -35,8 +36,8 @@ func (s *Service) SaveToTemplates(ctx context.Context, userID int64, input SaveT
 	if postageMode == "" {
 		postageMode = "none"
 	}
-	if postageMode != "none" && postageMode != "free" {
-		return SaveTemplatesResult{}, invalid("转存模板邮费模式仅支持 none（无需邮寄）或 free（包邮）")
+	if postageMode != "none" && postageMode != "free" && postageMode != "source" {
+		return SaveTemplatesResult{}, invalid("转存模板邮费模式仅支持 none（无需邮寄）、free（包邮）或 source（沿用原商品明确的运费）")
 	}
 	// quantity 归一默认库存。
 	quantity := input.Quantity
@@ -126,6 +127,11 @@ func (s *Service) saveSingleTemplateItem(
 	origPriceText := strings.TrimSpace(item.OriginalPrice)
 	// imageURLs 复制已知主图地址列表。
 	imageURLs := filterNonEmptyURLs(item.ImageURLs)
+	// source、sourceErr 校验来源标识并兼容旧客户端未提供公开信息快照的情况。
+	source, sourceErr := normalizeCollectedSource(itemID, item.Source)
+	if sourceErr != nil {
+		return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: sourceErr.Error()}, false
+	}
 	// triggeredAbort 记录本条是否新触发了风控熔断。
 	triggeredAbort := false
 	// keyInput 是单商品的原始转存请求，排除批次其他商品和账号选择以保证等价重试的摘要稳定。
@@ -139,20 +145,13 @@ func (s *Service) saveSingleTemplateItem(
 	}
 	// collectorKey 是持久化唯一约束使用的单商品 SHA-256 摘要。
 	collectorKey := fmt.Sprintf("%x", sha256.Sum256(encoded))
-	// finder、ok 判断是否支持已有模板查询，生产资源库在任何外部工作之前进行本地复核。
-	if finder, ok := s.templateCreator.(LibraryTemplateFinder); ok {
-		// existing、findErr 是已持久化的同请求模板及查询错误。
-		existing, findErr := finder.FindCollectorTemplate(ctx, userID, collectorKey)
-		if findErr == nil {
-			return SavedTemplateOutcome{ItemID: itemID, Title: existing.Title, Success: true, TemplateID: existing.ID, ImageCount: len(existing.ImageIDs)}, false
-		}
-		if !errors.Is(findErr, libraryapp.ErrTemplateNotFound) {
-			return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: "无法确认已有模板，未执行转存，请核对本地数据库"}, false
-		}
+	// existingOutcome、handled 在任何外部工作前核对幂等模板；历史标题式模板不允许复用为成功。
+	if existingOutcome, handled := s.findExistingCollectorOutcome(ctx, userID, collectorKey, itemID, title); handled {
+		return existingOutcome, false
 	}
-
 	// needDetail 判断是否需要向平台补抓多图和详情文案。
-	needDetail := input.FetchDetailIfMissing && (!item.HasFullDetail || description == "" || len(imageURLs) == 0)
+	// 平台未提供类目频道或库存时不能无休止地重复请求同一详情；只有正文/主图尚未完成才补抓。
+	needDetail := input.FetchDetailIfMissing && (!item.HasFullDetail || description == "" || description == title || len(imageURLs) == 0)
 	if needDetail {
 		if skipRemoteDetail || cookieID == "" || itemID == "" {
 			return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: "无法补全商品详情，请核对采集账号和商品标识"}, triggeredAbort
@@ -184,11 +183,12 @@ func (s *Service) saveSingleTemplateItem(
 			if len(detail.ImageURLs) > 0 {
 				imageURLs = filterNonEmptyURLs(detail.ImageURLs)
 			}
+			// source 仅在确实重新获取到同一商品详情后整体替换，避免拼接不同时间的过期规格。
+			source = detail.Source
 		}
 	}
-
-	if description == "" {
-		description = title
+	if description == "" || description == title {
+		return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: "商品缺少真实详情描述或描述只有标题；请先补抓完整详情，或在商品预览里填写真实描述后再转存"}, false
 	}
 	if input.EnableAIRewrite {
 		// rewritten、rewriteErr 调用大模型做防重改写。
@@ -207,7 +207,6 @@ func (s *Service) saveSingleTemplateItem(
 		title = rewritten.Title
 		description = rewritten.Description
 	}
-
 	if title == "" {
 		return SavedTemplateOutcome{ItemID: itemID, Error: fmt.Sprintf("第 %d 条商品缺少标题", index+1)}, triggeredAbort
 	}
@@ -217,7 +216,6 @@ func (s *Service) saveSingleTemplateItem(
 	if len(imageURLs) > MaxCollectedImagesPerItem {
 		imageURLs = imageURLs[:MaxCollectedImagesPerItem]
 	}
-
 	// priceCents、priceErr 按定价策略计算模板售价（分）。
 	priceCents, priceErr := ComputeTargetPriceCents(priceText, input.PriceMode, input.PriceValue)
 	if priceErr != nil {
@@ -231,13 +229,16 @@ func (s *Service) saveSingleTemplateItem(
 			origCents = parsedOrig
 		}
 	}
-
 	// imageIDs、imgErr 下载全部主图并存入本地资源库图片库（按内容 SHA-256 自动去重）。
 	imageIDs, imgErr := s.downloadAndStoreImages(ctx, userID, itemID, imageURLs)
 	if imgErr != nil {
 		return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: imgErr.Error()}, triggeredAbort
 	}
-
+	// publication 持有已通过核实的目标类目、SKU 和邮费；详细兼容逻辑由单独的责任函数维护。
+	publication, publicationErr := s.sourcePublication(ctx, userID, itemID, source, input, postageMode)
+	if publicationErr != nil {
+		return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: publicationErr.Error()}, triggeredAbort
+	}
 	// templateName 取自定义备注名或默认截取商品标题前 100 字。
 	templateName := strings.TrimSpace(item.Name)
 	if templateName == "" {
@@ -253,7 +254,11 @@ func (s *Service) saveSingleTemplateItem(
 		PriceCents:         priceCents,
 		OriginalPriceCents: origCents,
 		Quantity:           quantity,
-		PostageMode:        postageMode,
+		PostageMode:        publication.Mode,
+		PostageCents:       publication.PostageCents,
+		Category:           publication.Category,
+		Source:             source,
+		Specs:              publication.Specs,
 		ImageIDs:           imageIDs,
 		Automation:         automation,
 	})
@@ -267,6 +272,145 @@ func (s *Service) saveSingleTemplateItem(
 		TemplateID: created.ID,
 		ImageCount: len(created.ImageIDs),
 	}, triggeredAbort
+}
+
+// findExistingCollectorOutcome 隔离转存模板幂等查询与历史缺损正文的拒绝判定，未命中时允许继续创建。
+func (s *Service) findExistingCollectorOutcome(ctx context.Context, userID int64, collectorKey, itemID, title string) (SavedTemplateOutcome, bool) {
+	// finder、ok 判断当前模板仓储是否支持幂等查找。
+	finder, ok := s.templateCreator.(LibraryTemplateFinder)
+	if !ok {
+		return SavedTemplateOutcome{}, false
+	}
+	// existing、findErr 保存持久化模板查询结果。
+	existing, findErr := finder.FindCollectorTemplate(ctx, userID, collectorKey)
+	if errors.Is(findErr, libraryapp.ErrTemplateNotFound) {
+		return SavedTemplateOutcome{}, false
+	}
+	if findErr != nil {
+		return SavedTemplateOutcome{ItemID: itemID, Title: title, Error: "无法确认已有模板，未执行转存，请核对本地数据库"}, true
+	}
+	if strings.TrimSpace(existing.Description) == "" || strings.TrimSpace(existing.Description) == strings.TrimSpace(existing.Title) {
+		return SavedTemplateOutcome{ItemID: itemID, Title: existing.Title, Error: "已有模板的描述缺失或只有标题，请到资源库核对并补全真实商品描述后再发布"}, true
+	}
+	return SavedTemplateOutcome{ItemID: itemID, Title: existing.Title, Success: true, TemplateID: existing.ID, ImageCount: len(existing.ImageIDs)}, true
+}
+
+// normalizeCollectedSource 确保来源商品身份与待转存商品一致，并为未保存来源快照的旧客户端标记待核实字段。
+func normalizeCollectedSource(itemID string, source catalog.SourceInfo) (catalog.SourceInfo, error) {
+	if source.ItemID != "" && source.ItemID != itemID {
+		return catalog.SourceInfo{}, errors.New("来源商品 ID 与所选商品不一致，未创建模板")
+	}
+	if source.ItemID == "" {
+		// 老客户端不能通过缺失的来源标识绕过原商品资料的完整性检查。
+		source.Missing = []string{"原商品完整类目", "原商品库存", "运费方式", "规格和 SKU", "公开商品属性"}
+		source.ItemID = itemID
+	}
+	// 原商品链接固定由已校验的商品 ID 生成，避免客户端传入任意站外地址或脚本 URL。
+	source.WebURL = "https://www.goofish.com/item?id=" + url.QueryEscape(itemID)
+	return source, nil
+}
+
+// sourcePublicationData 保存可传入本地发布模板的类目、规格与运费配置，不含原卖家私有发布凭证。
+type sourcePublicationData struct {
+	// Category 只有来源详情完整确认原类目三元组时才赋值。
+	Category itemapp.BatchPreviewCategory
+	// Specs 是已核实并完成图片入库的规格 SKU 组合。
+	Specs *libraryapp.TemplateSpecs
+	// Mode 是用户明确选择的运费方式。
+	Mode string
+	// PostageCents 是该方式下可核实的固定邮费（分）。
+	PostageCents int64
+}
+
+// sourcePublication 只将可验证的来源字段用于模板发布设置，并维持用户显式指定的运费偏好。
+func (s *Service) sourcePublication(ctx context.Context, userID int64, itemID string, source catalog.SourceInfo, input SaveTemplatesInput, postageMode string) (sourcePublicationData, error) {
+	// result 初始保留用户明示的运费方式。
+	result := sourcePublicationData{Mode: postageMode}
+	// specs、specErr 仅将完整可核实的规格图片和 SKU 转为本地模板。
+	specs, specErr := s.sourceTemplateSpecs(ctx, userID, itemID, source, input)
+	if specErr != nil {
+		return sourcePublicationData{}, specErr
+	}
+	result.Specs = specs
+	if source.Category.Complete() {
+		result.Category = itemapp.BatchPreviewCategory{CatID: source.Category.CatID, CatName: source.Category.CatName, ChannelCatID: source.Category.ChannelCatID, TBCatID: source.Category.TBCatID}
+	}
+	if postageMode == "source" {
+		if source.PostageMode == "" {
+			return sourcePublicationData{}, errors.New("原商品运费方式缺失，请手动选择运费方式后转存")
+		}
+		result.Mode = source.PostageMode
+		if result.Mode == "fixed" {
+			// feeErr 表示明确的来源金额不符合发布价格格式。
+			var feeErr error
+			result.PostageCents, feeErr = ParsePriceCents(source.Postage, true)
+			if feeErr != nil {
+				return sourcePublicationData{}, errors.New("来源商品运费金额格式无效")
+			}
+		}
+	}
+	return result, nil
+}
+
+// sourceTemplateSpecs 把来源 SKU 及规格图安全转换为资源库内的真实图片主键；
+// 未取得全部组合时不构造可发布规格，避免错误推断价格、库存与属性。
+func (s *Service) sourceTemplateSpecs(ctx context.Context, userID int64, itemID string, source catalog.SourceInfo, input SaveTemplatesInput) (*libraryapp.TemplateSpecs, error) {
+	if len(source.Specs) == 0 || len(source.SKUs) == 0 {
+		return nil, nil
+	}
+	// converted 保存规格维度和 SKU 的有序可发布结果。
+	converted := &libraryapp.TemplateSpecs{}
+	// urls 保存规格图片的唯一来源地址，规格值索引引用该列表的固定位置。
+	urls := make([]string, 0)
+	// lookup 用于同一图片被多个规格值引用的去重。
+	lookup := make(map[string]int)
+	for _, spec := range source.Specs {
+		// dimension 是当前规格维度的可发布表示。
+		dimension := itemapp.PublishSpec{PropertyName: spec.Name}
+		for _, value := range spec.Values {
+			// imageIndex 是当前规格值在规格图片序列中的索引，-1 为无图。
+			imageIndex := -1
+			if value.ImageURL != "" {
+				// known 标识该图片是否已被前面的规格值引用。
+				known, exists := lookup[value.ImageURL]
+				if !exists {
+					known = len(urls)
+					lookup[value.ImageURL] = known
+					urls = append(urls, value.ImageURL)
+				}
+				imageIndex = known
+				dimension.SupportImage = true
+			}
+			dimension.Values = append(dimension.Values, itemapp.PublishSpecValue{Value: value.Value, ImageIndex: imageIndex})
+		}
+		converted.Specs = append(converted.Specs, dimension)
+	}
+	for _, sourceSKU := range source.SKUs {
+		// price、err 是当前规格组合应用用户选择的原价、加减价或固定价策略后的售价（分）。
+		price, err := ComputeTargetPriceCents(sourceSKU.Price, input.PriceMode, input.PriceValue)
+		if err != nil {
+			return nil, fmt.Errorf("源 SKU 售价格式错误：%w", err)
+		}
+		// sku 采用来源详情明确返回的库存量，不从顶层商品数量猜测。
+		sku := itemapp.PublishSKU{PriceCents: price, Quantity: sourceSKU.Quantity}
+		for index, label := range sourceSKU.ValueLabels {
+			if index >= len(source.Specs) {
+				return nil, errors.New("源 SKU 规格数量不匹配")
+			}
+			sku.PropertyList = append(sku.PropertyList, itemapp.PublishSKUProperty{PropertyText: source.Specs[index].Name, ValueText: label})
+		}
+		converted.SKUs = append(converted.SKUs, sku)
+	}
+	// 规格图必须真实下载存入图片库，不能把外部 URL 当作图片主键或假定与主图一致。
+	if len(urls) > 0 {
+		// ids、err 保存依序下载的来源规格图主键。
+		ids, err := s.downloadAndStoreImages(ctx, userID, itemID, urls)
+		if err != nil {
+			return nil, fmt.Errorf("保存原商品规格图失败：%w", err)
+		}
+		converted.SpecImageIDs = ids
+	}
+	return converted, nil
 }
 
 // downloadAndStoreImages 顺序下载商品远程主图并写入用户的本地图片库，返回图片主键列表。

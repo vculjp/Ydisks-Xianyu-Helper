@@ -16,8 +16,12 @@ type remoteItemMTop interface {
 	EditExistingItem(context.Context, string, string, mtop.RemoteItemEdit) (string, error)
 	// DownShelfItem 提交一次平台下架并验证平台明确成功。
 	DownShelfItem(context.Context, string, string) (string, error)
+	// DeleteItem 提交一次平台删除并验证平台明确成功。
+	DeleteItem(context.Context, string, string) (string, error)
 	// ReshelfExistingItem 在平台编辑成功后还须核实商品出现在在售列表中。
 	ReshelfExistingItem(context.Context, string, string) (string, error)
+	// SetBargain 提交一次小刀开关变更并验证平台确认成功。
+	SetBargain(context.Context, string, string, bool) (string, error)
 }
 
 // Edit 在已验证归属的 Cookie 会话中修改平台商品；本地字段由上层应用服务写入。
@@ -32,9 +36,19 @@ func (p *ItemPublishPort) DownShelf(ctx context.Context, userID int64, cookieID,
 	return p.remoteItemCall(ctx, userID, cookieID, itemID, "downshelf", mtop.RemoteItemEdit{})
 }
 
+// Delete 在真实平台确认删除后才返回成功；本地逻辑删除由应用服务在平台成功后执行。
+func (p *ItemPublishPort) Delete(ctx context.Context, userID int64, cookieID, itemID string) error {
+	return p.remoteItemCall(ctx, userID, cookieID, itemID, "delete", mtop.RemoteItemEdit{})
+}
+
 // Reshelf 通过保留全部平台编辑详情来尝试重新上架，遇平台类目限制会直接返回错误。
 func (p *ItemPublishPort) Reshelf(ctx context.Context, userID int64, cookieID, itemID string) error {
 	return p.remoteItemCall(ctx, userID, cookieID, itemID, "reshelf", mtop.RemoteItemEdit{})
+}
+
+// SetBargain 在平台确认后开启或关闭单件商品的“2 人小刀”。
+func (p *ItemPublishPort) SetBargain(ctx context.Context, userID int64, cookieID, itemID string, enabled bool) error {
+	return p.remoteItemCall(ctx, userID, cookieID, itemID, "bargain", mtop.RemoteItemEdit{Bargain: &enabled})
 }
 
 // remoteItemCall 使用短期凭证快照执行用户明确操作；绝不在持有 Cookie 锁时请求平台或自动重放修改。
@@ -71,10 +85,17 @@ func (p *ItemPublishPort) remoteItemCall(ctx context.Context, userID int64, cook
 	switch action {
 	case "edit":
 		updated, callErr = client.EditExistingItem(mtopCtx, initialValue, itemID, changes)
+	case "bargain":
+		if changes.Bargain == nil {
+			return errors.New("小刀开关目标不能为空")
+		}
+		updated, callErr = client.SetBargain(mtopCtx, initialValue, itemID, *changes.Bargain)
 	case "reshelf":
 		updated, callErr = client.ReshelfExistingItem(mtopCtx, initialValue, itemID)
 	case "downshelf":
 		updated, callErr = client.DownShelfItem(mtopCtx, initialValue, itemID)
+	case "delete":
+		updated, callErr = client.DeleteItem(mtopCtx, initialValue, itemID)
 	default:
 		return errors.New("未知平台商品操作")
 	}

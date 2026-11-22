@@ -6,6 +6,7 @@ import { AccountAISettingsModal } from './AccountAISettingsModal';
 import { AccountCard } from './AccountCard';
 import { AccountDeleteDialog } from './AccountDeleteDialog';
 import { AccountQRCodeModal } from './AccountQRCodeModal';
+import AccountTable from './AccountTable';
 
 // accountFixture 是账号组件测试使用的最小非敏感账号摘要。
 const accountFixture = {
@@ -149,5 +150,45 @@ describe('账号 feature 展示组件', /* 当前回调覆盖账号页面子模�
     render(<AccountQRCodeModal target={accountFixture} status="verification" codeUrl="" errorMessage="" faceQrUrl="face-qr" verificationScreenshot="screen" onClose={noopAccountAction} />);
     expect(screen.getByText('需要完成安全风控验证')).toBeTruthy();
     expect(document.querySelectorAll('a')).toHaveLength(0);
+  });
+
+  test('账号表格保留启停、编辑、AI、任务、刷新和删除入口', /* 当前回调验证参考控制台表格没有丢失现有账号动作。 */ () => {
+    // onToggle、onEdit、onAI、onTasks、onRefreshProfile 与 onDelete 分别记录表格行动作。
+    const onToggle = vi.fn();
+    // onEdit 记录用户打开账号编辑弹窗的点击。
+    const onEdit = vi.fn();
+    // onAI 记录用户打开账号 AI 客服配置的点击。
+    const onAI = vi.fn();
+    // onTasks 记录用户打开账号计划任务配置的点击。
+    const onTasks = vi.fn();
+    // onRefreshProfile 记录用户刷新账号公开资料的点击。
+    const onRefreshProfile = vi.fn();
+    // onDelete 记录用户打开账号删除确认框的点击。
+    const onDelete = vi.fn();
+    render(
+      <AccountTable
+        accounts={[accountFixture]}
+        isPending={/* isPendingMock 表示当前没有账号动作正在提交。 */ () => false}
+        onRefreshProfile={onRefreshProfile}
+        onReauthorize={noopAccountAction}
+        onEdit={onEdit}
+        onAI={onAI}
+        onTasks={onTasks}
+        onToggle={onToggle}
+        onDelete={onDelete}
+      />,
+    );
+    fireEvent.click(screen.getByRole('switch'));
+    fireEvent.click(screen.getByText('刷新资料'));
+    fireEvent.click(screen.getByText('编辑'));
+    fireEvent.click(screen.getByText('AI'));
+    fireEvent.click(screen.getByText('任务'));
+    fireEvent.click(screen.getByText('删除'));
+    expect(onToggle).toHaveBeenCalledWith(accountFixture.id, accountFixture.enabled);
+    expect(onRefreshProfile).toHaveBeenCalledWith(accountFixture);
+    expect(onEdit).toHaveBeenCalledWith(accountFixture);
+    expect(onAI).toHaveBeenCalledWith(accountFixture);
+    expect(onTasks).toHaveBeenCalledWith(accountFixture);
+    expect(onDelete).toHaveBeenCalledWith(accountFixture);
   });
 });

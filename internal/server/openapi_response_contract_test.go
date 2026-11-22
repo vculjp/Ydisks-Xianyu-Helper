@@ -38,6 +38,7 @@ func TestOpenAPISuccessContractCoverage(t *testing.T) {
 		{name: "versioned-account-credentials", run: TestVersionedAccountCredentialRoutesPreserveLegacyContracts},
 		{name: "versioned-account-settings", run: TestVersionedAccountSettingsRoutesPreserveLegacyContracts},
 		{name: "versioned-items", run: TestVersionedItemRoutesPreserveLegacyContracts},
+		{name: "item-metrics-refresh", run: TestExplicitItemMetricsRefreshHTTPContract},
 		{name: "versioned-orders", run: TestVersionedOrderRoutesPreserveLegacyContracts},
 		{name: "versioned-order-refresh", run: TestVersionedOrderRefreshAndBatchRoutesPreserveLegacyContracts},
 		{name: "versioned-qr", run: TestVersionedQRLoginRoutesPreserveLegacyContracts},

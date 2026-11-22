@@ -1,7 +1,8 @@
-import { Bell,Edit2,Loader2,Send,Trash2 } from 'lucide-react';
+import { Edit2,Loader2,Send,Trash2 } from 'lucide-react';
 import React from 'react';
 import type { NotificationChannel } from '../api';
 import { notificationChannelTypes,notificationEventSummary } from '../state';
+import type { NotificationAction } from '../types';
 
 // NotificationChannelListProps 描述通知渠道列表的操作边界。
 export interface NotificationChannelListProps {
@@ -9,6 +10,8 @@ export interface NotificationChannelListProps {
   channels: NotificationChannel[];
   // testingId 是当前正在测试发送的渠道 ID。
   testingId: string;
+  // isActionPending 判断渠道动作是否仍在执行，用于单项禁用和防重复提交。
+  isActionPending: (channelId: string, action: NotificationAction) => boolean;
   // onEdit 打开指定渠道的编辑弹窗。
   onEdit: (channel: NotificationChannel) => void;
   // onDelete 删除指定渠道。
@@ -20,7 +23,7 @@ export interface NotificationChannelListProps {
 }
 
 // NotificationChannelList 渲染渠道摘要、启用状态和操作按钮。
-export const NotificationChannelList: React.FC<NotificationChannelListProps> = ({ channels, testingId, onEdit, onDelete, onToggleEnabled, onTest }) => {
+export const NotificationChannelList: React.FC<NotificationChannelListProps> = ({ channels, testingId, isActionPending, onEdit, onDelete, onToggleEnabled, onTest }) => {
   // findChannel 从按钮数据属性中查找对应渠道。
   const findChannel = (event: React.MouseEvent<HTMLButtonElement>): NotificationChannel | null => channels.find(
     // channel 是当前待匹配的渠道数据。
@@ -50,48 +53,95 @@ export const NotificationChannelList: React.FC<NotificationChannelListProps> = (
     const channel = findChannel(event);
     if (channel) void onDelete(channel);
   };
-  // renderChannel 渲染单个通知渠道卡片。
+  // renderChannel 渲染单个通知渠道行。
   const renderChannel = (channel: NotificationChannel) => {
     // meta 是当前渠道类型的静态展示配置。
     const meta = notificationChannelTypes[channel.type] || notificationChannelTypes.webhook;
     // Icon 是当前渠道类型对应的图标组件。
     const Icon = meta.icon;
+    // togglePending 表示当前渠道启用状态正在提交。
+    const togglePending = isActionPending(channel.id, 'toggle');
+    // deletePending 表示当前渠道删除确认或删除请求正在执行。
+    const deletePending = isActionPending(channel.id, 'delete');
+    // testPending 表示当前渠道测试通知正在发送。
+    const testPending = testingId === channel.id || isActionPending(channel.id, 'test');
+    // mutationPending 表示当前渠道存在会改变服务端状态的动作，避免并发冲突。
+    const mutationPending = togglePending || deletePending;
     return (
-      <div key={channel.id} className="ios-card rounded-xl p-5 bg-white flex items-center gap-4">
-        <div className="w-11 h-11 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0"><Icon className="w-5 h-5 text-gray-600" /></div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-gray-900 truncate">{channel.name}</span>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 font-medium">{meta.label}</span>
-            {!channel.enabled && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-medium">已停用</span>}
+      <article key={channel.id} className="flex min-w-0 flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50">
+            <Icon className="h-4 w-4 text-slate-600" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="truncate text-sm font-semibold text-slate-900">{channel.name}</span>
+              <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600">{meta.label}</span>
+              {!channel.enabled && <span className="rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">已停用</span>}
+            </div>
+            <div className="mt-1 truncate text-xs text-slate-500">
+              {meta.fields.map(
+                // field 是当前渠道摘要需要读取的配置字段。
+                field => channel.config?.[field.key],
+              ).filter(Boolean).map(
+                // value 是渠道配置中非空的摘要值。
+                (value, index) => <span key={index} className="mr-3">{String(value).length > 40 ? `${String(value).slice(0, 40)}…` : String(value)}</span>,
+              )}
+            </div>
+            <div className="mt-1 truncate text-xs text-slate-400">订阅：{notificationEventSummary(channel.event_types)}</div>
           </div>
-          <div className="text-xs text-gray-500 mt-1 truncate">
-            {meta.fields.map(
-              // field 是当前渠道摘要需要读取的配置字段。
-              field => channel.config?.[field.key],
-            ).filter(Boolean).map(
-              // value 是渠道配置中非空的摘要值。
-              (value, index) => <span key={index} className="mr-3">{String(value).length > 40 ? `${String(value).slice(0, 40)}…` : String(value)}</span>,
-            )}
-          </div>
-          <div className="text-xs text-gray-400 mt-1 truncate">订阅：{notificationEventSummary(channel.event_types)}</div>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <button data-channel-id={channel.id} onClick={handleToggleClick} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${channel.enabled ? 'bg-green-50 text-green-700 hover:bg-green-100' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          <button
+            type="button"
+            data-channel-id={channel.id}
+            onClick={handleToggleClick}
+            disabled={mutationPending}
+            aria-busy={togglePending}
+            className={`inline-flex min-w-16 items-center justify-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors disabled:cursor-wait disabled:opacity-60 ${channel.enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+          >
+            {togglePending && <Loader2 className="h-3 w-3 animate-spin" />}
             {channel.enabled ? '启用中' : '已停用'}
           </button>
-          <button data-channel-id={channel.id} onClick={handleTestClick} disabled={testingId === channel.id} className="px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-50 text-brand hover:bg-blue-100 transition-colors flex items-center gap-1 disabled:opacity-50">
-            {testingId === channel.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}测试
+          <button
+            type="button"
+            data-channel-id={channel.id}
+            onClick={handleTestClick}
+            disabled={testPending || deletePending}
+            aria-busy={testPending}
+            className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-100 disabled:cursor-wait disabled:opacity-60"
+          >
+            {testPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+            测试
           </button>
-          <button data-channel-id={channel.id} onClick={handleEditClick} className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 transition-colors" title="编辑"><Edit2 className="w-4 h-4" /></button>
-          <button data-channel-id={channel.id} onClick={handleDeleteClick} className="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center text-red-500 transition-colors" title="删除"><Trash2 className="w-4 h-4" /></button>
+          <button
+            type="button"
+            data-channel-id={channel.id}
+            onClick={handleEditClick}
+            disabled={mutationPending}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+            title="编辑"
+            aria-label={`编辑 ${channel.name}`}
+          >
+            <Edit2 className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            data-channel-id={channel.id}
+            onClick={handleDeleteClick}
+            disabled={mutationPending}
+            aria-busy={deletePending}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-600 transition-colors hover:bg-red-100 disabled:cursor-wait disabled:opacity-60"
+            title="删除"
+            aria-label={`删除 ${channel.name}`}
+          >
+            {deletePending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+          </button>
         </div>
-      </div>
+      </article>
     );
   };
 
-  if (channels.length === 0) {
-    return <div className="ios-card rounded-xl p-12 bg-white text-center"><Bell className="w-12 h-12 text-gray-300 mx-auto mb-4" /><p className="text-gray-500 font-medium">还没有配置任何通知渠道</p><p className="text-gray-400 text-sm mt-1">点击右上角「新建渠道」开始配置</p></div>;
-  }
-  return <div className="space-y-3">{channels.map(renderChannel)}</div>;
+  if (channels.length === 0) return null;
+  return <div className="space-y-2">{channels.map(renderChannel)}</div>;
 };

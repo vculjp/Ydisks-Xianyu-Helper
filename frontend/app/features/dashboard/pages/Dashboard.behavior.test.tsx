@@ -70,4 +70,20 @@ describe('Dashboard 自定义日期', /* 当前测试组验证草稿、校验与
     await flush();
     expect(analyticsMock).toHaveBeenCalledTimes(6);
   });
+
+  test('首页快捷入口复用现有跨页面导航回调', /* 当前回调验证参考首页卡片不会绕过应用路由。 */ async () => {
+    // navigate 记录首页快捷入口发出的业务页面标识。
+    const navigate = vi.fn<(tab: string) => void>();
+    // view 保存首页渲染结果，用于定位快捷宫格。
+    const view = render(<Dashboard onNavigate={navigate} />);
+    await flush();
+    expect(view.container.querySelector('.console-home-banner')).toBeNull();
+    expect(view.container.querySelector('img[src*="home-banner"]')).toBeNull();
+    expect(view.container.querySelector('.console-home-status')).toBeTruthy();
+    // firstQuickAction 是快捷宫格中的第一个业务入口。
+    const firstQuickAction = view.container.querySelector('.console-home-quick-card') as HTMLButtonElement;
+    expect(firstQuickAction).toBeTruthy();
+    fireEvent.click(firstQuickAction);
+    expect(navigate).toHaveBeenCalledWith('accounts');
+  });
 });

@@ -283,9 +283,9 @@ func TestTemplateImportPreviewAndCommitHappyPath(t *testing.T) {
 	// sheet 包含：zip 图片行、网址图片行（与已有模板同标题）、价格非法行、与第 2 行同标题的行。
 	sheet := importHeader +
 		"网盘A,资源A,描述A,9.90,19.90,10,none,,images/a.png;images/a2.png\n" +
-		",已有商品,,5,,1,fixed,8,https://img.example.com/b.png?x=1\n" +
-		",价格错,,abc,,1,free,,images/a.png\n" +
-		",资源A,,1,,1,free,,images/a.png\n"
+		",已有商品,已有商品的完整商品介绍,5,,1,fixed,8,https://img.example.com/b.png?x=1\n" +
+		",价格错,测试价格错误的商品详情,abc,,1,free,,images/a.png\n" +
+		",资源A,资源A的商品正文,1,,1,free,,images/a.png\n"
 	f.fetcher.data["https://img.example.com/b.png?x=1"] = []byte("IMGb")
 	// zipData 包含两张内容相同的图片，导入时应去重。
 	zipData := buildZip(t, map[string]string{"images/a.png": "IMGa", "images/a2.png": "IMGa", "images/": ""})
@@ -431,7 +431,7 @@ func TestTemplateImportPreviewRowChecks(t *testing.T) {
 // TestTemplateImportPreviewDependencyFailures 覆盖模板列表、暂存创建与清单写入故障，以及清单写入失败后的回收。
 func TestTemplateImportPreviewDependencyFailures(t *testing.T) {
 	// input 是一行合法输入。
-	input := PreviewImportInput{UserID: 1, SheetName: "t.csv", Sheet: []byte(importHeader + ",t,,1,,1,free,,https://img.example.com/a.png\n")}
+	input := PreviewImportInput{UserID: 1, SheetName: "t.csv", Sheet: []byte(importHeader + ",t,测试模板的真实详情说明,1,,1,free,,https://img.example.com/a.png\n")}
 	// f 是导入夹具。
 	f := newImportFixture(t)
 	f.staging.createErr = errors.New("disk full")
@@ -473,9 +473,9 @@ func TestTemplateImportCommitRowFailures(t *testing.T) {
 	ctx := context.Background()
 	// sheet 包含：下载 404、非图片内容、模板保存校验失败的三行。
 	sheet := importHeader +
-		",下载失败,,1,,1,free,,https://img.example.com/404.png\n" +
-		",不是图片,,1,,1,free,,https://img.example.com/text.png\n" +
-		",保存失败,,1,,1,free,,https://img.example.com/ok.png\n"
+		",下载失败,测试图片下载失败的商品描述,1,,1,free,,https://img.example.com/404.png\n" +
+		",不是图片,测试图片内容错误的商品描述,1,,1,free,,https://img.example.com/text.png\n" +
+		",保存失败,测试模板保存错误的商品描述,1,,1,free,,https://img.example.com/ok.png\n"
 	f.fetcher.data["https://img.example.com/text.png"] = []byte("hello")
 	f.fetcher.data["https://img.example.com/ok.png"] = []byte("IMGok")
 	// preview、err 保存预检结果。
@@ -507,7 +507,7 @@ func TestTemplateImportCommitResumesAcrossBudgetAndCancellation(t *testing.T) {
 	// ctx 是测试上下文。
 	ctx := context.Background()
 	// sheet 是三行网址图片。
-	sheet := importHeader + ",一,,1,,1,free,,https://img.example.com/1.png\n,二,,1,,1,free,,https://img.example.com/2.png\n,三,,1,,1,free,,https://img.example.com/3.png\n"
+	sheet := importHeader + ",一,第一件商品的独立描述,1,,1,free,,https://img.example.com/1.png\n,二,第二件商品的独立描述,1,,1,free,,https://img.example.com/2.png\n,三,第三件商品的独立描述,1,,1,free,,https://img.example.com/3.png\n"
 	// index 是网址序号。
 	for index := 1; index <= 3; index++ {
 		f.fetcher.data[fmt.Sprintf("https://img.example.com/%d.png", index)] = []byte(fmt.Sprintf("IMG%d", index))
@@ -548,7 +548,7 @@ func TestTemplateImportCommitResumesAcrossBudgetAndCancellation(t *testing.T) {
 	f2 := newImportFixture(t)
 	f2.fetcher.data["https://img.example.com/1.png"] = []byte("IMG1")
 	// preview2 保存第二个任务的预检结果。
-	preview2, _ := f2.service.PreviewImport(ctx, PreviewImportInput{UserID: 1, SheetName: "t.csv", Sheet: []byte(importHeader + ",一,,1,,1,free,,https://img.example.com/1.png\n")})
+	preview2, _ := f2.service.PreviewImport(ctx, PreviewImportInput{UserID: 1, SheetName: "t.csv", Sheet: []byte(importHeader + ",一,第一件商品的独立描述,1,,1,free,,https://img.example.com/1.png\n")})
 	// doneCtx 是已取消的上下文。
 	doneCtx, doneCancel := context.WithCancel(ctx)
 	doneCancel()
@@ -563,7 +563,7 @@ func TestTemplateImportCommitSystemErrorsAndOwnership(t *testing.T) {
 	// ctx 是测试上下文。
 	ctx := context.Background()
 	// sheet 是两行网址图片。
-	sheet := importHeader + ",一,,1,,1,free,,https://img.example.com/1.png\n,二,,1,,1,free,,https://img.example.com/2.png\n"
+	sheet := importHeader + ",一,第一件商品的独立描述,1,,1,free,,https://img.example.com/1.png\n,二,第二件商品的独立描述,1,,1,free,,https://img.example.com/2.png\n"
 	// prepare 创建夹具并完成预检。
 	prepare := func(t *testing.T) (importFixture, string) {
 		// f 是导入夹具。
@@ -627,7 +627,7 @@ func TestTemplateImportCommitSystemErrorsAndOwnership(t *testing.T) {
 	}
 	// changed 是暂存表格比预检时少一行的夹具。
 	changed, changedID := prepare(t)
-	changed.staging.sheetOverride = []byte(importHeader + ",一,,1,,1,free,,https://img.example.com/1.png\n")
+	changed.staging.sheetOverride = []byte(importHeader + ",一,第一件商品的独立描述,1,,1,free,,https://img.example.com/1.png\n")
 	// progress、err 保存表格变化后的提交结果。
 	progress, err := changed.service.CommitImport(ctx, 1, changedID)
 	if err != nil || progress.Created != 1 || progress.Failed != 1 || !strings.Contains(strings.Join(progress.Rows[1].Errors, "|"), "表格内容已变化") {
@@ -646,7 +646,7 @@ func TestTemplateImportDiscard(t *testing.T) {
 		t.Fatalf("不存在的任务丢弃应成功: %v", err)
 	}
 	// preview 保存预检结果。
-	preview, _ := f.service.PreviewImport(ctx, PreviewImportInput{UserID: 1, SheetName: "t.csv", Sheet: []byte(importHeader + ",一,,1,,1,free,,https://img.example.com/1.png\n")})
+	preview, _ := f.service.PreviewImport(ctx, PreviewImportInput{UserID: 1, SheetName: "t.csv", Sheet: []byte(importHeader + ",一,第一件商品的独立描述,1,,1,free,,https://img.example.com/1.png\n")})
 	// 他人任务与不存在同样按成功返回且不删除，避免泄露任务是否存在。
 	if err := f.service.DiscardImport(ctx, 2, preview.ImportID); err != nil || f.staging.manifests[preview.ImportID].ImportID == "" {
 		t.Fatalf("他人任务不应被删除: %v", err)
@@ -729,7 +729,7 @@ func TestTemplateImportRemainingBranches(t *testing.T) {
 	// ctx 是测试上下文。
 	ctx := context.Background()
 	// input 是两行合法输入，第二行邮费模式为包邮但「邮费」列填了非法值。
-	input := PreviewImportInput{UserID: 1, SheetName: "t.csv", Sheet: []byte(importHeader + ",一,,1,,1,free,,https://img.example.com/1.png\n,二,,1,,1,free,abc,https://img.example.com/1.png\n")}
+	input := PreviewImportInput{UserID: 1, SheetName: "t.csv", Sheet: []byte(importHeader + ",一,第一件商品的独立描述,1,,1,free,,https://img.example.com/1.png\n,二,第二件商品的独立描述,1,,1,free,abc,https://img.example.com/1.png\n")}
 	// f 是导入夹具。
 	f := newImportFixture(t)
 	f.fetcher.data["https://img.example.com/1.png"] = []byte("IMG1")
@@ -756,7 +756,7 @@ func TestTemplateImportRemainingBranches(t *testing.T) {
 		t.Fatal("暂存表格无法解析应返回错误")
 	}
 	// 第一行价格被改为非法，重新解析后不再合法；第二行忽略非法「邮费」列正常导入。
-	f.staging.sheetOverride = []byte(importHeader + ",一,,abc,,1,free,,https://img.example.com/1.png\n,二,,1,,1,free,abc,https://img.example.com/1.png\n")
+	f.staging.sheetOverride = []byte(importHeader + ",一,第一件商品的独立描述,abc,,1,free,,https://img.example.com/1.png\n,二,第二件商品的独立描述,1,,1,free,abc,https://img.example.com/1.png\n")
 	// progress、commitErr 保存提交结果。
 	progress, commitErr := f.service.CommitImport(ctx, 1, preview.ImportID)
 	if commitErr != nil || progress.Failed != 1 || progress.Created != 1 || !strings.Contains(strings.Join(progress.Rows[0].Errors, "|"), "价格必须大于 0") {
@@ -767,7 +767,7 @@ func TestTemplateImportRemainingBranches(t *testing.T) {
 	missing.fetcher.data["https://img.example.com/1.png"] = []byte("IMG1")
 	// missingPreview 保存预检结果。
 	missingPreview, _ := missing.service.PreviewImport(ctx, input)
-	missing.staging.sheetOverride = []byte(importHeader + ",一,,1,,1,free,,https://img.example.com/1.png\n")
+	missing.staging.sheetOverride = []byte(importHeader + ",一,第一件商品的独立描述,1,,1,free,,https://img.example.com/1.png\n")
 	missing.staging.saveErr, missing.staging.saveFailAfter = errors.New("save down"), 3
 	// missingErr 保存缺行后清单写入故障。
 	if _, missingErr := missing.service.CommitImport(ctx, 1, missingPreview.ImportID); missingErr == nil || !strings.Contains(missingErr.Error(), "save down") {

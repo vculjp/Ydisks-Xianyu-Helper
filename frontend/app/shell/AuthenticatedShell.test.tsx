@@ -109,7 +109,7 @@ describe('AuthenticatedShell 页面组合行为', /* 当前回调验证权限回
 
     await waitFor(/* itemAssertion 等待商品页面懒加载完成。 */ () => expect(screen.getByTestId('configure-delivery')).toBeTruthy());
     fireEvent.click(screen.getByTestId('configure-delivery'));
-    expect(configureTarget).toHaveBeenCalledWith(expect.objectContaining({ cookieId: 'cookie-1', itemId: 'item-1' }));
+    expect(configureTarget).toHaveBeenCalledWith(expect.objectContaining({ cookieId: 'cookie-1', itemId: 'item-1', trigger: 'order_paid' }));
     // target 是商品页面刚刚发出的完整规则配置目标。
     const target = configureTarget.mock.calls[0][0];
     expect(target.requestId).toEqual(expect.any(Number));
@@ -130,5 +130,47 @@ describe('AuthenticatedShell 页面组合行为', /* 当前回调验证权限回
     expect(screen.getByText('cookie-1:item-1')).toBeTruthy();
     fireEvent.click(screen.getByText('完成'));
     expect(handledTarget).toHaveBeenCalledTimes(1);
+  });
+
+  test('移动导航展开、切换页面和关闭不会改变桌面侧栏布局', /* drawerNavigationTest 锁定窄屏导航的开关和桌面间距边界。 */ async () => {
+    // AuthenticatedShellComponent 是包含移动端导航抽屉的正式页面壳。
+    const AuthenticatedShellComponent = (await loadAppContent()).default;
+    // navigate 保存用户实际选择的主导航目标，确保抽屉点击仍触发原有路由行为。
+    const navigate = vi.fn<(tab: string) => void>();
+    // view 承载应用壳 DOM，以检查移动端无额外左侧占位。
+    const view = render(
+      <AuthenticatedShellComponent
+        activeTab="dashboard"
+        isAdmin
+        collapsed={false}
+        onToggleCollapsed={/* collapseAction 保留桌面折叠能力，窄屏关闭抽屉不应调用它。 */ () => undefined}
+        onNavigate={navigate}
+        onLogout={/* logoutAction 本用例不执行注销。 */ () => undefined}
+        onConfigureDelivery={/* configureAction 本用例不执行商品联动。 */ () => undefined}
+        onDeliveryTargetHandled={/* handledAction 本用例没有待消费联动。 */ () => undefined}
+      />,
+    );
+    // main 是不再在移动端常驻侧栏左侧边距的主要内容容器。
+    const main = view.container.querySelector('main');
+    expect(main?.className.split(/\s+/)).toContain('console-main');
+    expect(main?.className).not.toContain('ml-64');
+    // workspace 是桌面侧栏偏移与移动端零偏移的布局容器。
+    expect(view.container.querySelector('.console-workspace')).toBeTruthy();
+    expect(screen.queryByText('免费版')).toBeNull();
+    expect(screen.queryByText('升级')).toBeNull();
+    // menuButton 是移动端顶部的抽屉入口。
+    const menuButton = screen.getByRole('button', { name: '打开导航菜单' });
+    expect(menuButton.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(menuButton);
+    expect(menuButton.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('button', { name: '关闭导航菜单' })).toBeTruthy();
+    // sidebar 是真实导航侧栏，打开时应解除隐藏和移出屏幕的类。
+    const sidebar = view.container.querySelector('aside');
+    expect(sidebar?.className).toContain('visible translate-x-0');
+    fireEvent.click(screen.getByRole('button', { name: '店铺' }));
+    fireEvent.click(screen.getByRole('button', { name: '账号管理' }));
+    expect(navigate).toHaveBeenCalledWith('accounts');
+    expect(screen.queryByRole('button', { name: '关闭导航菜单' })).toBeNull();
+    expect(menuButton.getAttribute('aria-expanded')).toBe('false');
   });
 });

@@ -21,5 +21,11 @@ export const formatOrderSyncResult = (result: OrderRefreshResponse): string => {
     const detail = [item.error ? `失败原因：${item.error}` : '', item.message !== item.error ? item.message : ''].filter(Boolean).join('；');
     lines.push(`${identity ? `${identity}：` : ''}${detail || '未提供失败原因'}`);
   }
+  // accessDenied 表示平台明确拒绝卖家订单列表，前端需要告知其无法靠重复刷新补全数据。
+  const accessDenied = result.results.some(/* item 只检查失败条目中的脱敏诊断文本。 */ item =>
+    !item.success && /PERMISSION_EXCEPTION|无权限访问/.test(`${item.error || ''} ${item.message || ''}`));
+  if (accessDenied) {
+    lines.push('闲鱼平台拒绝访问卖家订单列表。请在闲鱼官方卖家中心检查账号权限及登录验证；订单金额与状态未核实前，请勿据此重复发货。');
+  }
   return lines.join('\n');
 };

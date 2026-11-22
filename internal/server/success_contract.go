@@ -366,6 +366,12 @@ type itemListResponse struct {
 	ItemDetail string `json:"item_detail"`
 	// ItemImage 是从详情中提取的商品图片地址。
 	ItemImage string `json:"item_image"`
+	// ExposureCount 是缓存的曝光次数；未知时省略，真实零值仍返回 0。
+	ExposureCount *int64 `json:"exposure_count,omitempty"`
+	// BrowseCount 是缓存的浏览次数；未知时省略。
+	BrowseCount *int64 `json:"browse_count,omitempty"`
+	// WantCount 是缓存的想要人数；未知时省略。
+	WantCount *int64 `json:"want_count,omitempty"`
 	// IsMultiSpec 表示商品是否有多规格。
 	IsMultiSpec bool `json:"is_multi_spec"`
 	// MultiQuantityDelivery 表示是否按数量发货。
@@ -374,6 +380,10 @@ type itemListResponse struct {
 	IsMultiQtyShip bool `json:"is_multi_qty_ship"`
 	// AIOverride 是商品级 AI 启停覆盖状态。
 	AIOverride string `json:"ai_override"`
+	// CreatedAt 是本地首次写入商品的数据库时间，空值表示未读取。
+	CreatedAt string `json:"created_at"`
+	// UpdatedAt 是本地最近一次写入或同步商品的数据库时间，空值表示未读取。
+	UpdatedAt string `json:"updated_at"`
 }
 
 // itemDetailResponse 是单个本地商品详情接口的具名响应 DTO。
@@ -392,6 +402,12 @@ type itemDetailResponse struct {
 	ItemPrice string `json:"item_price"`
 	// ItemDetail 是商品详情原始 JSON。
 	ItemDetail string `json:"item_detail"`
+	// ExposureCount 是缓存的曝光次数；未知时省略，真实零值仍返回 0。
+	ExposureCount *int64 `json:"exposure_count,omitempty"`
+	// BrowseCount 是缓存的浏览次数；未知时省略。
+	BrowseCount *int64 `json:"browse_count,omitempty"`
+	// WantCount 是缓存的想要人数；未知时省略。
+	WantCount *int64 `json:"want_count,omitempty"`
 	// IsMultiSpec 表示商品是否有多规格。
 	IsMultiSpec bool `json:"is_multi_spec"`
 	// MultiQuantityDelivery 表示是否按数量发货。

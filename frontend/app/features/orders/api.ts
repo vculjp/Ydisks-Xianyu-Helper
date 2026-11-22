@@ -129,7 +129,9 @@ export const getOrders = async (
     id: item.order_id,
     order_status: normalizeOrderStatus(item.order_status),
     status: normalizeOrderStatus(item.status || item.order_status),
-    quantity: Number(item.quantity || 1),
+    // 平台尚未返回购买数量时保留缺失语义；不能把未获取误报为已核实的 1 件。
+    quantity: item.quantity != null && String(item.quantity).trim() !== '' && Number.isFinite(Number(item.quantity)) && Number(item.quantity) > 0
+      ? Number(item.quantity) : 0,
   }));
   return {
     success: true,

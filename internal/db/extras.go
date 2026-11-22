@@ -616,6 +616,10 @@ type ItemInfoRow struct {
 	IsMultiSpec           bool
 	MultiQuantityDelivery bool
 	AIOverride            string
+	// CreatedAt 是本地首次写入商品的数据库时间，用于列表“发布日期”列展示。
+	CreatedAt string
+	// UpdatedAt 是本地最近一次写入或同步商品的数据库时间，用于列表“更新时间”列展示。
+	UpdatedAt string
 }
 
 // ItemSyncResult 是一次远端商品全集同步的结果。

@@ -210,7 +210,7 @@ export const AccountEditModal: React.FC<AccountEditModalProps> = ({
           <div className="flex items-center justify-between gap-4 p-4 bg-gray-50 rounded-xl">
             <div className="min-w-0">
               <div className="font-bold text-gray-900 flex items-center gap-2"><Check className="w-4 h-4 text-green-500" />自动免拼</div>
-              <div className="text-xs text-gray-500">仅在收到“我已小刀，待刀成”系统消息时调用免拼；成功小刀待发货后才会发卡</div>
+              <div className="text-xs text-gray-500">仅在收到“我已小刀，待刀成”系统消息时调用免拼；成功小刀待发货后才按规则发送发货内容</div>
             </div>
             <button
               type="button"

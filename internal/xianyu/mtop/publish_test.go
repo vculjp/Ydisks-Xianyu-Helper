@@ -75,4 +75,9 @@ func TestPublishParsingAndErrors(t *testing.T) {
 	if !errors.As(err, &publishErr) || publishErr.Code != PublishErrorStockPermissionMissing {
 		t.Fatalf("stock error = %#v", err)
 	}
+	// pcUnsupported 是平台明确拒绝网页端发布，与网络未知和库存权限不足不同。
+	err = classifyPublishError([]string{"FAIL_BIZ_PC_NOT_SUPPORT_PUBLISH_OR_EDIT::该商品暂不支持网页发布，请到闲鱼APP发布"}, map[string]any{})
+	if !errors.As(err, &publishErr) || publishErr.Code != PublishErrorPCUnsupported {
+		t.Fatalf("pc publish rejection should be deterministic: %#v", err)
+	}
 }

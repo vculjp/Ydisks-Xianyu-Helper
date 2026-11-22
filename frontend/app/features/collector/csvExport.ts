@@ -22,7 +22,7 @@ export const buildSelectionAnalysisRows = (items: ReadonlyArray<CollectedProduct
     item.sellerNick,
     item.sellerId,
     item.webUrl,
-    item.description || item.title,
+    item.description,
     item.imageUrls.join(';'),
   ]);
   return [header, ...dataRows];
@@ -44,7 +44,7 @@ export const buildLibraryImportTemplateRows = (
   const rows = items.map(/* item 是待转换为铺货模板行的采集商品。 */ item => [
     item.title.slice(0, 100),
     item.title,
-    item.description || item.title,
+    item.description,
     item.price,
     item.originalPrice,
     '5',

@@ -1,5 +1,6 @@
 import { createPublishSpecId, reconcilePublishSkuRows, totalPublishSkuQuantity, validatePublishSpecs, type PublishSkuRow, type PublishSpec } from '../../../shared/ui/publish/publishSpecs';
 import type { TemplateRequestTransport } from './api';
+import { sourceToTransport, type SourcePublishInfo } from '../../../shared/ui/publish/sourceInfo';
 import type { LibraryAction, LibraryActionGroup, LibraryAutomation, LibraryCategory, LibraryDeliveryTemplateOption, ProductTemplate } from './types';
 
 /** TemplateDraft 是模板编辑器的表单状态，金额与库存保留用户输入的文本。 */
@@ -22,6 +23,8 @@ export interface TemplateDraft {
   postage: string;
   /** category 是平台类目。 */
   category: LibraryCategory;
+  /** source 原样保留来源快照，编辑当前目标类目不覆盖原卖家使用的类目证据。 */
+  source?: SourcePublishInfo;
   /** imageIds 是主图的图片库主键，顺序即主图顺序。 */
   imageIds: number[];
   /** specs 是规格维度草稿，复用共享规格编辑器的结构。 */
@@ -75,7 +78,7 @@ export const draftFromTemplate = (template: ProductTemplate): TemplateDraft => {
     name: template.name, title: template.title, description: template.description,
     price: specs.length ? '' : template.price, originalPrice: template.originalPrice, quantity: specs.length ? '1' : String(template.quantity),
     postageMode: template.postageMode, postage: template.postage === '0.00' ? '' : template.postage,
-    category: { ...template.category }, imageIds: [...template.imageIds], specs, skuRows: reconcilePublishSkuRows(specs, previousRows),
+    category: { ...template.category }, source: template.source, imageIds: [...template.imageIds], specs, skuRows: reconcilePublishSkuRows(specs, previousRows),
     specImageIds, automation: structuredClone(template.automation),
   };
 };
@@ -188,6 +191,7 @@ export const toRequest = (draft: TemplateDraft): TemplateRequestTransport => {
     quantity: multi ? totalPublishSkuQuantity(draft.skuRows) : Number(draft.quantity),
     postage_mode: draft.postageMode, postage: draft.postageMode === 'fixed' ? draft.postage.trim() : '0',
     category: { cat_id: draft.category.catId, cat_name: draft.category.catName, channel_cat_id: draft.category.channelCatId, tb_cat_id: draft.category.tbCatId },
+    source: sourceToTransport(draft.source),
     image_ids: draft.imageIds,
     specs: {
       specs: multi ? specs : [], spec_image_ids: multi ? specImageIds : [],

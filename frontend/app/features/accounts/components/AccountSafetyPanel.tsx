@@ -3,6 +3,7 @@ import { ShieldAlert } from 'lucide-react';
 import { getAccountDetails, updateAccountStatus } from '../api';
 import type { AccountDetail } from '../models';
 import { accountAttentionReason, disableAccounts, summarizeSafety, verifyStoppedAccounts } from '../safety';
+import { confirmAction, notify } from '../../../../shared/ui/feedback';
 
 import OperationsCenter from './OperationsCenter';
 
@@ -43,7 +44,7 @@ export function AccountSafetyPanel({ accounts, refresh }: SafetyPanelProps) {
       // enabled 是本轮确实需要停用的账号集合。
       const enabled = latest.filter(/* 保留仍启用的账号。 */ account => account.enabled);
       if (!enabled.length) { setMessage('当前没有启用的账号。'); return; }
-      if (!window.confirm(`确定停用当前 ${enabled.length} 个启用账号？可能中断客服和正在执行的任务，需逐个手动恢复。`)) return;
+      if (!(await confirmAction({ title: '停用全部启用账号', message: `确定停用当前 ${enabled.length} 个启用账号？可能中断客服和正在执行的任务，需逐个手动恢复。`, confirmText: '全部停用', danger: true }))) return;
       // result 只保存本地接口确认数量，异常响应不能当作停用成功。
       const result = await disableAccounts(enabled, /* 调用既有本地账号状态接口。 */ id => updateAccountStatus(id, false), controller.signal);
       if (!controller.signal.aborted) {
@@ -52,11 +53,17 @@ export function AccountSafetyPanel({ accounts, refresh }: SafetyPanelProps) {
         if (controller.signal.aborted) return;
         // verified 是目标账号的明确复核结果；账号缺失亦单列，不能算作停用成功。
         const verified = verifyStoppedAccounts(enabled.map(/* 只复核本轮用户确认的目标。 */ account => account.id), current);
-        setMessage(`接口确认 ${result.confirmed.length} 个；重新查询：已停用 ${verified.disabled.length} 个，仍启用 ${verified.enabled.length} 个，状态未知 ${verified.unknown.length} 个。请核对待处理订单。`);
+        // summary 是接口确认数量与重新查询结果的非敏感说明。
+        const summary = `接口确认 ${result.confirmed.length} 个；重新查询：已停用 ${verified.disabled.length} 个，仍启用 ${verified.enabled.length} 个，状态未知 ${verified.unknown.length} 个。请核对待处理订单。`;
+        setMessage(summary);
+        notify(verified.enabled.length > 0 || verified.unknown.length > 0 ? 'warning' : 'success', summary);
         await refresh();
       }
     } catch {
-      if (!controller.signal.aborted) setMessage('无法确认操作结果，请刷新账号状态并逐个核对。');
+      if (!controller.signal.aborted) {
+        setMessage('无法确认操作结果，请刷新账号状态并逐个核对。');
+        notify('error', '无法确认停用结果，请刷新账号状态并逐个核对。');
+      }
     } finally {
       if (operation.current === controller) operation.current = null;
       if (!controller.signal.aborted) setBusy(false);

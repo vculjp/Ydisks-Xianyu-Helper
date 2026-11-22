@@ -3,12 +3,33 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"xianyu-go/internal/db"
 	"xianyu-go/internal/supportpolicy"
 )
+
+// TestVerifiedKnowledgeOverridesStaleMovieListingPrompt 验证商家核实的网盘商品事实优先于错误的旧票务描述。
+func TestVerifiedKnowledgeOverridesStaleMovieListingPrompt(t *testing.T) {
+	// oldListing 是尚未更改的历史商品文案，模拟把电影网盘资源写成代买电影票。
+	oldListing := buildFullServicePrompt("", "特价电影票《幻视任务》", 8, "全国代订多地电影票，代买代购")
+	// merchantFacts 是本地商家确认的全局商品类型与交付事实。
+	merchantFacts := "电影类商品均是高清、中文字幕、百度网盘和夸克网盘双盘发货的电子资源，不是代买、代订电影票服务。"
+	// prompt 是加入权威层级规则后的完整模型输入。
+	prompt := appendVerifiedSupportKnowledge(oldListing, "电影类商品说明："+merchantFacts)
+	if !strings.Contains(prompt, merchantFacts) || !strings.Contains(prompt, "已核实知识 > 可能过时或不准确的商品标题与描述") ||
+		!strings.Contains(prompt, "不得称之为票务代订") || !strings.Contains(prompt, "全国代订多地电影票") {
+		t.Fatal("没有在保留真实上架文本的同时明确提高商家核实知识的权重")
+	}
+	if strings.Index(prompt, "全国代订多地电影票") > strings.Index(prompt, merchantFacts) {
+		t.Fatal("旧商品描述不得排在商家确认事实之后")
+	}
+	if appendVerifiedSupportKnowledge(oldListing, " ") != oldListing {
+		t.Fatal("没有知识时不应改变原有模型输入")
+	}
+}
 
 // TestCustomerSupportProductionAndSandbox 验证实际生成器共享知识、FAQ 和质量门禁，沙盒不写真实会话。
 func TestCustomerSupportProductionAndSandbox(t *testing.T) {

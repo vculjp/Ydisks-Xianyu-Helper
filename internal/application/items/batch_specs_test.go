@@ -192,7 +192,7 @@ func previewRowForSpecs() BatchPreviewRow {
 	for _, combination := range combinations {
 		actions = append(actions, BatchPreviewCardAction{CardID: 7, DeliveryCount: 1, SpecName: combination.SpecName, SpecValue: combination.SpecValue})
 	}
-	return BatchPreviewRow{CookieID: "acc", Title: "商品", Price: "10.00", Quantity: 10, PostageMode: "free", Images: []string{"a.png"},
+	return BatchPreviewRow{CookieID: "acc", Title: "商品", Description: "完整商品描述及购买说明", Price: "10.00", Quantity: 10, PostageMode: "free", Images: []string{"a.png"},
 		Specs: specs, Automation: BatchPreviewAutomation{PaidDelivery: BatchPreviewCardAutomation{Enabled: true, Actions: actions}}}
 }
 
@@ -259,7 +259,7 @@ func TestPreviewRowsValidatesSpecsAndActions(t *testing.T) {
 			t.Fatalf("row %d 错误=%q 缺少 %q", index, joined, wants[index])
 		}
 	}
-	if result[0].CookieID != "acc" || result[0].RowNo != 2 || result[0].Description != "商品" {
+	if result[0].CookieID != "acc" || result[0].RowNo != 2 || result[0].Description != "完整商品描述及购买说明" {
 		t.Fatalf("默认值未补齐: %+v", result[0])
 	}
 	if !strings.Contains(strings.Join(result[6].Errors, "|"), "绑定的卡密组") || !strings.Contains(strings.Join(result[7].Errors, "|"), "规格绑定格式错误") {

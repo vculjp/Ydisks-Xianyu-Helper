@@ -4,8 +4,8 @@ cd /d "%~dp0"
 rem Fixed local port: 48188 is outside the Windows dynamic TCP port range.
 rem Do not inherit XIANYU_HTTP_PORT from the environment, to avoid changing the URL on restart.
 set "XIANYU_HTTP_PORT=48188"
-if not exist "%~dp0xianyu-server-session-dev.exe" (
-  echo Updated server executable not found. Build xianyu-server-session-dev.exe first.
+if not exist "%~dp0dist\windows\xianyu-server-ui-layout-23.exe" (
+  echo Updated server executable not found. Build dist\windows\xianyu-server-ui-layout-23.exe first.
   pause
   exit /b 1
 )
@@ -16,5 +16,5 @@ if not errorlevel 1 (
   exit /b 0
 )
 echo Starting updated server. Open http://127.0.0.1:%XIANYU_HTTP_PORT% after the server starts.
-"%~dp0xianyu-server-session-dev.exe" -workdir "%~dp0data" -db "%~dp0data\xianyu_data.db" -addr 127.0.0.1:%XIANYU_HTTP_PORT%
+"%~dp0dist\windows\xianyu-server-ui-layout-23.exe" -workdir "%~dp0data" -db "%~dp0data\xianyu_data.db" -addr 127.0.0.1:%XIANYU_HTTP_PORT%
 pause

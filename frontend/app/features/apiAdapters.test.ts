@@ -338,10 +338,12 @@ test('getOrders normalizes backend order fields', async () => {
 
 test('getOrders maps unsupported backend statuses to unknown', async () => {
   stubContractFetch(vi.fn().mockResolvedValue(jsonResponse({
-    data: [{ order_id: 'o-unknown', order_status: 'legacy_status' }],
+    data: [{ order_id: 'o-unknown', order_status: 'legacy_status', quantity: '', amount: '' }],
   })));
   const result = await getOrders(); /* result 表示处理结果。 */
   expect(result.data[0].status).toBe('unknown');
+  expect(result.data[0].quantity).toBe(0);
+  expect(result.data[0].amount).toBe('');
 } /* 测试回调验证：getOrders maps unsupported backend statuses to unknown。 */);
 
 test('订单查询 API 转发外部取消信号', async () => {
@@ -1581,7 +1583,7 @@ const runVersionedItemAPITest = async () => {
   expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/items/acc1/item-1', expect.objectContaining({ method: 'GET' }));
   expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/v1/items/publish', expect.objectContaining({ method: 'POST', body: expect.any(FormData) }));
   expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/v1/items/acc1/item-1', expect.objectContaining({ method: 'PUT' }));
-  expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/v1/items/acc1/item-1', expect.objectContaining({ method: 'DELETE' }));
+  expect(fetchMock).toHaveBeenNthCalledWith(5, '/api/v1/items/acc1/item-1/delete', expect.objectContaining({ method: 'POST' }));
 };
 
 test('item list, detail, publish, update, and delete APIs use versioned compatibility routes', runVersionedItemAPITest);

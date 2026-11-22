@@ -1,0 +1,14 @@
+{
+  "name": "xianyu-android-publisher-tooling",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Android 真机 UI 自动化的独立开发工具，不修改现有网页发布接口。",
+  "scripts": {
+    "server": "appium --address 127.0.0.1 --port 4723",
+    "drivers": "appium driver list --installed",
+    "doctor": "appium driver doctor uiautomator2"
+  },
+  "devDependencies": {
+    "appium": "^4.0.0"
+  }
+}

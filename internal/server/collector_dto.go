@@ -2,6 +2,7 @@ package server
 
 import (
 	collectorapp "xianyu-go/internal/application/collector"
+	"xianyu-go/internal/catalog"
 )
 
 // collectedItemDTO 是 HTTP 层输出的单件采集商品快照，严格对应 OpenAPI CollectedItem。
@@ -32,6 +33,8 @@ type collectedItemDTO struct {
 	BrowseCount int `json:"browse_count"`
 	// CategoryID 是平台类目 ID。
 	CategoryID string `json:"category_id"`
+	// Source 是原商品可验证的发布所需字段；空缺信息仍显式传回前端。
+	Source catalog.SourceInfo `json:"source"`
 	// IsFreeShipping 表示是否包邮。
 	IsFreeShipping bool `json:"is_free_shipping"`
 	// IsMultiSpec 表示是否多规格。
@@ -154,6 +157,8 @@ type collectorSaveTemplateItemDTO struct {
 	ImageURLs []string `json:"image_urls"`
 	// HasFullDetail 表示是否已具备完整详情。
 	HasFullDetail bool `json:"has_full_detail"`
+	// Source 保留原商品类目、规格、运费等公开发布信息快照。
+	Source catalog.SourceInfo `json:"source"`
 }
 
 // collectorSaveTemplatesRequest 是批量转存商品模板库请求体。
@@ -257,21 +262,25 @@ func newCollectedItemDTO(item collectorapp.CollectedItem) collectedItemDTO {
 	if imgs == nil {
 		imgs = []string{}
 	}
+	// source 在旧客户端未返回新字段时仍返回非 nil 数组，保证采集响应满足 OpenAPI 契约。
+	source := item.Source
+	source.NormalizeCollections()
 	return collectedItemDTO{
-		ItemID:         item.ItemID,
-		Title:          item.Title,
-		Description:    item.Description,
-		Price:          item.Price,
-		OriginalPrice:  item.OriginalPrice,
-		PicURL:         item.PicURL,
-		ImageURLs:      imgs,
-		Area:           item.Area,
-		SellerID:       item.SellerID,
-		SellerNick:     item.SellerNick,
-		WantCount:      item.WantCount,
-		BrowseCount:    item.BrowseCount,
-		CategoryID:     item.CategoryID,
-		IsFreeShipping: item.IsFreeShipping,
+		ItemID:          item.ItemID,
+		Title:           item.Title,
+		Description:     item.Description,
+		Price:           item.Price,
+		OriginalPrice:   item.OriginalPrice,
+		PicURL:          item.PicURL,
+		ImageURLs:       imgs,
+		Area:            item.Area,
+		SellerID:        item.SellerID,
+		SellerNick:      item.SellerNick,
+		WantCount:       item.WantCount,
+		BrowseCount:     item.BrowseCount,
+		CategoryID:      item.CategoryID,
+		Source:          source,
+		IsFreeShipping:  item.IsFreeShipping,
 		IsMultiSpec:     item.IsMultiSpec,
 		HasFullDetail:   item.HasFullDetail,
 		PublishTimeUnix: item.PublishTimeUnix,

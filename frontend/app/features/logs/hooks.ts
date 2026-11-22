@@ -35,6 +35,8 @@ export type UseRuntimeLogsResult = {
   paused: boolean;
   /** loading 表示当前是否有正在进行的增量请求。 */
   loading: boolean;
+  /** refreshing 表示用户手动刷新后的首轮请求是否尚未结束。 */
+  refreshing: boolean;
   /** error 是最近一次加载失败原因；空字符串表示没有错误。 */
   error: string;
   /** dropped 是服务端已覆盖的累计记录数，用于提示历史记录不完整。 */
@@ -69,6 +71,8 @@ export const useRuntimeLogs = (options: UseRuntimeLogsOptions = {}): UseRuntimeL
   const [paused, setPausedState] = useState(false);
   // [loading, setLoading] 保存增量请求进行状态。
   const [loading, setLoading] = useState(false);
+  // [refreshing, setRefreshing] 保存手动刷新首轮请求状态，用于禁用重复刷新按钮。
+  const [refreshing, setRefreshing] = useState(false);
   // [error, setError] 保存最近一次加载失败原因。
   const [error, setError] = useState('');
   // [stats, setStats] 保存服务端缓冲区边界，用于生成保留提示。
@@ -79,6 +83,8 @@ export const useRuntimeLogs = (options: UseRuntimeLogsOptions = {}): UseRuntimeL
   const cursorRef = useRef(0);
   // sequenceRef 保存当前日志流代次，过期响应不得写入状态。
   const sequenceRef = useRef(0);
+  // refreshingRef 是手动刷新的同步锁，防止同一渲染帧内重复触发刷新。
+  const refreshingRef = useRef(false);
   // querySignature 是过滤条件签名，条件变化时必须重置游标与已加载日志。
   const querySignature = runtimeLogQuerySignature(query);
 
@@ -90,7 +96,13 @@ export const useRuntimeLogs = (options: UseRuntimeLogsOptions = {}): UseRuntimeL
   }, [querySignature, reloadKey]);
 
   useEffect(/* pollingEffect 在启用且未暂停时立即读取一次增量，并按间隔持续轮询。 */ () => {
-    if (!enabled || paused) return;
+    if (!enabled || paused) {
+      if (refreshingRef.current) {
+        refreshingRef.current = false;
+        setRefreshing(false);
+      }
+      return;
+    }
     // sequence 标识本轮日志流，过期响应不得写入状态。
     const sequence = ++sequenceRef.current;
     // controller 是当前日志流的请求取消控制器。
@@ -117,7 +129,13 @@ export const useRuntimeLogs = (options: UseRuntimeLogsOptions = {}): UseRuntimeL
         setError(runtimeLogErrorMessage(requestError, '运行日志加载失败'));
       } finally {
         inFlight = false;
-        if (!cancelled && sequenceRef.current === sequence) setLoading(false);
+        if (!cancelled && sequenceRef.current === sequence) {
+          setLoading(false);
+          if (refreshingRef.current) {
+            refreshingRef.current = false;
+            setRefreshing(false);
+          }
+        }
       }
     };
     void loadIncrement();
@@ -146,6 +164,9 @@ export const useRuntimeLogs = (options: UseRuntimeLogsOptions = {}): UseRuntimeL
 
   // reload 提升重新加载版本号，并恢复轮询，保证暂停状态下点击刷新也能真正读取日志。
   const reload = useCallback(/* 重新加载操作不接收参数。 */ () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
     setPausedState(false);
     setReloadKey(/* value 是变更前的重新加载版本号。 */ value => value + 1);
   }, []);
@@ -155,6 +176,7 @@ export const useRuntimeLogs = (options: UseRuntimeLogsOptions = {}): UseRuntimeL
     query,
     paused,
     loading,
+    refreshing,
     error,
     dropped: stats.dropped,
     capacity: stats.capacity,

@@ -81,7 +81,7 @@ export interface NotificationPayload {
   enabled: boolean;
 }
 
-// NotificationToast 描述页面底部的短暂操作提示。
+// NotificationToast 保留 Hook 内的短暂提示状态，页面展示由全局 notify 统一负责。
 export interface NotificationToast {
   // type 决定提示的成功或失败样式。
   type: 'success' | 'error';
@@ -89,26 +89,39 @@ export interface NotificationToast {
   text: string;
 }
 
+/** NotificationAction 描述针对单个通知渠道可重复触发的业务动作。 */
+export type NotificationAction = 'save' | 'toggle' | 'delete' | 'test';
+
 // NotificationState 暴露通知页面的数据、表单和操作边界。
 export interface NotificationState {
   // channels 是当前用户可用的通知渠道列表。
   channels: NotificationChannel[];
   // loading 表示渠道列表是否正在加载。
   loading: boolean;
+  // loadError 保存渠道列表最近一次加载失败的可展示文本。
+  loadError: string;
   // showModal 表示渠道编辑弹窗是否打开。
   showModal: boolean;
   // editing 是当前正在编辑的渠道，新增时为空。
   editing: NotificationChannel | null;
-  // saving 表示渠道或 SMTP 配置是否正在保存。
+  // saving 表示当前渠道表单是否正在保存。
   saving: boolean;
   // testingId 是当前正在发送测试通知的渠道 ID。
   testingId: string;
-  // toast 是当前待展示的操作提示。
+  // toast 是兼容页面状态测试的最近一次操作提示；真实展示由全局通知宿主完成。
   toast: NotificationToast | null;
   // smtp 是系统级邮件配置。
   smtp: SystemSettings;
+  // smtpLoading 表示管理员 SMTP 配置是否正在加载。
+  smtpLoading: boolean;
+  // smtpLoadError 保存管理员 SMTP 配置最近一次加载失败的可展示文本。
+  smtpLoadError: string;
   // smtpSaving 表示系统 SMTP 是否正在保存。
   smtpSaving: boolean;
+  // pendingActionKeys 保存所有正在执行的渠道动作键，供页面展示单项忙碌状态。
+  pendingActionKeys: ReadonlySet<string>;
+  // isActionPending 判断指定渠道动作是否仍在执行，用于阻止重复提交。
+  isActionPending: (channelId: string, action: NotificationAction) => boolean;
   // showSmtpPassword 控制系统 SMTP 密码明文展示。
   showSmtpPassword: boolean;
   // showChannelSmtpPassword 控制独立 SMTP 密码明文展示。
@@ -125,13 +138,15 @@ export interface NotificationState {
   setShowChannelSmtpPassword: Dispatch<SetStateAction<boolean>>;
   // loadChannels 刷新通知渠道列表。
   loadChannels: () => Promise<void>;
+  // loadSmtp 刷新管理员可见的系统 SMTP 配置。
+  loadSmtp: () => Promise<void>;
   // openCreate 打开新建渠道弹窗。
   openCreate: () => void;
   // openEdit 打开已有渠道编辑弹窗。
   openEdit: (channel: NotificationChannel) => Promise<void>;
   // closeModal 关闭弹窗并取消当前保存请求。
   closeModal: () => void;
-  // showToast 展示短暂的成功或失败提示。
+  // showToast 发布全局提示，并保留兼容测试的本地提示状态。
   showToast: (type: NotificationToast['type'], text: string) => void;
   // handleSave 保存当前渠道配置。
   handleSave: () => Promise<void>;

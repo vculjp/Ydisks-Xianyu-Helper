@@ -30,9 +30,22 @@ func (p *remoteItemPlatformStub) DownShelf(context.Context, int64, string, strin
 	return p.operationErr
 }
 
+// Delete 只记录一条平台删除调用。
+func (p *remoteItemPlatformStub) Delete(context.Context, int64, string, string) error {
+	p.calls = append(p.calls, RemoteItemDeleteAction)
+	return p.operationErr
+}
+
 // Reshelf 只记录一条明确重新上架调用。
 func (p *remoteItemPlatformStub) Reshelf(context.Context, int64, string, string) error {
 	p.calls = append(p.calls, RemoteItemReshelfAction)
+	return p.operationErr
+}
+
+// SetBargain 只记录一条小刀开关调用，并保存目标状态供断言使用。
+func (p *remoteItemPlatformStub) SetBargain(_ context.Context, _ int64, _, _ string, enabled bool) error {
+	p.calls = append(p.calls, RemoteItemBargainAction)
+	p.received.Bargain = &enabled
 	return p.operationErr
 }
 
@@ -150,6 +163,33 @@ func TestRemoteItemPriceRejectsUnsafeInput(t *testing.T) {
 	}
 }
 
+// TestRemoteItemToggleBargainPersistsExplicitState 验证小刀开关仅在平台确认后写入本地 bargain_state，并保留原详情字段。
+func TestRemoteItemToggleBargainPersistsExplicitState(t *testing.T) {
+	// catalog 是包含原有扩展字段的本地商品，本次切换只能增加小刀状态。
+	catalog := &catalogMutationRepositoryStub{item: CatalogItem{ItemID: "it1", ItemDetail: `{"item_image":"picture.jpg","category_id":"5001"}`}}
+	// platform 是确认成功的模拟平台。
+	platform := &remoteItemPlatformStub{}
+	// service 是真实应用层管理用例。
+	service, err := NewRemoteItemService(catalog, platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// input 是开启小刀的单件操作。
+	enabled := true
+	input := RemoteItemInput{UserID: 1, CookieID: "account1", ItemID: "it1", Action: RemoteItemBargainAction, Bargain: &enabled}
+	if err := service.Execute(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal([]byte(*catalog.patchInput.ItemDetail), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail["bargain_state"] != true || detail["category_id"] != "5001" || detail["item_image"] != "picture.jpg" ||
+		len(platform.calls) != 1 || platform.calls[0] != RemoteItemBargainAction || platform.received.Bargain == nil || !*platform.received.Bargain {
+		t.Fatalf("小刀开关应确认后写入 bargain_state 并保留原字段: detail=%v received=%+v", detail, platform.received)
+	}
+}
+
 // TestRemoteEditDoesNotRelistOffShelfItem 验证修改下架商品不会未经用户同意触发重新上架。
 func TestRemoteEditDoesNotRelistOffShelfItem(t *testing.T) {
 	// catalog 是已经明确下架的本地商品，其扩展状态必须被应用层识别。
@@ -185,5 +225,41 @@ func TestRemoteShelfRejectsNullDetailBeforePlatformWrite(t *testing.T) {
 	executeErr := service.Execute(context.Background(), RemoteItemInput{UserID: 1, CookieID: "account1", ItemID: "it1", Action: RemoteItemDownShelfAction})
 	if executeErr == nil || len(platform.calls) != 0 {
 		t.Fatalf("扩展详情为 null 时不得修改平台: err=%v calls=%v", executeErr, platform.calls)
+	}
+}
+
+// TestRemoteDeleteOnlyRemovesLocalAfterPlatformConfirmation 验证平台删除成功后才逻辑删除本地商品。
+func TestRemoteDeleteOnlyRemovesLocalAfterPlatformConfirmation(t *testing.T) {
+	// catalog 是待删除的本地商品记录。
+	catalog := &catalogMutationRepositoryStub{item: CatalogItem{ItemID: "it1"}}
+	// platform 是确认成功的模拟闲鱼平台。
+	platform := &remoteItemPlatformStub{}
+	// service 是真实应用层删除用例。
+	service, serviceErr := NewRemoteItemService(catalog, platform)
+	if serviceErr != nil {
+		t.Fatal(serviceErr)
+	}
+	// executeErr 是平台和本地依次删除的最终结果。
+	executeErr := service.Execute(context.Background(), RemoteItemInput{UserID: 1, CookieID: "account1", ItemID: "it1", Action: RemoteItemDeleteAction})
+	if executeErr != nil || len(platform.calls) != 1 || platform.calls[0] != RemoteItemDeleteAction || catalog.deleteCalls != 1 {
+		t.Fatalf("平台确认后应删除本地记录: err=%v calls=%v deleteCalls=%d", executeErr, platform.calls, catalog.deleteCalls)
+	}
+}
+
+// TestRemoteDeleteKeepsLocalWhenPlatformRejects 验证平台拒绝删除时不得提前隐藏本地商品。
+func TestRemoteDeleteKeepsLocalWhenPlatformRejects(t *testing.T) {
+	// catalog 是平台拒绝后必须保留的本地商品记录。
+	catalog := &catalogMutationRepositoryStub{item: CatalogItem{ItemID: "it1"}}
+	// platform 模拟平台拒绝或网络结果未知。
+	platform := &remoteItemPlatformStub{operationErr: errors.New("平台拒绝删除")}
+	// service 是真实应用层删除用例。
+	service, serviceErr := NewRemoteItemService(catalog, platform)
+	if serviceErr != nil {
+		t.Fatal(serviceErr)
+	}
+	// executeErr 必须保留原平台错误，且本地删除次数为零。
+	executeErr := service.Execute(context.Background(), RemoteItemInput{UserID: 1, CookieID: "account1", ItemID: "it1", Action: RemoteItemDeleteAction})
+	if executeErr == nil || catalog.deleteCalls != 0 {
+		t.Fatalf("平台拒绝时不得删除本地商品: err=%v deleteCalls=%d", executeErr, catalog.deleteCalls)
 	}
 }

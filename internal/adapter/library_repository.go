@@ -206,6 +206,11 @@ func libraryTemplateModel(row db.ProductTemplate) (libraryapp.Template, error) {
 	if err := json.Unmarshal([]byte(row.CategoryJSON), &template.Category); err != nil {
 		return libraryapp.Template{}, fmt.Errorf("商品模板 %d 类目数据损坏", row.ID)
 	}
+	// 来源快照与可编辑类目独立，防止用户重新选择类目时破坏原商品溯源证据。
+	if err := json.Unmarshal([]byte(row.SourceJSON), &template.Source); err != nil {
+		return libraryapp.Template{}, fmt.Errorf("商品模板 %d 来源资料损坏", row.ID)
+	}
+	template.Source.NormalizeCollections()
 	// err 保存 Unmarshal 调用的失败原因。
 	if err := json.Unmarshal([]byte(row.ImageIDsJSON), &template.ImageIDs); err != nil {
 		return libraryapp.Template{}, fmt.Errorf("商品模板 %d 图片数据损坏", row.ID)
@@ -233,6 +238,11 @@ func libraryTemplateRow(template libraryapp.Template) (db.ProductTemplate, error
 	if err != nil {
 		return db.ProductTemplate{}, err
 	}
+	// source 是平台公开发布快照的 JSON，绝不包含 Cookie/鉴权元数据。
+	source, err := json.Marshal(template.Source)
+	if err != nil {
+		return db.ProductTemplate{}, err
+	}
 	// imageIDs 保证 nil 切片也编码为 []。
 	imageIDs := template.ImageIDs
 	if imageIDs == nil {
@@ -257,7 +267,7 @@ func libraryTemplateRow(template libraryapp.Template) (db.ProductTemplate, error
 	}
 	return db.ProductTemplate{ID: template.ID, UserID: template.UserID, CollectorKey: template.CollectorKey, Name: template.Name, Title: template.Title, Description: template.Description,
 		PriceCents: template.PriceCents, OriginalPriceCents: template.OriginalPriceCents, Quantity: template.Quantity, PostageMode: template.PostageMode,
-		PostageCents: template.PostageCents, CategoryJSON: string(category), ImageIDsJSON: string(images), SpecsJSON: string(specs), AutomationJSON: string(automation)}, nil
+		PostageCents: template.PostageCents, CategoryJSON: string(category), ImageIDsJSON: string(images), SpecsJSON: string(specs), AutomationJSON: string(automation), SourceJSON: string(source)}, nil
 }
 
 // List 返回用户全部模板。

@@ -23,7 +23,7 @@ const Chat: React.FC<ChatProps> = ({ libraryImageChooser: LibraryChooser }) => {
   const {
     accounts, activeAccountID, activeChatID, activeAccount, selectedSession, filteredSessions,
     messages, search, unreadOnly, draft, loading, messagesLoading, olderLoading, hasOlder, contactsLoading,
-    hasMoreContacts, emojiOpen, sending, error, sendNotice, liveState, pendingImage, scrollRef, imageInputRef, setActiveAccountID,
+    hasMoreContacts, emojiOpen, sending, error, sendNotice, liveState, pendingImage, scrollRef, imageInputRef, setActiveAccountID, initialError, retryInitial, sessionsRefreshing, sessionsError, messagesError, retryMessages,
     setActiveChatID, setSearch, setUnreadOnly, setDraft, setEmojiOpen, reloadSessions, loadMoreContacts,
     loadOlderMessages, handleMessageScroll, handleSend, handleQuickReply, handleQuickReplyImage, handleLibraryImage, handleImage, handlePastedImages, confirmSendImage, closeImagePreview, retrySend, retryAvailable,
     deletingChatID, deleteError, deleteConversation, clearDeleteError, acceptOutgoingMessage, unreadForAccount, jumpToUnreadConversation, emojiURL, xianyuEmojis, renderXianyuText, formatClock, messageTime,
@@ -97,19 +97,32 @@ const Chat: React.FC<ChatProps> = ({ libraryImageChooser: LibraryChooser }) => {
 		if (deleted) setDeleteTarget(null);
 	}, [deleteConversation, deleteTarget]);
 
-  if (loading) return <div className="flex h-[calc(100vh-4rem)] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-sky-500" /></div>;
+  if (loading) return <div className="flex h-[calc(100vh-4rem)] flex-col items-center justify-center gap-3 text-sm text-slate-500" role="status"><Loader2 className="h-8 w-8 animate-spin text-sky-500" /><span>正在加载聊天数据…</span></div>;
+
+  if (initialError) {
+    return (
+      <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
+        <div className="flex max-w-lg flex-col items-center gap-3 rounded-2xl border border-red-100 bg-white px-8 py-10 text-center shadow-sm" role="alert">
+          <AlertCircle className="h-9 w-9 text-red-500" />
+          <h2 className="text-lg font-black text-slate-900">聊天数据加载失败</h2>
+          <p className="break-words text-sm leading-6 text-slate-600">{initialError}</p>
+          <button type="button" onClick={/* 重新执行聊天首屏初始化。 */ () => void retryInitial()} className="rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-sky-600">重新加载</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <section className="flex h-[calc(100vh-4rem)] min-h-[560px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-chat">
       <header className="border-b border-slate-200 bg-slate-50/70 px-5 pt-4">
-        <div className="mb-3 flex items-center justify-between gap-4">
-          <div>
+        <div className="mb-3 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+          <div className="min-w-0">
             <h2 className="text-xl font-black tracking-tight text-slate-950">在线聊天</h2>
             <p className="mt-0.5 text-xs font-medium text-slate-500">复用账号实时连接，消息按账号完全隔离</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
             <BrowserNotificationToggle />
-            <div className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold ${liveState === 'online' ? 'bg-emerald-50 text-emerald-700' : liveState === 'connecting' ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'}`}>
+            <div className={`inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-bold ${liveState === 'online' ? 'bg-emerald-50 text-emerald-700' : liveState === 'connecting' ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'}`}>
               {liveState === 'online' ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}
               {liveState === 'online' ? '实时同步中' : liveState === 'connecting' ? '正在连接' : '连接已断开'}
             </div>
@@ -145,6 +158,13 @@ const Chat: React.FC<ChatProps> = ({ libraryImageChooser: LibraryChooser }) => {
         </div>
       </header>
 
+      {error && !selectedSession && accounts.length > 0 && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border-b border-red-100 bg-red-50 px-5 py-2 text-xs font-medium text-red-700">
+          <span>{error}</span>
+          <button type="button" onClick={/* 重试加载更多历史联系人。 */ () => void loadMoreContacts()} disabled={contactsLoading} className="font-bold underline disabled:opacity-50">重试</button>
+        </div>
+      )}
+
       {accounts.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center text-center">
           <MessageCircleMore className="h-12 w-12 text-slate-300" />
@@ -152,8 +172,8 @@ const Chat: React.FC<ChatProps> = ({ libraryImageChooser: LibraryChooser }) => {
           <p className="mt-1 text-sm text-slate-500">先在账号管理中启用账号，聊天会话会自动出现。</p>
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 overflow-hidden grid-cols-[320px_minmax(0,1fr)]">
-          <aside className="flex min-h-0 flex-col border-r border-slate-200 bg-slate-50/40">
+        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(160px,38%)_minmax(0,1fr)] overflow-hidden md:grid-cols-[320px_minmax(0,1fr)] md:grid-rows-1">
+          <aside className="flex min-h-0 flex-col border-b border-slate-200 bg-slate-50/40 md:border-b-0 md:border-r">
             <div className="space-y-3 border-b border-slate-200 p-3">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -165,12 +185,13 @@ const Chat: React.FC<ChatProps> = ({ libraryImageChooser: LibraryChooser }) => {
                   className={`rounded-lg px-2.5 py-1.5 text-xs font-bold ${unreadOnly ? 'bg-sky-100 text-sky-700' : 'text-slate-500 hover:bg-slate-100'}`}>
                   {unreadOnly ? '只看未读' : '全部会话'}
                 </button>
-                <button type="button" title="刷新会话" onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => void reloadSessions(activeAccountID)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
-                  <RefreshCw className="h-4 w-4" />
+                <button type="button" title="刷新会话" disabled={!activeAccountID || sessionsRefreshing} onClick={/* 用户显式刷新当前账号会话并展示结果提示。 */ () => void reloadSessions(activeAccountID, { announce: true })} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40">
+                  <RefreshCw className={`h-4 w-4 ${sessionsRefreshing ? 'animate-spin' : ''}`} />
                 </button>
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
+              {sessionsError && <div role="alert" className="m-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-700"><span>{sessionsError}</span><button type="button" onClick={/* 重新刷新当前账号会话首页。 */ () => void reloadSessions(activeAccountID, { announce: true })} className="font-bold underline">重试</button></div>}
               {filteredSessions.map(/* 当前回调处理集合中的单个元素。 */ session => (
                 <div key={session.chat_id} ref={pendingUnreadJump?.accountID === activeAccountID && pendingUnreadJump.chatID === session.chat_id ? unreadJumpRowRef : undefined}>
 				  <ConversationListItem session={session} active={session.chat_id === activeChatID} formatClock={formatClock} onSelect={/* 当前回调切换当前聊天。 */ () => setActiveChatID(session.chat_id)} onDelete={/* 当前回调打开会话删除确认框且不触发选择按钮。 */ () => openDeleteDialog(session)} deleteDisabled={sending && session.chat_id === activeChatID} />
@@ -254,7 +275,8 @@ const Chat: React.FC<ChatProps> = ({ libraryImageChooser: LibraryChooser }) => {
                     })}
                   </>}
                 </div>
-                {error && <div className="flex items-center justify-between gap-3 border-t border-red-100 bg-red-50 px-5 py-2 text-xs font-medium text-red-700"><span>{error}</span>{retryAvailable && <button type="button" className="font-bold underline" onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => void retrySend()}>重试发送</button>}</div>}
+                {error && !messagesError && !sessionsError && <div className="flex items-center justify-between gap-3 border-t border-red-100 bg-red-50 px-5 py-2 text-xs font-medium text-red-700"><span>{error}</span>{retryAvailable && <button type="button" className="font-bold underline" onClick={/* 当前回调处理用户交互或异步状态变化。 */ () => void retrySend()}>重试发送</button>}</div>}
+                {messagesError && <div role="alert" className="flex items-center justify-between gap-3 border-t border-red-100 bg-red-50 px-5 py-2 text-xs font-medium text-red-700"><span>{messagesError}</span><button type="button" className="font-bold underline" onClick={/* 重新读取当前会话消息首页，不自动重发消息。 */ retryMessages}>重新加载消息</button></div>}
                 {sendNotice && <div className="border-t border-amber-100 bg-amber-50 px-5 py-2 text-xs font-medium text-amber-800">{sendNotice}</div>}
                 <div className="relative z-10 shrink-0 border-t border-slate-200 bg-white p-4 shadow-chat-input">
                   <div className="mb-2 flex items-center gap-1">

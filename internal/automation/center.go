@@ -388,8 +388,8 @@ func (c *Center) handleTask(ctx context.Context, task Task) (bool, error) {
 		return c.handleBargainPending(ctx, task)
 	}
 	if task.TriggerType == TriggerOrderCompleted {
-		// 买家确认收货事件只更新本地订单完成事实，自动评价由账号任务扫描该事实后独立执行。
-		return true, nil
+		// 买家确认收货事实已落库；立即求评价规则可在该事件上直接发送，未配置时保持原事实更新语义。
+		return c.handleOrderCompleted(ctx, task)
 	}
 	if task.TriggerType == TriggerOrderPaid && !task.ForceConfirmShipment {
 		// autoDelivery、autoDeliveryErr 分别保存账号自动发货总开关（auto_confirm）和读取错误。
@@ -447,6 +447,61 @@ func (c *Center) handleTask(ctx context.Context, task Task) (bool, error) {
 		}
 	}
 	return false, firstErr
+}
+
+// handleOrderCompleted 在买家确认收货事实落库后，执行显式开启“确认收货后立即求评价”的规则。
+// 没有此类规则时只保留订单完成事实，不创建运行、不发送消息；已经求评过的订单不会因重复完成通知再次发送。
+func (c *Center) handleOrderCompleted(ctx context.Context, task Task) (bool, error) {
+	if task.OrderID == "" {
+		return true, nil
+	}
+	// order、err 保存确认收货后的本地订单事实，用于判断是否已经求评以及补全聊天和买家信息。
+	order, err := c.store.Orders.Get(ctx, task.OrderID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return true, nil
+		}
+		return false, fmt.Errorf("读取订单完成事实: %w", err)
+	}
+	if order == nil || strings.TrimSpace(order.BuyerReviewedAt) != "" || order.ReviewRequestCount > 0 {
+		return true, nil
+	}
+	// rules 是按当前账号和商品匹配到的求评价规则；Match 只返回最高优先级的一条。
+	rules, err := c.rules.match(ctx, Task{AccountID: task.AccountID, ItemID: task.ItemID, TriggerType: TriggerReviewMissingTimeout})
+	if err != nil {
+		return false, err
+	}
+	for _, rule := range rules {
+		// cfg 保存该求评价规则的发送时机和次数配置。
+		cfg := parseReviewRuleConfig(rule.ConfigJSON)
+		if !cfg.TriggerOnCompleted {
+			continue
+		}
+		if cfg.MaxAttempts > 0 && order.ReviewRequestCount >= cfg.MaxAttempts {
+			continue
+		}
+		if !c.accountSenderReady(task.AccountID) {
+			// 实时连接未就绪时保留完成事实，由调度器按完成时间兜底补发，避免在事件链路中长时间等待。
+			return true, nil
+		}
+		// reviewTask 复用求评价运行语义，使发送成功后正确累计提醒次数并写入运行日志。
+		reviewTask := task
+		reviewTask.TriggerType = TriggerReviewMissingTimeout
+		reviewTask.ItemID = order.ItemID
+		reviewTask.ChatID = order.ChatID
+		reviewTask.BuyerID = order.BuyerID
+		reviewTask.Raw = map[string]any{
+			"source":    "order_completed",
+			"order_id":  task.OrderID,
+			"attempt":   order.ReviewRequestCount + 1,
+			"immediate": true,
+		}
+		if err := c.executeRule(ctx, reviewTask, rule); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	return true, nil
 }
 
 // taskAutomationRunID 封装任务自动化运行ID业务协调。

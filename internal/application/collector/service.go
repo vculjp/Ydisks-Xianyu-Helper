@@ -321,7 +321,7 @@ func (s *Service) RewriteItem(ctx context.Context, userID int64, input RewriteIn
 	}
 	// title、description 是清理首尾空白后的原始标题与描述。
 	title := strings.TrimSpace(input.Title)
-	// description 保存原描述，为空时退化使用标题作为上下文。
+	// description 是原始商品详情，缺失时禁止把标题伪装成详情传给 AI 改写。
 	description := strings.TrimSpace(input.Description)
 	if title == "" && description == "" {
 		return RewriteResult{}, invalid("商品标题与描述不能同时为空")
@@ -329,8 +329,8 @@ func (s *Service) RewriteItem(ctx context.Context, userID int64, input RewriteIn
 	if title == "" {
 		title = truncateRunes(description, 30)
 	}
-	if description == "" {
-		description = title
+	if description == "" || description == title {
+		return RewriteResult{}, invalid("商品没有有效的详情描述，请先补抓或手动填写真实描述，再进行 AI 改写")
 	}
 	// rewritten、err 调用底层大模型改写器。
 	rewritten, err := s.rewriter.Rewrite(ctx, userID, RewriteInput{

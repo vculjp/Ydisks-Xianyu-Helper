@@ -12,6 +12,8 @@ export interface AccountsDataResult {
   setAccounts: Dispatch<SetStateAction<AccountDetail[]>>;
   // loading 表示账号基础数据是否正在加载。
   loading: boolean;
+  // loadError 保存账号基础数据读取失败的可见说明；空字符串表示最近一次请求成功。
+  loadError: string;
   // loadAccounts 刷新账号基础资料和 AI 设置。
   loadAccounts: () => Promise<void>;
 }
@@ -39,6 +41,8 @@ export const useAccountsData = (): AccountsDataResult => {
   const [accounts, setAccounts] = useState<AccountDetail[]>([]);
   // loading 表示首次加载或手动刷新的账号基础数据是否未完成。
   const [loading, setLoading] = useState(true);
+  // loadError 保存当前账号读取失败提示；新请求开始时清空，避免旧错误覆盖成功结果。
+  const [loadError, setLoadError] = useState('');
   // accountLoadGeneration 丢弃切换或连续刷新后到达的旧账号响应。
   const accountLoadGeneration = useRef(0);
   // accountLoadAbort 保存当前账号加载请求的取消控制器。
@@ -55,6 +59,7 @@ export const useAccountsData = (): AccountsDataResult => {
     const controller = new AbortController();
     accountLoadAbort.current = controller;
     setLoading(true);
+    setLoadError('');
     try {
       // options 将同一个取消信号传给两个彼此独立的请求。
       const options = { signal: controller.signal };
@@ -72,6 +77,9 @@ export const useAccountsData = (): AccountsDataResult => {
     } catch (error /* 账号加载错误 */) {
       if (generation === accountLoadGeneration.current && !controller.signal.aborted) {
         console.error('加载账号失败:', error);
+        // message 是账号详情请求失败后允许展示给用户的脱敏说明。
+        const message = error instanceof Error && error.message ? error.message : '账号列表加载失败，请稍后重试';
+        setLoadError(message);
       }
     } finally {
       if (generation === accountLoadGeneration.current) setLoading(false);
@@ -133,5 +141,5 @@ export const useAccountsData = (): AccountsDataResult => {
     [loadAccounts],
   );
 
-  return { accounts, setAccounts, loading, loadAccounts };
+  return { accounts, setAccounts, loading, loadError, loadAccounts };
 };

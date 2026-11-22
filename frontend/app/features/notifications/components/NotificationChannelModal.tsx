@@ -1,7 +1,7 @@
-import { Bell,Check,Eye,EyeOff,Loader2,X } from 'lucide-react';
+import { Bell,Check,Eye,EyeOff,Loader2 } from 'lucide-react';
 import React from 'react';
-import { createPortal } from 'react-dom';
 import { enableCustomSMTP } from '../../../../notificationEmailConfig';
+import { DialogFrame } from '../../../../shared/ui/Dialog';
 import type { NotificationChannel,NotificationChannelType,NotificationEventType,SystemSettings } from '../api';
 import { notificationChannelTypes } from '../state';
 import type { NotificationForm } from '../types';
@@ -96,13 +96,26 @@ export const NotificationChannelModal: React.FC<NotificationChannelModalProps> =
   // renderGuideStep 渲染当前渠道指南中的单个步骤。
   const renderGuideStep = (step: string, index: number) => <li key={index}>{step}</li>;
 
-  if (!showModal) return null;
-
-  return createPortal(
-    <div className="modal-overlay">
-      <div className="modal-container" style={{ maxWidth: '36rem' }}>
-        <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between"><h3 className="text-xl font-extrabold text-gray-900">{editing ? '编辑通知渠道' : '新建通知渠道'}</h3><button onClick={onClose} className="w-10 h-10 rounded-2xl bg-gray-100 hover:bg-gray-200 flex items-center justify-center"><X className="w-5 h-5 text-gray-600" /></button></div>
-        <div className="px-6 py-5 space-y-5 overflow-y-auto flex-1 min-h-0">
+  return (
+    <DialogFrame
+      open={showModal}
+      title={editing ? '编辑通知渠道' : '新建通知渠道'}
+      eyebrow="通知渠道"
+      size="md"
+      onClose={onClose}
+      closeDisabled={saving}
+      busy={saving}
+      footer={(
+        <div className="flex items-center justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={saving} className="ios-btn-secondary disabled:cursor-wait disabled:opacity-60">取消</button>
+          <button type="button" onClick={onSave} disabled={saving} aria-busy={saving} className="ios-btn-primary inline-flex items-center gap-2 disabled:cursor-wait disabled:opacity-60">
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            {saving ? '保存中...' : '保存'}
+          </button>
+        </div>
+      )}
+    >
+        <div className="space-y-5">
           <div className="space-y-2"><label className="block text-sm font-bold text-gray-800">渠道名称</label><input type="text" value={form.name} onChange={handleNameChange} placeholder="例如：我的 Bark" className="w-full ios-input px-4 py-3 rounded-xl text-sm" /></div>
           <div className="space-y-2">
             <label className="block text-sm font-bold text-gray-800">渠道类型</label>
@@ -116,12 +129,12 @@ export const NotificationChannelModal: React.FC<NotificationChannelModalProps> =
                   const TypeIcon = channelMeta.icon;
                   // selected 表示当前类型是否已选中。
                   const selected = form.type === type;
-                  return <button key={type} data-type={type} type="button" onClick={handleTypeChange} className={`p-3 rounded-xl border-2 flex flex-col items-center gap-1.5 transition-all ${selected ? 'border-brand bg-blue-50' : 'border-gray-100 hover:border-gray-300'}`}><TypeIcon className={`w-5 h-5 ${selected ? 'text-brand' : 'text-gray-500'}`} /><span className={`text-xs font-bold ${selected ? 'text-brand' : 'text-gray-600'}`}>{channelMeta.label}</span></button>;
+                  return <button key={type} data-type={type} type="button" onClick={handleTypeChange} className={`p-3 rounded-lg border flex flex-col items-center gap-1.5 transition-colors ${selected ? 'border-brand bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}><TypeIcon className={`w-5 h-5 ${selected ? 'text-brand' : 'text-gray-500'}`} /><span className={`text-xs font-bold ${selected ? 'text-brand' : 'text-gray-600'}`}>{channelMeta.label}</span></button>;
                 },
               )}
             </div>
           </div>
-          <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 space-y-2"><div className="flex items-center gap-2"><Bell className="w-4 h-4 text-amber-600" /><span className="text-sm font-bold text-amber-800">如何获取 {meta.label} 配置？</span></div><ol className="space-y-1.5 text-xs text-amber-900/90 leading-5 list-decimal pl-5">{meta.guide.steps.map(renderGuideStep)}</ol>{meta.guide.urlFormat && <div className="text-xs text-amber-900/90"><span className="font-bold">格式示例：</span><code className="mt-1 block bg-amber-100/70 px-2.5 py-1.5 rounded-lg break-all font-mono text-[11px]">{meta.guide.urlFormat}</code></div>}{meta.guide.note && <p className="text-xs text-amber-800/80 leading-5 pt-1">💡 {meta.guide.note}</p>}</div>
+          <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 space-y-2"><div className="flex items-center gap-2"><Bell className="w-4 h-4 text-amber-600" /><span className="text-sm font-bold text-amber-800">如何获取 {meta.label} 配置？</span></div><ol className="space-y-1.5 text-xs text-amber-900/90 leading-5 list-decimal pl-5">{meta.guide.steps.map(renderGuideStep)}</ol>{meta.guide.urlFormat && <div className="text-xs text-amber-900/90"><span className="font-bold">格式示例：</span><code className="mt-1 block bg-amber-100/70 px-2.5 py-1.5 rounded-lg break-all font-mono text-[11px]">{meta.guide.urlFormat}</code></div>}{meta.guide.note && <p className="text-xs text-amber-800/80 leading-5 pt-1">💡 {meta.guide.note}</p>}</div>
           <div className="space-y-3">
             {meta.fields.map(
               // field 是当前渠道配置字段。
@@ -129,13 +142,13 @@ export const NotificationChannelModal: React.FC<NotificationChannelModalProps> =
             )}
           </div>
           {form.type === 'email' && form.preserveSMTP && (
-            <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm">
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm">
               <p>保留已保存的 SMTP 配置（{form.config.use_custom_smtp ? '自定义发件配置' : '继承系统配置'}），本次仅更新收件邮箱和渠道信息。</p>
               <button type="button" className="mt-2 font-bold text-blue-700" onClick={/* replaceSMTPAction 明确切换为整套 SMTP 替换，已有秘密不会回填到浏览器。 */ () => setForm(/* replaceSMTPForm 清除保留模式并准备完整的新配置。 */ current => ({ ...current, preserveSMTP: false, config: { to_email: current.config.to_email, use_custom_smtp: false } }))}>重新配置 SMTP</button>
             </div>
           )}
           {form.type === 'email' && !form.preserveSMTP && (
-            <div className="overflow-hidden rounded-2xl border border-blue-100 bg-blue-50/40">
+            <div className="overflow-hidden rounded-lg border border-blue-100 bg-blue-50/40">
               <div className="flex items-center justify-between gap-4 p-4"><div><div className="text-sm font-extrabold text-gray-900">SMTP 来源</div><p className="mt-1 text-xs leading-5 text-gray-500">{form.config.use_custom_smtp === true ? '当前渠道使用一套完整、独立的发件配置。' : '当前渠道完整继承系统 SMTP，只单独设置收件邮箱。'}</p></div><button type="button" onClick={handleToggleCustomSMTP} className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${form.config.use_custom_smtp === true ? 'bg-brand' : 'bg-gray-300'}`} aria-label="使用独立 SMTP"><span className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${form.config.use_custom_smtp === true ? 'translate-x-5' : ''}`} /></button></div>
               {form.config.use_custom_smtp === true && (
                 <div className="space-y-4 border-t border-blue-100 bg-white/80 p-4">
@@ -151,9 +164,6 @@ export const NotificationChannelModal: React.FC<NotificationChannelModalProps> =
           <NotificationEventSelector selectedEvents={form.event_types} onToggleEvent={handleToggleEvent} />
           <label className="flex items-center gap-3 cursor-pointer"><button type="button" onClick={handleToggleEnabled} className={`relative w-11 h-6 rounded-full transition-colors ${form.enabled ? 'bg-brand' : 'bg-gray-300'}`}><span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform ${form.enabled ? 'translate-x-5' : ''}`} /></button><span className="text-sm font-bold text-gray-800">启用此渠道</span></label>
         </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-end gap-3"><button onClick={onClose} className="px-5 py-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 font-bold text-gray-700 transition-colors">取消</button><button onClick={onSave} disabled={saving} className="ios-btn-primary px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 disabled:opacity-50">{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}{saving ? '保存中...' : '保存'}</button></div>
-      </div>
-    </div>,
-    document.body,
+    </DialogFrame>
   );
 };

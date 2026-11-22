@@ -39,6 +39,8 @@ export type SettingsFeatureState = {
   loading: boolean;
   /** 系统配置加载错误。 */
   loadError: string;
+  /** 当前表单是否包含尚未保存到服务端的用户修改。 */
+  hasUnsavedChanges: boolean;
   /** 系统配置保存状态。 */
   saving: boolean;
   /** 系统配置保存错误。 */

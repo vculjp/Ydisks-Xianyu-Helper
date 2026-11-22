@@ -25,7 +25,8 @@ vi.mock('../../../shared/api-contract/client', /* contractClientModuleMockFactor
 }));
 
 import { contractClient } from '../../../shared/api-contract/client';
-import { publishItem } from './api';
+import { ApiError } from '../../../shared/http/client';
+import { itemErrorMessage, publishItem } from './api';
 
 // publishPostMock 是带有生成契约类型的 POST 方法替身。
 const publishPostMock = vi.mocked(contractClient.POST);
@@ -64,5 +65,15 @@ describe('items publish API adapter', /* 商品发布 API 适配测试覆盖 mul
     expect(body.has('category_name')).toBe(false);
     expect(body.has('channel_category_id')).toBe(false);
     expect(body.has('tb_category_id')).toBe(false);
+  });
+
+  test('明确拒绝网页发布时提示使用闲鱼APP且不误称网络未知', /* 业务错误不能引导用户重复网页提交。 */ () => {
+    // denied 表示来自 HTTP 403 的稳定业务错误封装，不触发任何真实平台请求。
+    const denied = new ApiError(403, { code: 'pc_publish_unsupported', message: '网页发布被平台拒绝' });
+    // message 是对用户的处理指引。
+    const message = itemErrorMessage(denied, '发布失败');
+    expect(message).toContain('闲鱼APP');
+    expect(message).toContain('重复网页提交无法解决');
+    expect(message).not.toContain('结果未知');
   });
 });

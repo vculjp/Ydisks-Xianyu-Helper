@@ -252,7 +252,7 @@ func automationUnknownActionCanContinue(rawEventJSON string, actionCursor int) b
 		return true
 	}
 	switch actionType {
-	case "confirm_shipment", "send_text", "adjust_price":
+	case "confirm_shipment", "send_text", "adjust_price", "request_red_flower":
 		return true
 	default:
 		return false

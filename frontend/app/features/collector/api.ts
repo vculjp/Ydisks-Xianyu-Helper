@@ -13,6 +13,7 @@ import type {
   CollectorSearchResponseTransport,
 } from '../../../shared/api-contract/collector';
 import { ApiError, type RequestControlOptions } from '../../../shared/http/client';
+import { sourceFromTransport, sourceToTransport } from '../../../shared/ui/publish/sourceInfo';
 import type {
   CollectedProduct,
   CollectorAccountOption,
@@ -47,6 +48,7 @@ const toCollectedProduct = (dto: CollectedItemTransport): CollectedProduct => ({
   wantCount: dto.want_count,
   browseCount: dto.browse_count,
   categoryId: dto.category_id,
+  source: sourceFromTransport(dto.source),
   isFreeShipping: dto.is_free_shipping,
   isMultiSpec: dto.is_multi_spec,
   hasFullDetail: dto.has_full_detail,
@@ -209,6 +211,7 @@ export const saveProductsToTemplates = async (
           original_price: item.originalPrice,
           image_urls: item.imageUrls.length > 0 ? item.imageUrls : (item.picUrl ? [item.picUrl] : []),
           has_full_detail: item.hasFullDetail,
+          source: sourceToTransport(item.source),
         })),
       },
       signal,

@@ -76,7 +76,7 @@ func TestLibraryTemplateImportHandlersContract(t *testing.T) {
 	// session 保存 loginHelper 的返回结果。
 	session := loginHelper(t, handler)
 	// sheet 包含一行可导入（压缩包图片）与一行价格非法。
-	sheet := "模板名称,标题,价格,库存,邮费模式,图片\n网盘A,资源A,9.90,5,none,images/a.png\n,价格错,abc,1,free,images/a.png\n"
+	sheet := "模板名称,标题,描述,价格,库存,邮费模式,图片\n网盘A,资源A,网盘A详细介绍,9.90,5,none,images/a.png\n,价格错,价格错描述,abc,1,free,images/a.png\n"
 	// body、contentType 是预检请求体。
 	body, contentType := libraryImportBody(t, "t.csv", sheet, libraryImportZip(t))
 	// previewRec 保存预检响应。

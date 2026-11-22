@@ -107,6 +107,12 @@ export interface Item {
   item_category?: string;
   /** 商品详情原始 JSON。 */
   item_detail?: string;
+  /** 最近一次列表缓存的精确曝光次数；缺失为未知，真实 0 保留。 */
+  exposure_count?: number;
+  /** 最近一次列表缓存的精确浏览次数；缺失为未知。 */
+  browse_count?: number;
+  /** 最近一次列表缓存或精确标签中的想要人数；缺失为未知。 */
+  want_count?: number;
   /** 是否启用多规格。 */
   is_multi_spec?: number | boolean;
   /** 是否按数量发货。 */
@@ -115,6 +121,10 @@ export interface Item {
   is_multi_qty_ship?: number | boolean;
   /** 商品级 AI 启停覆盖状态；缺省时按继承账号配置展示。 */
   ai_override?: ItemAIOverride;
+  /** 本地首次写入商品的数据库时间，缺失表示未读取。 */
+  created_at?: string;
+  /** 本地最近一次写入或同步商品的数据库时间，缺失表示未读取。 */
+  updated_at?: string;
 }
 
 /** 商品级 AI 配置支持的三态覆盖策略。 */
@@ -235,6 +245,12 @@ export interface ItemDetailResponse {
   item_price: string;
   /** 商品详情原始 JSON。 */
   item_detail: string;
+  /** 本地缓存的精确曝光次数；缺失不表示零。 */
+  exposure_count?: number;
+  /** 本地缓存的精确浏览次数；缺失不表示零。 */
+  browse_count?: number;
+  /** 本地缓存的精确想要人数；真实零值保留。 */
+  want_count?: number;
   /** 是否有多规格。 */
   is_multi_spec: boolean;
   /** 是否按数量发货。 */

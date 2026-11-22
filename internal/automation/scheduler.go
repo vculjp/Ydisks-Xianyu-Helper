@@ -612,8 +612,16 @@ func reviewRequestRuleDue(order db.Order, rule db.AutomationRule) bool {
 	baseRaw := firstNonEmpty(order.ShippedAt, order.UpdatedAt, order.CreatedAt)
 	// shippedAt 是订单发货时间基点，回溯窗口始终以它为准，与是否已求评过无关。
 	shippedAt := parseDBTime(baseRaw)
+	// lookbackAt 是回溯窗口的计时基点：确认收货后立即求评价以完成时间判断，避免长期未确认收货的订单在确认后被误当成历史积压。
+	lookbackAt := shippedAt
+	if cfg.TriggerOnCompleted {
+		lookbackAt = parseDBTime(order.CompletedAt)
+		if lookbackAt.IsZero() {
+			return false
+		}
+	}
 	// 规则停用期间积压的旧订单在重新启用时不得被补发：发货已超出回溯窗口的订单一律跳过。
-	if !shippedAt.IsZero() && time.Since(shippedAt) > time.Duration(cfg.effectiveLookbackHours())*time.Hour {
+	if !lookbackAt.IsZero() && time.Since(lookbackAt) > time.Duration(cfg.effectiveLookbackHours())*time.Hour {
 		return false
 	}
 	// waitHours 用于本次流程后续判断的waitHours
@@ -621,6 +629,17 @@ func reviewRequestRuleDue(order db.Order, rule db.AutomationRule) bool {
 	if order.ReviewRequestCount > 0 && strings.TrimSpace(order.LastReviewRequestAt) != "" {
 		baseRaw = order.LastReviewRequestAt
 		waitHours = cfg.RepeatIntervalHours
+	}
+	if cfg.TriggerOnCompleted {
+		if order.ReviewRequestCount == 0 {
+			// 首次求评价等待确认收货事件；事件丢失或服务重启时，调度器以完成时间立即兜底。
+			baseRaw = order.CompletedAt
+			waitHours = 0
+		} else {
+			// 已完成首次求评价后，后续提醒仍按用户配置的重复间隔执行。
+			baseRaw = order.LastReviewRequestAt
+			waitHours = cfg.RepeatIntervalHours
+		}
 	}
 	// base 用于本次流程后续判断的base
 	base := parseDBTime(baseRaw)
@@ -637,6 +656,8 @@ type reviewRuleConfig struct {
 	MaxAttempts         int
 	// MaxLookbackHours 是回溯窗口小时数：发货时间早于该窗口的订单不再求评价；0 表示使用默认值。
 	MaxLookbackHours int
+	// TriggerOnCompleted 表示买家确认收货事件到达后立即发送首次求评价，而不是等待发货后的小时数。
+	TriggerOnCompleted bool
 }
 
 // effectiveLookbackHours 返回实际生效的回溯窗口小时数。
@@ -687,6 +708,9 @@ func parseReviewRuleConfig(raw string) reviewRuleConfig {
 	if // v 是显式配置的回溯窗口小时数，非正值保持默认
 	v := intFromAny(m["max_lookback_hours"]); v > 0 {
 		cfg.MaxLookbackHours = v
+	}
+	if v, ok := m["trigger_on_completed"].(bool); ok {
+		cfg.TriggerOnCompleted = v
 	}
 	return cfg
 }

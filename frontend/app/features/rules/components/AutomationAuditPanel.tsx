@@ -3,7 +3,7 @@ import React,{ useState } from 'react';
 import { useAutomationAuditLog } from '../auditLog';
 import type { AutomationAuditEvent,AutomationAuditStatus } from '../auditModels';
 import type { AutomationAuditPanelProps } from '../types';
-import { auditActionLabel,auditEventTypeLabel,auditSourceLabel,auditStatusMeta,auditStatusOptions,auditTriggerLabel,auditTriggerOptions } from '../auditState';
+import { auditActionLabel,auditDisplaySummary,auditEventTypeLabel,auditSourceLabel,auditStatusMeta,auditStatusOptions,auditTriggerLabel,auditTriggerOptions } from '../auditState';
 import AuditRunDrawer from './AuditRunDrawer';
 
 // AutomationAuditPanel 展示自动化规则的全部行为日志：成功、失败、排队、跳过、待人工和已取消。
@@ -71,7 +71,7 @@ const AutomationAuditPanel: React.FC<AutomationAuditPanelProps> = ({ accountId, 
                   <td className="px-4 py-3">{auditEventTypeLabel(event.eventType)}{event.actionType ? ` · ${auditActionLabel(event.actionType)}` : ''}</td>
                   <td className="px-4 py-3"><span className={`px-2.5 py-1 rounded-full text-xs font-bold ${meta.badgeClass}`}>{meta.label}</span></td>
                   <td className="px-4 py-3 max-w-xs">
-                    {event.summary ? <p className="text-gray-800">{event.summary}</p> : null}
+                    {event.summary ? <p className="text-gray-800">{auditDisplaySummary(event.summary, event.actionType)}</p> : null}
                     {event.reason ? <p className={event.status === 'success' ? 'text-gray-500' : 'text-red-600'}>{event.reason}</p> : null}
                   </td>
                 </tr>

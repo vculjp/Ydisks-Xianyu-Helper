@@ -428,6 +428,7 @@ func parseItemList(data map[string]any) []ItemListItem {
 			"item_label_data": cardData["itemLabelDataVO"],
 			"card_type":       mtopInt(card["cardType"]),
 		}
+		cacheItemMetrics(detail, cardData, detailParams)
 		// detailJSON 用于本次流程后续判断的detailJSON
 		detailJSON, _ := json.Marshal(detail)
 		items = append(items, ItemListItem{

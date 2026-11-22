@@ -123,7 +123,7 @@ const DeliveryTemplates: React.FC<DeliveryTemplatesProps> = ({ libraryImageChoos
       </PageHeader>
 
       <div className="grid gap-4 md:grid-cols-2">
-        {templates.map(/* template 是当前列表中的发货模板。 */ template => (
+        {templates.filter(/* template 只显示无需库存变量绑定的发货模板，历史卡密模板仍保留在后端供原有自动化使用。 */ template => SHOW_CARD_UI || template.keys.length === 0).map(/* template 是当前列表中的发货模板。 */ template => (
           <article key={template.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -142,7 +142,7 @@ const DeliveryTemplates: React.FC<DeliveryTemplatesProps> = ({ libraryImageChoos
             </div>
           </article>
         ))}
-        {!loading && templates.length === 0 && <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-12 text-center text-sm text-slate-500 md:col-span-2">还没有发货模板，先创建一份吧。</div>}
+        {!loading && templates.filter(/* template 只统计当前模式可编辑的发货模板。 */ template => SHOW_CARD_UI || template.keys.length === 0).length === 0 && <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-12 text-center text-sm text-slate-500 md:col-span-2">还没有发货模板，先创建一份吧。</div>}
       </div>
 
       {editorOpen && createPortal(
